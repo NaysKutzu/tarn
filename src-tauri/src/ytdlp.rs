@@ -19,7 +19,7 @@ const CHECK_EVERY_SECS: u64 = 24 * 60 * 60;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Apply CREATE_NO_WINDOW and never attach a console stdin. Call this on
-/// every process we spawn — never run through a shell.
+/// every process we spawn - never run through a shell.
 pub fn silence_std(cmd: &mut std::process::Command) {
     #[cfg(windows)]
     {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sizedCover, srcsetFor, bannerSrcset } from '../cover';
+  import { sizedCover, srcsetFor, bannerSrcset, ytThumb } from '../cover';
 
   let {
     src = null,
@@ -9,6 +9,8 @@
     height = 0,
     round = false,
     banner = false,
+    /** YouTube video id - last-resort thumb when CDN art 404s. */
+    videoId = null,
     class: cls = '',
   }: {
     src?: string | null;
@@ -18,6 +20,7 @@
     height?: number;
     round?: boolean;
     banner?: boolean;
+    videoId?: string | null;
     class?: string;
   } = $props();
 
@@ -44,18 +47,27 @@
   let empty = $derived(!src);
 
   function onErr() {
-    // Rewritten size failed — try the original URL from the API.
+    // Rewritten size failed - try the original URL from the API.
     if (!useOrig && !fallback && src && shown !== src) {
       useOrig = true;
       return;
     }
-    // Some videos have no hq/maxres — step down the i.ytimg quality ladder.
-    if (src?.includes('i.ytimg.com') && !fallback) {
-      const lower = src
+    // Some videos have no hq/maxres - step down the i.ytimg quality ladder.
+    const ytimg = fallback || src;
+    if (ytimg?.includes('i.ytimg.com')) {
+      const lower = ytimg
         .replace(/\/(maxresdefault|hq720|sddefault|hqdefault)\.jpg/, '/mqdefault.jpg')
         .replace(/\/mqdefault\.jpg/, '/default.jpg');
       if (lower !== shown) {
         fallback = lower;
+        return;
+      }
+    }
+    // CDN / mixart 404 - public video thumb still loads without cookies.
+    if (videoId && /^[\w-]{11}$/.test(videoId)) {
+      const thumb = ytThumb(videoId);
+      if (shown !== thumb && fallback !== thumb) {
+        fallback = thumb;
         return;
       }
     }

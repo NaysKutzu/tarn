@@ -173,7 +173,7 @@ impl InnerTube {
                 }
             }
         }
-        // Per-shelf "show more" tokens — fill Listen again / Quick picks / etc.
+        // Per-shelf "show more" tokens - fill Listen again / Quick picks / etc.
         for s in &mut home.shelves {
             self.expand_shelf(s).await;
         }
@@ -193,7 +193,7 @@ impl InnerTube {
         ));
         if self.cookie.is_some() && !account_hdr {
             crate::diag::log(
-                "home: cookie was sent but the response has no account header — may be logged out",
+                "home: cookie was sent but the response has no account header - may be logged out",
             );
         }
         Ok(home)
@@ -505,7 +505,7 @@ fn collect_shelves(v: &Value, out: &mut Vec<Shelf>) {
         if key == "musicCarouselShelfRenderer" || key == "musicShelfRenderer" {
             if let Some(s) = parse_shelf(val) {
                 if !s.items.is_empty() && !s.title.is_empty() {
-                    // Avoid pushing the same shelf twice if walk hits nested copies — by title+len
+                    // Avoid pushing the same shelf twice if walk hits nested copies - by title+len
                     if !out.iter().any(|x| x.title == s.title && x.items.len() == s.items.len()) {
                         out.push(s);
                     }
@@ -874,7 +874,7 @@ fn parse_account(v: &Value) -> Option<AccountInfo> {
             }
         });
     }
-    // Logged-out account_menu often only has the Premium CTA — treat as no account.
+    // Logged-out account_menu often only has the Premium CTA - treat as no account.
     let name = name.filter(|n| !is_promo_account_name(n))?;
     Some(AccountInfo {
         name,
@@ -1117,7 +1117,7 @@ fn playlist_id_of(v: &Value) -> Option<String> {
             if key == "playlistId" {
                 if let Some(s) = val.as_str() {
                     if s.len() > 4 && !s.starts_with("RDAMVM") {
-                        // RDAMVM is a radio derived from a video — still useful as playlist_id
+                        // RDAMVM is a radio derived from a video - still useful as playlist_id
                         found = Some(s.trim_start_matches("VL").to_string());
                     }
                 }

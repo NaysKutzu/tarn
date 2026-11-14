@@ -17,7 +17,7 @@
   --bg-active: rgba(255, 255, 255, 0.08);
   --line: rgba(255, 255, 255, 0.07);
   --line-2: rgba(255, 255, 255, 0.12);
-  /* Higher-contrast secondary text — avoid low-opacity greys that look soft. */
+  /* Higher-contrast secondary text - avoid low-opacity greys that look soft. */
   --text: #f5f3f0;
   --text-2: #c9c6c0;
   --text-3: #9a9791;
@@ -54,7 +54,7 @@ html, body, #app {
   letter-spacing: -0.01em;
   overflow: hidden;
   user-select: none;
-  /* Whole-pixel root size — avoids fractional WebKit scaling of glyphs. */
+  /* Whole-pixel root size - avoids fractional WebKit scaling of glyphs. */
   font-size: 14px;
   line-height: 20px;
 }
@@ -331,7 +331,7 @@ html { color-scheme: dark; }
   font-weight: 500;
 }
 .side-pl:hover { background: var(--bg-hover); color: var(--text); }
-/* Size only the cover root — not mosaic child imgs (those fill 1/4 of the grid). */
+/* Size only the cover root - not mosaic child imgs (those fill 1/4 of the grid). */
 .side-pl > :is(img, .ph, .mosaic, .special) {
   width: 36px;
   height: 36px;
@@ -1152,6 +1152,11 @@ html { color-scheme: dark; }
   color: var(--text-2);
 }
 .ptab.on { background: var(--bg-active); color: var(--text); }
+.ptab:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
 .panel-b { flex: 1; overflow: auto; padding: 4px 8px 16px; min-height: 0; }
 
 .lyrics {
@@ -1209,7 +1214,7 @@ html { color-scheme: dark; }
 /* ---------- now playing expanded ---------- */
 .np {
   /* Span the full content row (sidebar + main). Do not use the old
-     named-line placement — it left the sidebar (Settings / Sign in)
+     named-line placement - it left the sidebar (Settings / Sign in)
      painting on top of Now Playing. */
   grid-column: 1 / -1;
   grid-row: 2;
@@ -2092,7 +2097,7 @@ html { color-scheme: dark; }
    Use currentColor so the spinner always contrasts with the button
    background (cream #f5f3f0 or accent). The old rule used
    border-top-color: var(--text) on a button whose background is also
-   var(--text) — white-on-white, invisible. */
+   var(--text) - white-on-white, invisible. */
 .ibtn.spinning { position: relative; }
 .ibtn-spin {
   width: 18px;

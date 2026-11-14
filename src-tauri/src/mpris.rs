@@ -18,7 +18,7 @@ pub type WindowHandle = Option<usize>;
 pub fn start(app: Arc<crate::App>, handle: AppHandle, hwnd: WindowHandle) {
     let _ = &handle;
     // Windows: SystemMediaTransportControls must be created and attached on
-    // a thread that pumps window messages — ideally the window's UI thread.
+    // a thread that pumps window messages - ideally the window's UI thread.
     // A background thread with just `sleep` never delivers ButtonPressed,
     // which is why media keys appeared to "do nothing" even with a valid HWND.
     #[cfg(windows)]
@@ -364,7 +364,7 @@ fn run_global_hotkeys(app: Arc<crate::App>) -> Result<(), String> {
 }
 
 
-/// Create and attach SMTC on the calling thread (must pump messages —
+/// Create and attach SMTC on the calling thread (must pump messages -
 /// Tauri's UI thread does). MediaControls stays on that thread; a
 /// background loop posts metadata/status updates via `run_on_main_thread`.
 #[cfg(windows)]

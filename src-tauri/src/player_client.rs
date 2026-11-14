@@ -300,7 +300,7 @@ fn pick_aac(v: &Value, kind: Kind) -> Option<Stream> {
                 .unwrap_or("")
                 .to_string();
             let itag = f.get("itag").and_then(|x| x.as_u64()).unwrap_or(0);
-            // Adaptive audio only — never muxed itag 18 (360p video+aac),
+            // Adaptive audio only - never muxed itag 18 (360p video+aac),
             // which is large and slow and is not a music stream.
             if key != "adaptiveFormats" {
                 continue;
@@ -308,7 +308,7 @@ fn pick_aac(v: &Value, kind: Kind) -> Option<Stream> {
             if !mime.contains("audio/") && !matches!(itag, 139..=141) {
                 continue;
             }
-            // Prefer AAC/m4a — we do not ship an opus decoder.
+            // Prefer AAC/m4a - we do not ship an opus decoder.
             let aac = mime.contains("mp4") || mime.contains("aac") || matches!(itag, 139..=141);
             if !aac {
                 continue;
@@ -362,7 +362,7 @@ fn url_query(url: &str, key: &str) -> Option<String> {
     None
 }
 
-// Silence unused import if upgrade_cover is unused — keep for future cover on player.
+// Silence unused import if upgrade_cover is unused - keep for future cover on player.
 #[allow(dead_code)]
 fn _cover(u: &str) -> String {
     upgrade_cover(u)

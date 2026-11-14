@@ -79,7 +79,7 @@ pub fn open_login(
         if !on_music {
             return;
         }
-        // Kick a poller. We do not capture on this first Finished — the
+        // Kick a poller. We do not capture on this first Finished - the
         // first music.youtube.com document is often a redirect, before
         // the account menu and the full cookie jar are present.
         let done = done_for_load.clone();
@@ -175,7 +175,7 @@ async fn poll_for_session(
             names.len(),
             names
         ));
-        // Await apply on this task — never block_on / recv from the async
+        // Await apply on this task - never block_on / recv from the async
         // runtime (that used to deadlock and leave the window open).
         match on_session(header).await {
             Ok(()) => {
@@ -251,7 +251,7 @@ fn collect_cookies(window: &tauri::WebviewWindow) -> Result<Vec<CookieRec>> {
     Ok(out)
 }
 
-/// Names only — used by the TARN_TEST_COOKIE_EXTRACT path.
+/// Names only - used by the TARN_TEST_COOKIE_EXTRACT path.
 pub async fn extract_public_cookie_names(app: AppHandle) -> Result<Vec<String>> {
     let url: url::Url = "https://music.youtube.com/"
         .parse()

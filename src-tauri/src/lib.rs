@@ -76,7 +76,7 @@ impl App {
         player.set_eq(settings.eq_bands, settings.eq_enabled);
         player.set_transition(settings.transition());
         if let Some(sess) = persist::load(store.data_dir()) {
-            // Volume / shuffle / repeat / queue metadata — audio is armed later.
+            // Volume / shuffle / repeat / queue metadata - audio is armed later.
             player.set_volume(sess.volume);
             player.set_shuffle(sess.shuffle);
             player.set_repeat(&sess.repeat);
@@ -369,6 +369,8 @@ pub(crate) async fn start_playback_at(
     manual: bool,
 ) -> Result<(), String> {
     let id = track.id.clone();
+    let mut track = track;
+    track.ensure_cover();
     let cover = track.cover.clone();
     let snap = app.player.snapshot();
     let same = snap
@@ -397,7 +399,7 @@ pub(crate) async fn start_playback_at(
     app.player.prepare(track.clone(), queue.clone(), index, start, true);
     let gen = app.player.play_gen();
 
-    // Cover/accent is decorative — never block the play path on it.
+    // Cover/accent is decorative - never block the play path on it.
     if let Some(url) = cover {
         let http = app.http.clone();
         let player = app.player.clone();
@@ -430,7 +432,7 @@ pub(crate) async fn start_playback_at(
                         .play_stream(stream, audio, start, style)
                         .map_err(|e| e.to_string());
                     if app.player.play_gen() != gen {
-                        // A newer play() won the race — don't prefetch for us.
+                        // A newer play() won the race - don't prefetch for us.
                         return Ok(());
                     }
                     if r.is_ok() {
@@ -479,7 +481,7 @@ async fn playback_failed(
         + 1;
     let title = track.title.clone();
     let failed_id = track.id.clone();
-    eprintln!("playback failed ({n}): {msg} — {title}");
+    eprintln!("playback failed ({n}): {msg} - {title}");
     if n > 3 {
         app.player.set_error(msg.clone());
         return Err(msg);
@@ -571,7 +573,7 @@ fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
             }
             ytm.prefetch(id).await;
         }
-        // Only grow the queue with radio when autoplay is on — otherwise
+        // Only grow the queue with radio when autoplay is on - otherwise
         // leftover "similar" tracks stick around after the playlist ends.
         if remaining < 3 && player.snapshot().autoplay {
             if let Ok(more) = ytm.radio_continue().await {
@@ -1105,7 +1107,7 @@ fn maybe_blend(app: &Arc<App>) {
                 app.player.clear_blending();
                 return Ok(());
             }
-            // Last chance before touching the mixer — a newer play() may
+            // Last chance before touching the mixer - a newer play() may
             // have already prepared a different queue.
             if app.player.play_gen() != gen {
                 eprintln!("blend: aborted (queue replaced before stream)");
@@ -1237,7 +1239,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 restore_session(&app_restore).await;
                 // Frontend often mounts before restore finishes and would keep
-                // signed_in=false forever without this — library/playlists stay empty
+                // signed_in=false forever without this - library/playlists stay empty
                 // until a manual reload.
                 if app_restore.auth.lock().signed_in {
                     let _ = handle_restore.emit(

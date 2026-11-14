@@ -233,6 +233,12 @@ impl Player {
         self.phase
             .store(if loading { 3 } else { 2 }, Ordering::Relaxed);
         self.want_play.store(false, Ordering::Relaxed);
+        let mut track = track;
+        track.ensure_cover();
+        let mut queue = queue;
+        for t in &mut queue {
+            t.ensure_cover();
+        }
         let mut s = self.state.lock();
         if let Some(d) = track.duration {
             if d > 0 {
@@ -408,7 +414,7 @@ impl Player {
             0.35
         };
         // Smart start: the outgoing track has trailed off into silence
-        // near its end — move on instead of playing dead air.
+        // near its end - move on instead of playing dead air.
         let quiet_tail = xf
             && smart
             && s.duration - s.position < 15.0
@@ -445,7 +451,19 @@ impl Player {
         }
         self.blend_adopted.store(true, Ordering::SeqCst);
         self.quiet_ms.store(0, Ordering::Relaxed);
+        let mut track = track;
+        track.ensure_cover();
         let mut s = self.state.lock();
+        // Keep any better cover already on the queue entry.
+        if track.cover.is_none() {
+            if let Some(q) = s.queue.get(index).and_then(|t| t.cover.clone()) {
+                track.cover = Some(q);
+            }
+        } else if let Some(slot) = s.queue.get_mut(index) {
+            if slot.cover.as_deref().is_none_or(|u| u.contains("/mixart")) {
+                slot.cover = track.cover.clone();
+            }
+        }
         s.track = Some(track);
         s.index = index;
         s.loading = false;
@@ -470,7 +488,7 @@ impl Player {
             1 | 4 => self.pause(),
             2 => self.resume(),
             3 => {
-                // Still arming a restored track — play as soon as it's ready.
+                // Still arming a restored track - play as soon as it's ready.
                 let on = !self.want_play.load(Ordering::Relaxed);
                 self.want_play.store(on, Ordering::Relaxed);
             }
@@ -554,7 +572,7 @@ impl Player {
     }
     pub fn take_ended(&self) -> bool {
         if self.blending.load(Ordering::Relaxed) {
-            // Blend never adopted and the outgoing track finished — drop the
+            // Blend never adopted and the outgoing track finished - drop the
             // latch so natural advance (and Next) can recover instead of
             // sitting in silence with a stuck "next".
             if self.ended.swap(false, Ordering::Relaxed) {
@@ -666,8 +684,9 @@ impl Player {
         let mut s = self.state.lock();
         let existing: std::collections::HashSet<_> =
             s.queue.iter().map(|t| t.id.clone()).collect();
-        for t in tracks {
+        for mut t in tracks {
             if !t.id.is_empty() && !existing.contains(&t.id) {
+                t.ensure_cover();
                 s.queue.push(t);
             }
         }
@@ -676,6 +695,10 @@ impl Player {
     /// Swap the queue without interrupting the current source. Used when
     /// starting radio of the track that is already playing.
     pub fn replace_queue(&self, queue: Vec<Track>, index: usize) {
+        let mut queue = queue;
+        for t in &mut queue {
+            t.ensure_cover();
+        }
         let mut s = self.state.lock();
         s.queue = queue;
         s.index = index;
@@ -877,7 +900,7 @@ fn audio_thread(
                     Err(e) => {
                         eprintln!("arm: {e}");
                         if !audio.is_complete() {
-                            // Still downloading — retry via recover instead of
+                            // Still downloading - retry via recover instead of
                             // sticking "Can't play" on a restore seek.
                             buffering.store(true, Ordering::Relaxed);
                             recover.store(true, Ordering::SeqCst);

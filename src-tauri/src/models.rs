@@ -16,6 +16,33 @@ pub struct Track {
     pub is_video: bool,
 }
 
+impl Track {
+    /// Fill a missing / webview-unusable cover with the public YouTube thumb
+    /// for this video id so the player bar still has art after restart.
+    pub fn ensure_cover(&mut self) {
+        if self.cover.as_deref().is_some_and(cover_usable_in_webview) {
+            return;
+        }
+        if is_youtube_video_id(&self.id) {
+            self.cover = Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", self.id));
+        }
+    }
+}
+
+fn cover_usable_in_webview(url: &str) -> bool {
+    !url.is_empty()
+        && url.starts_with("http")
+        && !url.contains("music.youtube.com/image/")
+        && !url.contains("/mixart")
+}
+
+fn is_youtube_video_id(id: &str) -> bool {
+    id.len() == 11
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ArtistCard {
     pub id: String,
@@ -278,10 +305,10 @@ pub struct Settings {
     /// Fade-in shape of the incoming track (same values).
     #[serde(default = "default_curve")]
     pub crossfade_curve_in: String,
-    /// Percent (10–100) of the crossfade the outgoing track spends fading.
+    /// Percent (10-100) of the crossfade the outgoing track spends fading.
     #[serde(default = "default_pct")]
     pub crossfade_out_len: f64,
-    /// Percent (10–100) of the crossfade the incoming track spends rising.
+    /// Percent (10-100) of the crossfade the incoming track spends rising.
     #[serde(default = "default_pct")]
     pub crossfade_in_len: f64,
     /// Skip trailing silence of the outgoing and leading silence of the

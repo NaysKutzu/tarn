@@ -13,7 +13,7 @@ The website is at [rexsystems.github.io/tarn](https://rexsystems.github.io/tarn)
 
 Packaged builds check for signed updates on their own. A "Check for updates" button is also in Settings.
 
-Tarn is self-contained. You do not need to install ffmpeg, yt-dlp, or any other extra tools — audio is decoded in-process, and a current yt-dlp is bundled and updated automatically.
+Tarn is self-contained. You do not need to install ffmpeg, yt-dlp, or any other extra tools - audio is decoded in-process, and a current yt-dlp is bundled and updated automatically.
 
 Closing the app remembers the current track and position (paused, ready to play), the queue, volume, shuffle and repeat, the page you were on, and the window size and position.
 

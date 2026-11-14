@@ -197,7 +197,7 @@ export interface Settings {
   /** "equal_power" | "linear" | "logarithmic" | "exponential" | "s_curve" */
   crossfade_curve_out: string;
   crossfade_curve_in: string;
-  /** Percent (10–100) of the crossfade each side spends moving. */
+  /** Percent (10-100) of the crossfade each side spends moving. */
   crossfade_out_len: number;
   crossfade_in_len: number;
   /** Trim trailing/leading silence around transitions. */

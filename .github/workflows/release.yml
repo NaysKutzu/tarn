@@ -22,7 +22,7 @@ permissions:
   contents: write
 
 # Publicly-safe values only. TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) is
-# intentionally NOT in the top-level env — scoped per-step to build/sign
+# intentionally NOT in the top-level env - scoped per-step to build/sign
 # steps so a compromised curl or npm script elsewhere cannot read it.
 env:
   NODE_VERSION: "22"
@@ -442,7 +442,7 @@ jobs:
           body: |
             Desktop packages for this build are attached below.
 
-            Tarn is self-contained — you do not need to install ffmpeg, yt-dlp, or any other extra tools.
+            Tarn is self-contained - you do not need to install ffmpeg, yt-dlp, or any other extra tools.
 
             Updater: `latest.json` on this release (also via `/releases/latest/download/latest.json`).
           generate_release_notes: true

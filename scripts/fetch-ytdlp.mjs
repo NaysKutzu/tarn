@@ -94,7 +94,7 @@ async function main() {
   const sums = await checksums();
   const buf = await fetchBuf(`${RELEASE}/${asset}`);
   if (buf.length < 1_000_000) {
-    throw new Error(`download too small (${buf.length} bytes) — unexpected asset`);
+    throw new Error(`download too small (${buf.length} bytes) - unexpected asset`);
   }
   const want = sums.get(asset);
   if (want) {

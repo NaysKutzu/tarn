@@ -55,7 +55,7 @@ impl XfPlan {
 }
 use crate::eq::Eq;
 
-/// Fade used for play / pause / resume / seek / skip (~150–300 ms).
+/// Fade used for play / pause / resume / seek / skip (~150-300 ms).
 pub const CLICK_FADE: f32 = 0.22;
 
 pub struct Mixer {
@@ -282,7 +282,7 @@ impl Mixer {
         let sr = src.sample_rate().max(1);
         let ch = src.channels().max(1);
         let mut g = self.inner.lock();
-        // If sample rates differ, fall back to a short cut — rodio won't
+        // If sample rates differ, fall back to a short cut - rodio won't
         // resample a mid-stream rate change cleanly.
         if g.current.is_none() || g.sr != sr || g.ch != ch {
             drop(g);
@@ -290,7 +290,7 @@ impl Mixer {
             return;
         }
         let mut secs = plan.shape.secs.clamp(0.05, 20.0);
-        // Smart start: the outgoing track already went quiet — don't make
+        // Smart start: the outgoing track already went quiet - don't make
         // the listener sit through a long fade-in from silence.
         if plan.smart && g.quiet_run as f32 > 0.5 * g.sr as f32 {
             secs = secs.min(1.0);
@@ -332,7 +332,7 @@ impl Mixer {
     pub fn cut(&self, src: AudioSource, fade: f32) {
         // Open the incoming source first; the fade-out happens in the
         // mixer and we swap when quiet. For a tight skip we do a brief
-        // env dip then swap — implemented as a very short crossfade so
+        // env dip then swap - implemented as a very short crossfade so
         // both streams stay aligned with equal-power (no pop).
         let fade = fade.clamp(0.05, 0.5);
         self.crossfade(src, fade);
@@ -697,7 +697,7 @@ impl MixerSource {
         }
         g.eq.process_frame(&mut mixed, ch);
         // The mixer owns the position clock. Do not increment while
-        // buffering or paused — that was a source of "time runs, silence".
+        // buffering or paused - that was a source of "time runs, silence".
         // AudioSource used to also increment, doubling the clock (and
         // firing blend/end ~2× early, which skipped ahead).
         // Varispeed advances the clock by the source frames consumed, so

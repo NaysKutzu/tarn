@@ -141,7 +141,7 @@ async fn run_batch(y: &ytm::Ytm) {
             Ok(r) => {
                 ok += 1;
                 println!(
-                    "OK    {q} → {} — {}  {} ms (resolve {} ms, {}, {} bytes, {} Hz {} ch)",
+                    "OK    {q} → {} - {}  {} ms (resolve {} ms, {}, {} bytes, {} Hz {} ch)",
                     t.id,
                     t.title,
                     r.total_ms,
@@ -155,7 +155,7 @@ async fn run_batch(y: &ytm::Ytm) {
             Err(e) => {
                 fail += 1;
                 println!(
-                    "FAIL  {q} → {} — {}  after {} ms: {e}",
+                    "FAIL  {q} → {} - {}  after {} ms: {e}",
                     t.id,
                     t.title,
                     t0.elapsed().as_millis()

@@ -47,7 +47,7 @@ impl Drop for CookieRec {
     }
 }
 
-/// Names only — safe to print or put in a test report.
+/// Names only - safe to print or put in a test report.
 pub fn cookie_names(cookies: &[CookieRec]) -> Vec<String> {
     cookies.iter().map(|c| c.name.clone()).collect()
 }

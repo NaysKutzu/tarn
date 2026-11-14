@@ -1,4 +1,4 @@
-//! Playback and window session — restored on launch, saved on a short
+//! Playback and window session - restored on launch, saved on a short
 //! interval and again when the app closes.
 
 use serde::{Deserialize, Serialize};
@@ -123,6 +123,9 @@ pub fn collect(app: &App, win: Option<&tauri::WebviewWindow>) -> SavedSession {
     let snap = app.player.snapshot();
     let ui = app.ui.lock().clone();
     let mut queue = snap.queue;
+    for t in &mut queue {
+        t.ensure_cover();
+    }
     if queue.len() > MAX_QUEUE {
         let start = snap.index.saturating_sub(MAX_QUEUE / 2);
         let end = (start + MAX_QUEUE).min(queue.len());

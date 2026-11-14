@@ -51,7 +51,7 @@ async fn run(q: &str) -> Result<()> {
         let album = t.album.as_ref().map(|a| a.name.as_str()).unwrap_or("-");
         let dur = t.duration.unwrap_or(0);
         println!(
-            "  {:2}. {}  —  {}  [{}]  {}s  id={}",
+            "  {:2}. {}  -  {}  [{}]  {}s  id={}",
             i + 1,
             t.name,
             artists,

@@ -324,7 +324,7 @@ impl Ytm {
         let signed = self.cookie_header().is_some();
         home.signed_in = signed;
         self.harvest_cookies();
-        // When signed in, the InnerTube feed IS the product — do not pad
+        // When signed in, the InnerTube feed IS the product - do not pad
         // it with the logged-out charts/trending filler.
         if signed {
             crate::diag::log(format!(
@@ -1079,7 +1079,7 @@ impl Ytm {
                 match it.library_browse(id).await {
                     Ok((_, pls, _)) if !pls.is_empty() => {
                         crate::diag::log(format!("library innertube {id}: {} playlists", pls.len()));
-                        // landing may mix albums — keep playlist-looking ids
+                        // landing may mix albums - keep playlist-looking ids
                         for p in pls {
                             if lib.playlists.iter().any(|x| x.id == p.id) {
                                 continue;
@@ -1274,7 +1274,7 @@ impl Ytm {
     ///
     /// rustypipe clients (iOS, then TV, then Android) are tried first so
     /// play can start in-process without spawning yt-dlp. Each URL is
-    /// requested with the user-agent of the client that produced it —
+    /// requested with the user-agent of the client that produced it -
     /// googlevideo 403s a mismatched UA, and those URLs are also bound to
     /// the requester's IP and an expiry. The sidecar is the last resort
     /// (never on Android/iOS). Fresh URLs are cached until they expire.
@@ -1362,7 +1362,7 @@ impl Ytm {
         // Race every client that can produce a playable URL in-process.
         // VISIONOS (no PO token, unobfuscated AAC) and ANDROID go first
         // alongside rustypipe iOS/TV. yt-dlp starts after 1.5s only if
-        // nobody has a URL yet — and is cancelled the moment one does.
+        // nobody has a URL yet - and is cancelled the moment one does.
         let skip_it = skip_has("visionos") && skip_has("android");
         let skip_yd = skip_has("yt-dlp");
         let players = &self.players;
@@ -1472,8 +1472,8 @@ impl Ytm {
     /// continues in the background.
     ///
     /// On 403/410 (expired or IP-bound URL, or a client/UA mismatch) the
-    /// cached URL is dropped and the next client — then the yt-dlp sidecar
-    /// — is tried, without surfacing the failure unless every path fails.
+    /// cached URL is dropped and the next client - then the yt-dlp sidecar
+    /// - is tried, without surfacing the failure unless every path fails.
     pub async fn start_audio(
         &self,
         video_id: &str,
@@ -1581,7 +1581,7 @@ impl Ytm {
             return existing;
         }
         let body = crate::decode::GrowingBody::new();
-        // Only resume a partial if we're still on the same URL family —
+        // Only resume a partial if we're still on the same URL family -
         // a 403 fallback is a new file and cannot be ranged from the old
         // prefix. `forget_attempt` already deleted the part in that case.
         if !video_id.is_empty() {
@@ -1771,7 +1771,7 @@ fn tighten_cache(dir: &std::path::Path) {
 }
 
 pub fn track_from(t: &TrackItem) -> Track {
-    Track {
+    let mut track = Track {
         id: t.id.clone(),
         title: t.name.clone(),
         artists: t.artists.iter().map(|a| a.name.clone()).collect(),
@@ -1781,7 +1781,9 @@ pub fn track_from(t: &TrackItem) -> Track {
         duration: t.duration.map(normalize_duration),
         cover: best_thumb(&t.cover),
         is_video: matches!(t.track_type, TrackType::Video),
-    }
+    };
+    track.ensure_cover();
+    track
 }
 
 fn artist_from(a: &ArtistItem) -> ArtistCard {
@@ -1926,18 +1928,19 @@ fn argb_to_hex(c: u32) -> String {
 /// Album/playlist rows often omit per-track art; copy the collection cover
 /// so the player bar has the same image the track list already shows.
 fn stamp_missing_track_covers(c: &mut Collection) {
-    let Some(cover) = c.cover.clone().filter(|u| usable_cover(u)) else {
-        return;
-    };
+    let album = c.cover.clone().filter(|u| usable_cover(u));
     for t in &mut c.tracks {
         if t.cover.as_deref().is_none_or(|u| !usable_cover(u)) {
-            t.cover = Some(cover.clone());
+            if let Some(cover) = album.clone() {
+                t.cover = Some(cover);
+            }
         }
+        t.ensure_cover();
     }
 }
 
 fn best_thumb(thumbs: &[Thumbnail]) -> Option<String> {
-    // Prefer a mid/large candidate from the API — do not rewrite size here.
+    // Prefer a mid/large candidate from the API - do not rewrite size here.
     // Aggressive =w512 upgrades often 404; the frontend sizedCover handles DPR.
     let t = thumbs
         .iter()
@@ -1951,7 +1954,7 @@ fn usable_cover(url: &str) -> bool {
     if url.is_empty() || !url.starts_with("http") {
         return false;
     }
-    // Needs music.youtube.com session cookies — broken in the app webview.
+    // Needs music.youtube.com session cookies - broken in the app webview.
     if url.contains("music.youtube.com/image/") || url.contains("/mixart") {
         return false;
     }
@@ -2151,7 +2154,7 @@ async fn download_into(
             Err(e) if is_eof_error(&e) => {
                 // A 416 is only a real end if we already have the declared
                 // length, or we have no length and some audio. A 416 mid-file
-                // is a stale URL — re-resolve and resume.
+                // is a stale URL - re-resolve and resume.
                 if body.content_len().is_some_and(|t| body.len() as u64 >= t) {
                     break;
                 }
@@ -2306,7 +2309,7 @@ async fn reresolve_from(
         return Err(anyhow!("cannot re-resolve an empty id"));
     }
     let want = current.itag();
-    // Prefer a fresh VISIONOS/ANDROID URL — these complete a full file
+    // Prefer a fresh VISIONOS/ANDROID URL - these complete a full file
     // in one request and do not need a PO token today.
     if let Some(hub) = players {
         match hub.race(video_id).await {
@@ -2329,10 +2332,10 @@ async fn reresolve_from(
         }
     }
     // Fast path: the same rustypipe client that already worked. A mid-file
-    // 403 is a stale URL, not a bad client — don't walk every client
-    // (and wait 20–30s) before we can resume.
+    // 403 is a stale URL, not a bad client - don't walk every client
+    // (and wait 20-30s) before we can resume.
     // After a couple of fresh same-client URLs also 403 at this offset,
-    // skip straight to yt-dlp — looping ios for a minute just stalls
+    // skip straight to yt-dlp - looping ios for a minute just stalls
     // the buffer.
     if !skip_same {
     if let Some(ctype) = client_type_of(current.client) {
@@ -2358,7 +2361,7 @@ async fn reresolve_from(
     } else {
         eprintln!("audio: skipping same-client re-resolve after repeated 403s");
     }
-    // yt-dlp next — usually a couple of seconds, faster than probing
+    // yt-dlp next - usually a couple of seconds, faster than probing
     // every rustypipe client with a first-chunk.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
@@ -2446,7 +2449,7 @@ async fn rustypipe_one(rp: &RustyPipe, id: &str, ctype: ClientType) -> Result<St
 fn itag_ok(want: Option<u64>, got: Option<u64>) -> bool {
     match (want, got) {
         (Some(a), Some(b)) => a == b,
-        // If either side has no itag, allow — YouTube m4a is almost
+        // If either side has no itag, allow - YouTube m4a is almost
         // always itag 140, and a missing param is better than giving up.
         _ => true,
     }
@@ -2504,7 +2507,7 @@ async fn download_chunk(
         req = req.header(k.as_str(), v.as_str());
     }
     req = req.header("User-Agent", ua);
-    // Closed range only — `bytes=N-` 403s on iOS/TV googlevideo URLs.
+    // Closed range only - `bytes=N-` 403s on iOS/TV googlevideo URLs.
     req = req.header("Range", format!("bytes={offset}-{end}"));
     if inject_403_at(offset) {
         return Err(anyhow!("audio download: HTTP 403 Forbidden"));
@@ -2528,7 +2531,7 @@ async fn download_chunk(
             // "bytes 0-1023/2975815"
             if let Some(total) = s.rsplit('/').next() {
                 if let Ok(n) = total.parse::<u64>() {
-                    // Never shrink a known length — a short 206 must
+                    // Never shrink a known length - a short 206 must
                     // not convince us the file is only one chunk long.
                     if body.content_len().unwrap_or(0) < n {
                         body.set_content_len(n);
@@ -2695,7 +2698,7 @@ async fn rustypipe_stream(rp: &RustyPipe, id: &str, skip: &[&str]) -> Result<Str
         }
         let mut result = rp.query().player_from_clients(id, &[ctype]).await;
         if result.is_err() {
-            // One retry — Innertube flakes.
+            // One retry - Innertube flakes.
             tokio::time::sleep(Duration::from_millis(200)).await;
             result = rp.query().player_from_clients(id, &[ctype]).await;
         }
@@ -2780,7 +2783,7 @@ async fn ytdlp_stream(
         .context("yt-dlp sidecar is not available")?;
     let url = format!("https://www.youtube.com/watch?v={id}");
     // Try yt-dlp's own default first (it usually picks a working client).
-    // If that fails, walk a list of player_client sets — a stale default
+    // If that fails, walk a list of player_client sets - a stale default
     // is a common reason songs intermittently won't play.
     let sets: &[&str] = &[
         "",
@@ -2947,4 +2950,4 @@ async fn search_ytdlp(query: &str) -> Result<Vec<Track>> {
     Ok(tracks)
 }
 
-// UserItem fields — compile will tell us if name/id/avatar differ.
+// UserItem fields - compile will tell us if name/id/avatar differ.

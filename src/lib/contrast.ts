@@ -1,4 +1,4 @@
-/** WCAG relative luminance of an sRGB color (0–255 channels). */
+/** WCAG relative luminance of an sRGB color (0-255 channels). */
 export function relativeLuminance(r: number, g: number, b: number): number {
   const lin = (c: number) => {
     const s = c / 255;
@@ -32,7 +32,7 @@ export function paintAccent(r: number, g: number, b: number): AccentPaint {
   const blackL = 0;
   let L = relativeLuminance(rgb[0], rgb[1], rgb[2]);
 
-  // Near-white or near-black accents make terrible buttons — nudge them.
+  // Near-white or near-black accents make terrible buttons - nudge them.
   if (L > 0.85) {
     rgb = shadeToward(rgb, [20, 19, 18], 0.28);
     L = relativeLuminance(rgb[0], rgb[1], rgb[2]);

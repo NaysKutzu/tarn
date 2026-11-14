@@ -14,7 +14,7 @@ src-tauri/gen/*/build/
 *.aab
 *.ipa
 
-# local env and secrets — never commit these
+# local env and secrets - never commit these
 .env
 .env.*
 !.env.example

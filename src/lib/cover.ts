@@ -2,6 +2,32 @@ function isYt3(url: string): boolean {
   return url.includes('yt3.ggpht.com') || url.includes('yt3.googleusercontent.com');
 }
 
+function isVideoId(id: string): boolean {
+  return /^[\w-]{11}$/.test(id);
+}
+
+function coverUsable(url: string): boolean {
+  return (
+    url.startsWith('http') &&
+    !url.includes('music.youtube.com/image/') &&
+    !url.includes('/mixart')
+  );
+}
+
+/** Public YouTube thumb - works in the webview without YTM cookies. */
+export function ytThumb(id: string): string {
+  return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+}
+
+/** Prefer API art; fall back to i.ytimg so the player bar is never blank. */
+export function coverFor(t: { id: string; cover?: string | null } | null | undefined): string | null {
+  if (!t?.id) return null;
+  const c = t.cover;
+  if (c && coverUsable(c)) return c;
+  if (isVideoId(t.id)) return ytThumb(t.id);
+  return c || null;
+}
+
 /** Rewrite YTM/Google CDN URLs to a requested pixel size (logical * DPR). */
 export function sizedCover(url: string | null | undefined, w: number, h?: number): string {
   if (!url) return '';
@@ -32,18 +58,18 @@ export function sizedCover(url: string | null | undefined, w: number, h?: number
     const i = url.lastIndexOf('=');
     if (i < 0) return url;
     const suffix = url.slice(i + 1);
-    // Avatar-style size token — keep sN, don't force w/h.
+    // Avatar-style size token - keep sN, don't force w/h.
     if (suffix.startsWith('s') && (suffix.includes('-c-k-') || suffix.includes('-c-c0x'))) {
       const s = Math.max(width, height);
       return `${url.slice(0, i)}=s${s}-c-k-c0x00ffffff-no-rj`;
     }
-    // Cap DPR rewrites — huge w/h on small assets 404s for some album arts.
+    // Cap DPR rewrites - huge w/h on small assets 404s for some album arts.
     const tw = Math.min(width, 544);
     const th = Math.min(height, 544);
     return `${url.slice(0, i)}=w${tw}-h${th}-l90-rj`;
   }
   if (url.includes('i.ytimg.com')) {
-    // maxresdefault 404s for many videos — prefer hq which almost always exists.
+    // maxresdefault 404s for many videos - prefer hq which almost always exists.
     if (width >= 480) return swapYt(url, 'hqdefault');
     if (width >= 320) return swapYt(url, 'mqdefault');
   }
@@ -57,7 +83,7 @@ function swapYt(url: string, name: string): string {
   );
 }
 
-/** srcset for a displayed CSS size in px — 1x, 2x, 3x. */
+/** srcset for a displayed CSS size in px - 1x, 2x, 3x. */
 export function srcsetFor(url: string | null | undefined, cssPx: number, square = true): string {
   if (!url) return '';
   const h = square ? cssPx : Math.round(cssPx * 0.4);

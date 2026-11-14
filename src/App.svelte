@@ -7,7 +7,7 @@
     Lyrics, PlayerState, PlaylistCard, Related, SearchResults, Settings as SettingsT,
     Shelf, ShelfItem, Track, View, CtxTarget,
   } from './lib/types';
-  import { itemToTrack } from './lib/cover';
+  import { coverFor, itemToTrack } from './lib/cover';
   import { artistsLine, fmtCount, fmtTime, shareUrl } from './lib/format';
   import { paintAccent } from './lib/contrast';
   import Cover from './lib/components/Cover.svelte';
@@ -548,15 +548,17 @@
     return tracks.map((t) => (t.cover ? t : { ...t, cover: fallback }));
   }
 
-  /** Player bar / NP art — reuse album art when the track itself has none. */
+  /** Player bar / NP art - album/queue art, then public YouTube thumb. */
   let nowCover = $derived.by(() => {
     const t = player.track;
     if (!t) return null;
-    if (t.cover) return t.cover;
-    const fromQueue = player.queue.find((x) => x.id === t.id && x.cover)?.cover;
-    if (fromQueue) return fromQueue;
-    if (collection?.cover && collection.tracks.some((x) => x.id === t.id)) return collection.cover;
-    return null;
+    if (t.cover) return coverFor(t);
+    const fromQueue = player.queue.find((x) => x.id === t.id && x.cover);
+    if (fromQueue) return coverFor(fromQueue);
+    if (collection?.cover && collection.tracks.some((x) => x.id === t.id)) {
+      return coverFor({ id: t.id, cover: collection.cover });
+    }
+    return coverFor(t);
   });
 
   async function playTracks(tracks: Track[], index: number, fallbackCover?: string | null) {
@@ -570,7 +572,7 @@
       fail(e, "Can't play this track");
     }
   }
-  // Replace the queue — never keep leftover tracks from the previous playlist.
+  // Replace the queue - never keep leftover tracks from the previous playlist.
   function playOne(t: Track) { playTracks([t], 0); }
 
   async function startRadio(id?: string) {
@@ -709,6 +711,7 @@
   }
 
   async function openPanel(tab: 'queue' | 'lyrics' | 'related') {
+    if (tab === 'lyrics' && lyricsReady && !lyricsOk) return;
     panel = panel === tab ? null : tab;
   }
 
@@ -717,10 +720,40 @@
   // naive $effect would refetch in a loop.
   let relatedFor = '';
   let lyricsFor = '';
+  let lyricsOk = $state(false);
+  let lyricsReady = $state(false);
   $effect(() => {
     const id = player.track?.id ?? '';
+    if (!id) {
+      lyrics = null;
+      lyricsFor = '';
+      lyricsOk = false;
+      lyricsReady = false;
+      if (panel === 'lyrics') panel = null;
+      return;
+    }
+    if (lyricsFor !== id) {
+      lyricsFor = id;
+      lyrics = null;
+      lyricsOk = false;
+      lyricsReady = false;
+      const req = id;
+      api.lyrics(id).then((l) => {
+        if (lyricsFor !== req) return;
+        lyrics = l;
+        lyricsOk = !!(l?.lines?.length);
+        lyricsReady = true;
+        if (!lyricsOk && panel === 'lyrics') panel = null;
+      }).catch(() => {
+        if (lyricsFor !== req) return;
+        lyrics = { source: null, lines: [], synced: false };
+        lyricsOk = false;
+        lyricsReady = true;
+        if (panel === 'lyrics') panel = null;
+      });
+    }
     const p = panel;
-    if (p === 'related' && id && relatedFor !== id) {
+    if (p === 'related' && relatedFor !== id) {
       relatedFor = id;
       const req = id;
       api.related(id).then((r) => {
@@ -728,13 +761,6 @@
         related = { ...r, tracks: dedupeTracks(r.tracks), versions: dedupeTracks(r.versions || []) };
       }).catch(() => {
         if (relatedFor === req) related = { tracks: [], versions: [], albums: [], artists: [], playlists: [] };
-      });
-    }
-    if (p === 'lyrics' && id && lyricsFor !== id) {
-      lyricsFor = id;
-      const req = id;
-      api.lyrics(id).then((l) => { if (lyricsFor === req) lyrics = l; }).catch(() => {
-        if (lyricsFor === req) lyrics = { source: null, lines: [], synced: false };
       });
     }
   });
@@ -1521,7 +1547,7 @@
           {#if settings.bpm_match}
             <div class="set-row">
               <span class="lb">Max tempo change
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">±{settings.bpm_max_change.toFixed(1)}% — larger gaps blend without matching</span>
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">±{settings.bpm_max_change.toFixed(1)}% - larger gaps blend without matching</span>
               </span>
               <div style="width:200px">
                 <Slider
@@ -1634,7 +1660,7 @@
           </div>
           <div class="set-row">
             <span class="lb">Diagnostics
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Auth, library, and recent logs — no cookie values.</span>
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Auth, library, and recent logs - no cookie values.</span>
             </span>
             <button class="btn ghost" type="button" onclick={copyDiagnostics}>Copy diagnostics</button>
           </div>
@@ -1657,7 +1683,7 @@
       </div>
       <div class="ptabs">
         <button class="ptab {panel === 'queue' ? 'on' : ''}" type="button" onclick={() => openPanel('queue')}>Queue</button>
-        <button class="ptab {panel === 'lyrics' ? 'on' : ''}" type="button" onclick={() => openPanel('lyrics')}>Lyrics</button>
+        <button class="ptab {panel === 'lyrics' ? 'on' : ''}" type="button" disabled={lyricsReady && !lyricsOk} onclick={() => openPanel('lyrics')}>Lyrics</button>
         <button class="ptab {panel === 'related' ? 'on' : ''}" type="button" onclick={() => openPanel('related')}>Related</button>
       </div>
       <div class="panel-b">
@@ -1714,7 +1740,7 @@
 
   {#if expanded && player.track}
     <div class="np" onwheel={nudgeVolume}>
-      <Cover src={nowCover} width={1400} height={900} class="np-bg" alt="" />
+      <Cover src={nowCover} videoId={player.track?.id} width={1400} height={900} class="np-bg" alt="" />
       <div class="np-shade"></div>
       <button
         class="ibtn lg np-close"
@@ -1728,7 +1754,7 @@
       </button>
       <div class="np-in">
         <div class="np-art">
-          <Cover src={nowCover} size={360} alt="" />
+          <Cover src={nowCover} videoId={player.track?.id} size={360} alt="" />
           {#if volHud != null}
             <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
           {/if}
@@ -1755,7 +1781,7 @@
       <div class="now" onwheel={nudgeVolume}>
         {#if player.track}
           <button class="cov" type="button" onclick={() => (expanded = !expanded)} title="Now playing">
-            <Cover src={nowCover} size={64} alt="" />
+            <Cover src={nowCover} videoId={player.track?.id} size={64} alt="" />
             {#if volHud != null}
               <div class="vol-hud" aria-live="polite">{volHud}%</div>
             {/if}
@@ -1820,7 +1846,15 @@
       <div class="right-c">
         {#if player.error}<span class="err">{friendlyError(player.error, "Can't play this track")}</span>{/if}
         {#if player.loading && !player.playing}<div class="spin"></div>{/if}
-        <IconBtn icon={MicVocalIcon} size={22} on={panel === 'lyrics'} onclick={() => openPanel('lyrics')} title="Lyrics" btnSize="lg" />
+        <IconBtn
+          icon={MicVocalIcon}
+          size={22}
+          on={panel === 'lyrics'}
+          disabled={!player.track || (lyricsReady && !lyricsOk)}
+          onclick={() => openPanel('lyrics')}
+          title={lyricsReady && !lyricsOk ? 'No lyrics' : 'Lyrics'}
+          btnSize="lg"
+        />
         <IconBtn icon={Queue02Icon} size={22} on={panel === 'queue'} onclick={() => openPanel('queue')} title="Queue" btnSize="lg" />
         <IconBtn icon={Radio02Icon} size={22} onclick={() => startRadio()} title="Radio" btnSize="lg" />
         <div class="vol">

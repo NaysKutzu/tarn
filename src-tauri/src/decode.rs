@@ -5,7 +5,7 @@
 //! first fragments arrive, while the rest of the file downloads in the
 //! background. When the decoder runs ahead of the downloader it waits on a
 //! condvar (short, so the audio callback stays responsive) and reports
-//! underrun — never EOF — until the full body is known and fully consumed.
+//! underrun - never EOF - until the full body is known and fully consumed.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -123,7 +123,7 @@ impl GrowingBody {
     pub fn fail(&self, msg: String) {
         *self.error.lock().unwrap() = Some(msg);
         // Mark done so waiters wake, but callers must treat `error()` as a
-        // stall to re-resolve — never as a clean end of track.
+        // stall to re-resolve - never as a clean end of track.
         self.done.store(true, Ordering::SeqCst);
         self.more.notify_all();
     }
@@ -224,7 +224,7 @@ impl GrowingBody {
         (secs * 16_000.0) as usize
     }
 
-    /// No new bytes for a while, and the decoder is waiting — re-resolve.
+    /// No new bytes for a while, and the decoder is waiting - re-resolve.
     pub fn is_stalled(&self) -> bool {
         if self.error().is_some() {
             return true;
@@ -352,7 +352,7 @@ impl Read for GrowingReader {
             // an underrun, not the end of the track.
             //
             // Do NOT turn a quiet stretch into a fatal TimedOut. Mid-file
-            // 403s take a re-resolve (often 15–40s) before the next byte
+            // 403s take a re-resolve (often 15-40s) before the next byte
             // arrives; a 12s stall here used to surface "Can't play this
             // track" even though the downloader was still working and the
             // rest of the file eventually arrived. Fatal Stall is only
@@ -435,7 +435,7 @@ impl MediaSource for GrowingReader {
 pub enum Pull {
     Sample(i16),
     /// Decoder is ahead of the downloader. Mixer should yield silence and
-    /// pause the position clock — not end the track.
+    /// pause the position clock - not end the track.
     Buffering,
     /// The full body was downloaded and every packet has been consumed.
     Ended,
@@ -589,7 +589,7 @@ impl AudioSource {
                 self.channels = spec.channels.count() as u16;
             }
             DecodeOut::Underrun => {
-                // Range isn't here yet — caller shows buffering and retries.
+                // Range isn't here yet - caller shows buffering and retries.
             }
             DecodeOut::Ended => {}
             DecodeOut::Stall(e) => return Err(anyhow!("{e}")),
@@ -619,7 +619,7 @@ impl AudioSource {
         let dur = self.body.duration().unwrap_or(0.0);
         let early = dur > 2.0 && pos + 1.5 < dur;
         if ended {
-            // Demuxer said EOF well before the track's duration — almost
+            // Demuxer said EOF well before the track's duration - almost
             // certainly a fragment boundary, not the real end.
             return early;
         }
@@ -819,7 +819,7 @@ fn classify_io(e: std::io::Error, body: &GrowingBody) -> DecodeOut {
     if body.is_complete() || (body.is_done() && body.error().is_none()) {
         return DecodeOut::Ended;
     }
-    // Growing body, unexpected IO — wait for more, do not end the track.
+    // Growing body, unexpected IO - wait for more, do not end the track.
     eprintln!(
         "underrun: {} at {}/{:?} bytes; waiting on downloader",
         e,
@@ -905,7 +905,7 @@ mod tests {
         let mut buf = [0u8; 64];
         let n = r.read(&mut buf).unwrap();
         assert_eq!(n, 16);
-        // Next read waits, then WouldBlock — never Ok(0) while still growing.
+        // Next read waits, then WouldBlock - never Ok(0) while still growing.
         let err = r.read(&mut buf).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
         assert!(!body.is_complete());
@@ -953,7 +953,7 @@ mod tests {
         assert!(matches!(classify_io(e, &body), DecodeOut::Underrun));
 
         body.finish();
-        // 10 < 100, finish without full length — is_complete is false.
+        // 10 < 100, finish without full length - is_complete is false.
         // After finish with short body and no error: is_complete checks len >= n.
         let e = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof");
         let out = classify_io(e, &body);
