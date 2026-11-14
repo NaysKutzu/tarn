@@ -8,6 +8,7 @@ mod innertube;
 mod player_client;
 mod login;
 mod mix;
+mod transition;
 mod mpris;
 mod models;
 mod persist;
@@ -73,6 +74,7 @@ impl App {
             settings.crossfade_manual,
         );
         player.set_eq(settings.eq_bands, settings.eq_enabled);
+        player.set_transition(settings.transition());
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata — audio is armed later.
             player.set_volume(sess.volume);
@@ -976,6 +978,7 @@ fn set_settings(app: State<Arc<App>>, settings: Settings) {
     }
     settings.eq_bands = bands;
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
+    app.player.set_transition(settings.transition());
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
 }
@@ -1314,6 +1317,46 @@ mod settings_tests {
         save_settings(&dir, &on);
         let again = load_settings(&dir);
         assert!(again.notifications, "must not re-migrate after the one-shot");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn old_settings_get_neutral_transition_defaults() {
+        let dir = tmp_dir("xf-defaults");
+        fs::write(
+            dir.join("settings.json"),
+            r#"{
+                "quality": "high",
+                "language": "en",
+                "region": "US",
+                "notifications": false,
+                "autoplay": true,
+                "cache_max_mb": 1024,
+                "crossfade": true,
+                "crossfade_seconds": 4.0,
+                "album_continuity": true
+            }"#,
+        )
+        .unwrap();
+        let s = load_settings(&dir);
+        let t = s.transition();
+        // Missing keys must reproduce the classic equal-power blend.
+        assert_eq!(t.shape, crate::transition::XfShape::equal_power(4.0));
+        assert!(!t.smart && !t.bpm_match);
+        assert!(s.crossfade_manual);
+        // New keys round-trip.
+        let mut c = s.clone();
+        c.crossfade_curve_in = "s_curve".into();
+        c.crossfade_filter = "sweep".into();
+        c.bpm_match = true;
+        c.bpm_max_change = 4.0;
+        save_settings(&dir, &c);
+        let again = load_settings(&dir);
+        let t = again.transition();
+        assert_eq!(t.shape.curve_in, crate::transition::Curve::Smooth);
+        assert_eq!(t.shape.filter, crate::transition::FilterSweep::Sweep);
+        assert!(t.bpm_match);
+        assert!((t.bpm_max_pct - 4.0).abs() < 1e-6);
         let _ = fs::remove_dir_all(dir);
     }
 

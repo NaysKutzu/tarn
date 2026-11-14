@@ -7,13 +7,17 @@ use parking_lot::Mutex;
 use rodio::{OutputStream, Sink};
 
 use crate::models::{PlayerState, Track};
+use crate::transition::XfConfig;
 use crate::ytm::Stream;
 
 /// Commands sent to the audio thread.
 enum Cmd {
     Play(Arc<crate::decode::GrowingBody>, f64),
     Arm(Arc<crate::decode::GrowingBody>, f64),
-    Crossfade(Arc<crate::decode::GrowingBody>, f64, f32),
+    Crossfade(Arc<crate::decode::GrowingBody>, f64, Box<XfConfig>),
+    /// Analysis for a crossfade finished off-thread; `u64` is the command
+    /// generation it was started for (stale results are dropped).
+    XfReady(Box<crate::decode::AudioSource>, Box<crate::mix::XfPlan>, u64),
     Gapless(Arc<crate::decode::GrowingBody>, f64),
     Cut(Arc<crate::decode::GrowingBody>, f64),
     Pause,
@@ -33,7 +37,8 @@ pub enum PlayStyle {
     Armed,
     /// Short equal-power dip when skipping.
     Cut,
-    /// Equal-power overlap of `f32` seconds.
+    /// Shaped overlap of `f32` seconds (curves/BPM from the transition
+    /// settings).
     Crossfade(f32),
     /// Queue the decoder to start the instant the current one ends.
     Gapless,
@@ -56,6 +61,10 @@ pub struct Player {
     xf_ms: Arc<AtomicU32>,
     xf_manual: Arc<AtomicBool>,
     album_cont: Arc<AtomicBool>,
+    /// Curves, filter, smart start, and BPM matching settings.
+    xf_cfg: Arc<Mutex<XfConfig>>,
+    /// How long the current track has been silent (smart start).
+    quiet_ms: Arc<AtomicU32>,
     blending: Arc<AtomicBool>,
     /// If the user hits play while a session is still arming.
     want_play: Arc<AtomicBool>,
@@ -84,6 +93,8 @@ impl Player {
         let xf_ms = Arc::new(AtomicU32::new(4000));
         let xf_manual = Arc::new(AtomicBool::new(true));
         let album_cont = Arc::new(AtomicBool::new(true));
+        let xf_cfg = Arc::new(Mutex::new(XfConfig::simple(4.0)));
+        let quiet_ms = Arc::new(AtomicU32::new(0));
         let blending = Arc::new(AtomicBool::new(false));
         let want_play = Arc::new(AtomicBool::new(false));
         let buffering = Arc::new(AtomicBool::new(false));
@@ -104,6 +115,9 @@ impl Player {
         let buffering_t = buffering.clone();
         let recover_t = recover.clone();
         let has_src_t = has_src.clone();
+        let tx_t = tx.clone();
+        let cfg_t = xf_cfg.clone();
+        let quiet_t = quiet_ms.clone();
 
         std::thread::Builder::new()
             .name("tarn-audio".into())
@@ -120,6 +134,11 @@ impl Player {
                     buffering_t,
                     recover_t,
                     has_src_t,
+                    AudioExtras {
+                        tx: tx_t,
+                        cfg: cfg_t,
+                        quiet_ms: quiet_t,
+                    },
                 )
             })
             .expect("audio thread");
@@ -137,6 +156,8 @@ impl Player {
             xf_ms,
             xf_manual,
             album_cont,
+            xf_cfg,
+            quiet_ms,
             blending,
             want_play,
             buffering,
@@ -195,6 +216,7 @@ impl Player {
         self.recover.store(false, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
         *self.last_ended.lock() = None;
+        self.quiet_ms.store(0, Ordering::Relaxed);
         self.phase
             .store(if loading { 3 } else { 2 }, Ordering::Relaxed);
         self.want_play.store(false, Ordering::Relaxed);
@@ -275,7 +297,11 @@ impl Player {
                 }
             }
             PlayStyle::Cut => Cmd::Cut(audio, start),
-            PlayStyle::Crossfade(s) => Cmd::Crossfade(audio, start, s),
+            PlayStyle::Crossfade(s) => {
+                let mut cfg = self.xf_cfg.lock().clone();
+                cfg.shape.secs = s;
+                Cmd::Crossfade(audio, start, Box::new(cfg))
+            }
             PlayStyle::Gapless => Cmd::Gapless(audio, start),
         };
         self.tx
@@ -291,10 +317,20 @@ impl Player {
 
     pub fn set_crossfade(&self, on: bool, seconds: f64, album_continuity: bool, manual: bool) {
         self.xf_on.store(on, Ordering::Relaxed);
-        let ms = (seconds.clamp(0.0, 12.0) * 1000.0).round() as u32;
+        let ms = (seconds.clamp(0.0, 20.0) * 1000.0).round() as u32;
         self.xf_ms.store(ms, Ordering::Relaxed);
         self.album_cont.store(album_continuity, Ordering::Relaxed);
         self.xf_manual.store(manual, Ordering::Relaxed);
+        self.xf_cfg.lock().shape.secs = ms as f32 / 1000.0;
+    }
+
+    /// Curves, filter sweep, smart start, and BPM matching.
+    pub fn set_transition(&self, cfg: XfConfig) {
+        let mut cur = self.xf_cfg.lock();
+        let secs = cur.shape.secs;
+        *cur = cfg;
+        // Duration is owned by set_crossfade.
+        cur.shape.secs = secs;
     }
 
     pub fn crossfade_secs(&self) -> f32 {
@@ -340,12 +376,31 @@ impl Player {
             return None;
         }
         let xf = self.should_crossfade(s.track.as_ref(), &track, false);
+        let (smart, bpm) = {
+            let c = self.xf_cfg.lock();
+            (c.smart, c.bpm_match)
+        };
+        // Analysis runs off-thread and beat alignment may wait up to a
+        // beat, so start a little earlier when those are on.
+        let extra = if bpm {
+            1.2
+        } else if smart {
+            0.4
+        } else {
+            0.0
+        };
         let lead = if xf {
-            self.crossfade_secs() as f64 + 0.2
+            self.crossfade_secs() as f64 + 0.2 + extra
         } else {
             0.35
         };
-        if s.position + 0.04 < (s.duration - lead).max(0.0) {
+        // Smart start: the outgoing track has trailed off into silence
+        // near its end — move on instead of playing dead air.
+        let quiet_tail = xf
+            && smart
+            && s.duration - s.position < 15.0
+            && self.quiet_ms.load(Ordering::Relaxed) >= 2000;
+        if !quiet_tail && s.position + 0.04 < (s.duration - lead).max(0.0) {
             return None;
         }
         self.blending.store(true, Ordering::Relaxed);
@@ -376,6 +431,7 @@ impl Player {
             *self.last_ended.lock() = Some(prev);
         }
         self.blend_adopted.store(true, Ordering::SeqCst);
+        self.quiet_ms.store(0, Ordering::Relaxed);
         let mut s = self.state.lock();
         s.track = Some(track);
         s.index = index;
@@ -688,6 +744,13 @@ pub enum NextChoice {
     Stop,
 }
 
+/// Extra handles the audio thread needs for analysed crossfades.
+struct AudioExtras {
+    tx: std::sync::mpsc::Sender<Cmd>,
+    cfg: Arc<Mutex<XfConfig>>,
+    quiet_ms: Arc<AtomicU32>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn audio_thread(
     rx: std::sync::mpsc::Receiver<Cmd>,
@@ -701,6 +764,7 @@ fn audio_thread(
     buffering: Arc<AtomicBool>,
     recover: Arc<AtomicBool>,
     has_src: Arc<AtomicBool>,
+    extras: AudioExtras,
 ) {
     let (_stream, handle) = match OutputStream::try_default() {
         Ok(v) => v,
@@ -724,12 +788,32 @@ fn audio_thread(
         buffering.clone(),
         recover.clone(),
         has_src.clone(),
+        extras.quiet_ms.clone(),
     );
     sink.append(mix.source());
     sink.play();
+    let tap = mix.tap();
+    // Bumped by every command that changes what should be playing, so a
+    // slow crossfade analysis can't land on top of a newer action.
+    let mut generation: u64 = 0;
 
     loop {
         let cmd = rx.recv_timeout(Duration::from_millis(80));
+        // The live tempo tap only runs while BPM matching is on.
+        let bpm_on = extras.cfg.lock().bpm_match;
+        tap.set_analysis(bpm_on);
+        if matches!(
+            cmd,
+            Ok(Cmd::Play(..)
+                | Cmd::Arm(..)
+                | Cmd::Crossfade(..)
+                | Cmd::Gapless(..)
+                | Cmd::Cut(..)
+                | Cmd::Stop
+                | Cmd::Seek(_))
+        ) {
+            generation = generation.wrapping_add(1);
+        }
         match cmd {
             Ok(Cmd::Play(audio, start)) => {
                 match make_source(audio, start) {
@@ -768,10 +852,37 @@ fn audio_thread(
                     }
                 }
             }
-            Ok(Cmd::Crossfade(audio, start, secs)) => {
-                match make_source(audio, start) {
-                    Ok(src) => mix.crossfade(src, secs),
-                    Err(e) => eprintln!("crossfade: {e}"),
+            Ok(Cmd::Crossfade(audio, start, cfg)) => {
+                if cfg.needs_analysis() {
+                    let tx = extras.tx.clone();
+                    let tap = tap.clone();
+                    let gen = generation;
+                    let spawned = std::thread::Builder::new()
+                        .name("tarn-xf-analysis".into())
+                        .spawn(move || match prepare_transition(audio, start, &cfg, &tap) {
+                            Ok((src, plan)) => {
+                                let _ = tx.send(Cmd::XfReady(Box::new(src), Box::new(plan), gen));
+                            }
+                            Err(e) => eprintln!("crossfade: {e}"),
+                        });
+                    if let Err(e) = spawned {
+                        eprintln!("crossfade: analysis thread: {e}");
+                    }
+                } else {
+                    match make_source(audio, start) {
+                        Ok(src) => mix.crossfade_plan(src, plain_plan(&cfg)),
+                        Err(e) => eprintln!("crossfade: {e}"),
+                    }
+                }
+            }
+            Ok(Cmd::XfReady(src, plan, gen)) => {
+                if gen != generation {
+                    eprintln!("crossfade: analysis superseded, dropping");
+                } else if mix.is_paused() {
+                    // Paused while analysing: swap silently, stay paused.
+                    mix.arm(*src);
+                } else {
+                    mix.crossfade_plan(*src, *plan);
                 }
             }
             Ok(Cmd::Gapless(audio, start)) => {
@@ -872,6 +983,117 @@ fn make_source(
     start: f64,
 ) -> Result<crate::decode::AudioSource> {
     crate::decode::open(audio, start)
+}
+
+fn plain_plan(cfg: &XfConfig) -> crate::mix::XfPlan {
+    crate::mix::XfPlan {
+        shape: cfg.shape.clone(),
+        return_secs: cfg.bpm_return_secs,
+        smart: cfg.smart,
+        ..crate::mix::XfPlan::simple(cfg.shape.secs)
+    }
+}
+
+/// Open the incoming decoder and work out how to blend into it: trim its
+/// leading silence, detect both tempos, pick a playback rate within the
+/// allowed change, and line up beats. Runs off the audio thread.
+fn prepare_transition(
+    audio: Arc<crate::decode::GrowingBody>,
+    start: f64,
+    cfg: &XfConfig,
+    tap: &crate::mix::MixTap,
+) -> Result<(crate::decode::AudioSource, crate::mix::XfPlan)> {
+    use crate::transition::{analyze, match_rate, EnvBuilder, FrameRes, MIN_CONFIDENCE, SILENCE};
+    use rodio::Source;
+    let t0 = Instant::now();
+    let mut src = make_source(audio.clone(), start)?;
+    let sr = src.sample_rate().max(1);
+    let ch = src.channels().max(1) as usize;
+    let mut plan = plain_plan(cfg);
+
+    // Look at the head of the incoming track with a second decoder so the
+    // playback one stays untouched. Only from the top: a mid-track start
+    // would make the decoder wait for the whole download.
+    let mut env = EnvBuilder::new(sr, 12.0);
+    let mut lead_silence = 0u64;
+    if start <= 0.05 {
+        if let Ok(mut probe) = make_source(audio, start) {
+            let max_frames = 10 * sr as u64;
+            let mut f = vec![0i16; ch];
+            let mut heard = false;
+            while env.frames < max_frames && t0.elapsed() < Duration::from_millis(1500) {
+                if !matches!(crate::mix::pull_raw(&mut probe, &mut f), FrameRes::Ok) {
+                    break;
+                }
+                if !heard {
+                    let peak = f.iter().map(|&v| (v as i32).abs()).max().unwrap_or(0);
+                    if peak >= SILENCE {
+                        heard = true;
+                    } else {
+                        lead_silence += 1;
+                    }
+                }
+                env.push_frame(&f);
+            }
+            if !heard {
+                lead_silence = 0;
+            }
+        }
+    }
+
+    let mut skip = 0u64;
+    if cfg.smart {
+        skip = lead_silence.min(8 * sr as u64);
+    }
+    if cfg.bpm_match {
+        let full: Vec<f32> = env.full.iter().copied().collect();
+        let low: Vec<f32> = env.low.iter().copied().collect();
+        let base = env.window_start() as f64;
+        let inb = analyze(&full, &low, sr).filter(|b| b.confidence >= MIN_CONFIDENCE);
+        let outb = tap.outgoing_beat().filter(|b| b.confidence >= MIN_CONFIDENCE);
+        match (outb, inb) {
+            (Some(o), Some(i)) => {
+                if let Some((rate, eff)) = match_rate(o.bpm, i.bpm, cfg.bpm_max_pct as f64) {
+                    plan.in_rate = rate;
+                    eprintln!(
+                        "bpm: out {:.1} / in {:.1} (as {:.1}) → incoming at {:.2}%",
+                        o.bpm,
+                        i.bpm,
+                        eff,
+                        (rate - 1.0) * 100.0
+                    );
+                    if cfg.beat_align {
+                        let p_in = 60.0 * sr as f64 / eff;
+                        let phase = base + i.phase;
+                        let k = ((skip as f64 - phase) / p_in).ceil().max(0.0);
+                        let first = phase + k * p_in;
+                        if first >= skip as f64 && first - (skip as f64) <= p_in {
+                            skip = first.round() as u64;
+                        }
+                        plan.out_grid = Some((o.period, o.phase));
+                    }
+                } else {
+                    eprintln!(
+                        "bpm: out {:.1} / in {:.1} needs more than ±{:.1}%, not matching",
+                        o.bpm, i.bpm, cfg.bpm_max_pct
+                    );
+                }
+            }
+            _ => eprintln!("bpm: tempo unclear, crossfading without matching"),
+        }
+    }
+    if skip > 0 {
+        let mut f = vec![0i16; ch];
+        let mut done = 0u64;
+        while done < skip {
+            if !matches!(crate::mix::pull_raw(&mut src, &mut f), FrameRes::Ok) {
+                break;
+            }
+            done += 1;
+        }
+        plan.skipped_frames = done;
+    }
+    Ok((src, plan))
 }
 
 
