@@ -257,6 +257,11 @@ pub struct Settings {
     pub crossfade_seconds: f64,
     #[serde(default = "default_true")]
     pub album_continuity: bool,
+    /// Five-band graphic EQ. Gains are dB in [-12, 12].
+    #[serde(default)]
+    pub eq_enabled: bool,
+    #[serde(default = "default_eq_bands")]
+    pub eq_bands: [f32; 5],
 }
 
 impl Default for Settings {
@@ -272,6 +277,8 @@ impl Default for Settings {
             crossfade: true,
             crossfade_seconds: default_xf_secs(),
             album_continuity: true,
+            eq_enabled: false,
+            eq_bands: default_eq_bands(),
         }
     }
 }
@@ -284,6 +291,9 @@ fn default_true() -> bool {
 }
 fn default_xf_secs() -> f64 {
     4.0
+}
+fn default_eq_bands() -> [f32; 5] {
+    [0.0; 5]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

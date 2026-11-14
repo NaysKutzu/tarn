@@ -6,6 +6,8 @@
     live = false,
     wheel = false,
     showTip = false,
+    /** Absolute wheel/keyboard step. Defaults to 5% of max for wheel, 2% for keys. */
+    step = 0,
     format = (v: number) => String(v),
     buffered = 0,
     oninput,
@@ -19,6 +21,7 @@
     live?: boolean;
     wheel?: boolean;
     showTip?: boolean;
+    step?: number;
     format?: (v: number) => string;
     /** Seconds (or same unit as max) already downloaded ahead. */
     buffered?: number;
@@ -111,8 +114,8 @@
   function onWheel(e: WheelEvent) {
     if (!wheel || disabled) return;
     e.preventDefault();
-    const step = (max || 1) * 0.05;
-    const next = Math.max(0, Math.min(max || 1, value + (e.deltaY > 0 ? -step : step)));
+    const s = step > 0 ? step : (max || 1) * 0.05;
+    const next = Math.max(0, Math.min(max || 1, value + (e.deltaY > 0 ? -s : s)));
     oninput?.(next);
     onchange?.(next);
   }
@@ -120,9 +123,9 @@
   function onKey(e: KeyboardEvent) {
     if (disabled || !max) return;
     let next: number | null = null;
-    const step = max * (e.shiftKey ? 0.1 : 0.02);
-    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = Math.min(max, value + step);
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = Math.max(0, value - step);
+    const s = step > 0 ? step * (e.shiftKey ? 5 : 1) : max * (e.shiftKey ? 0.1 : 0.02);
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = Math.min(max, value + s);
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = Math.max(0, value - s);
     else if (e.key === 'Home') next = 0;
     else if (e.key === 'End') next = max;
     if (next == null) return;

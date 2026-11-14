@@ -41,6 +41,7 @@ export { Login03Icon } from '@hugeicons/core-free-icons';
 export { PlayCircleIcon } from '@hugeicons/core-free-icons';
 export { SubtitleIcon } from '@hugeicons/core-free-icons';
 export { Bookmark02Icon } from '@hugeicons/core-free-icons';
+export { SlidersHorizontalIcon } from '@hugeicons/core-free-icons';
 export { Delete02Icon } from '@hugeicons/core-free-icons';
 export { UserIcon } from '@hugeicons/core-free-icons';
 export { PencilEdit01Icon } from '@hugeicons/core-free-icons';

@@ -21,6 +21,7 @@ enum Cmd {
     Stop,
     Seek(f64),
     Volume(f32),
+    Eq([f32; crate::eq::BANDS], bool),
 }
 
 /// How to start a new decoder relative to whatever is already playing.
@@ -164,8 +165,10 @@ impl Player {
         s.playing = ph == 1 || ph == 4;
         s.loading = ph == 3;
         let body = self.current_audio.lock().clone();
-        let body_buf = body.as_ref().is_some_and(|b| b.is_buffering() || b.is_stalled());
-        s.buffering = ph == 4 || self.buffering.load(Ordering::Relaxed) || body_buf;
+        // Only the mixer/phase own the UI buffering bit. OR-ing the body's
+        // transient wait flag left the play button spinning while audio was
+        // already flowing (e.g. after a seek wait_len that never cleared it).
+        s.buffering = ph == 4 || self.buffering.load(Ordering::Relaxed);
         s.buffered = match body {
             Some(b) => b.buffered_secs(s.duration),
             None => if s.duration > 0.0 && !s.loading { s.duration } else { 0.0 },
@@ -445,13 +448,7 @@ impl Player {
     }
 
     pub fn is_buffering(&self) -> bool {
-        self.buffering.load(Ordering::Relaxed)
-            || self.phase.load(Ordering::Relaxed) == 4
-            || self
-                .current_audio
-                .lock()
-                .as_ref()
-                .is_some_and(|b| b.is_buffering())
+        self.buffering.load(Ordering::Relaxed) || self.phase.load(Ordering::Relaxed) == 4
     }
     pub fn stop(&self) {
         let _ = self.tx.send(Cmd::Stop);
@@ -465,9 +462,17 @@ impl Player {
         let _ = self.tx.send(Cmd::Seek(secs));
     }
     pub fn set_volume(&self, v: f32) {
-        let v = v.clamp(0.0, 1.0);
+        let v = (v.clamp(0.0, 1.0) * 100.0).round() / 100.0;
         self.state.lock().volume = v;
         let _ = self.tx.send(Cmd::Volume(v));
+    }
+
+    pub fn set_eq(&self, gains: [f32; crate::eq::BANDS], enabled: bool) {
+        let mut cleaned = [0.0f32; crate::eq::BANDS];
+        for i in 0..crate::eq::BANDS {
+            cleaned[i] = (gains[i].clamp(-12.0, 12.0) * 10.0).round() / 10.0;
+        }
+        let _ = self.tx.send(Cmd::Eq(cleaned, enabled));
     }
     pub fn take_ended(&self) -> bool {
         if self.blending.load(Ordering::Relaxed) {
@@ -801,6 +806,7 @@ fn audio_thread(
                         buffering.store(true, Ordering::Relaxed);
                         phase.store(4, Ordering::Relaxed);
                         let _ = audio.wait_len(needed, Duration::from_secs(30));
+                        audio.set_buffering(false);
                     }
                     match make_source(audio.clone(), secs) {
                         Ok(src) => {
@@ -819,6 +825,7 @@ fn audio_thread(
                 }
             }
             Ok(Cmd::Volume(v)) => sink.set_volume(v),
+            Ok(Cmd::Eq(gains, on)) => mix.set_eq(gains, on),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }

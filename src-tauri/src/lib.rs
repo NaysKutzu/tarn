@@ -3,6 +3,7 @@ mod diag;
 mod cache;
 mod color;
 pub mod decode;
+mod eq;
 mod innertube;
 mod player_client;
 mod login;
@@ -70,6 +71,7 @@ impl App {
             settings.crossfade_seconds,
             settings.album_continuity,
         );
+        player.set_eq(settings.eq_bands, settings.eq_enabled);
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata — audio is armed later.
             player.set_volume(sess.volume);
@@ -963,6 +965,12 @@ fn set_settings(app: State<Arc<App>>, settings: Settings) {
         settings.crossfade_seconds,
         settings.album_continuity,
     );
+    let mut bands = settings.eq_bands;
+    for g in bands.iter_mut() {
+        *g = g.clamp(-12.0, 12.0);
+    }
+    settings.eq_bands = bands;
+    app.player.set_eq(settings.eq_bands, settings.eq_enabled);
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
 }

@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use rodio::Source;
 
 use crate::decode::{AudioSource, Pull};
+use crate::eq::Eq;
 
 /// Fade used for play / pause / resume / seek / skip (~150–300 ms).
 pub const CLICK_FADE: f32 = 0.22;
@@ -45,6 +46,7 @@ struct Inner {
     /// Held frame so every channel shares the same envelope/xf value.
     frame: Vec<i16>,
     frame_i: usize,
+    eq: Eq,
 }
 
 impl Mixer {
@@ -78,6 +80,7 @@ impl Mixer {
                 finished: false,
                 frame: Vec::new(),
                 frame_i: 0,
+                eq: Eq::new(sr),
             })),
             samples,
             sample_rate,
@@ -113,6 +116,7 @@ impl Mixer {
         let mut g = self.inner.lock();
         g.sr = sr;
         g.ch = ch;
+        g.eq.set_sample_rate(sr);
         g.current = Some(src);
         g.incoming = None;
         g.xf_len = 0;
@@ -138,6 +142,7 @@ impl Mixer {
         let mut g = self.inner.lock();
         g.sr = sr;
         g.ch = ch;
+        g.eq.set_sample_rate(sr);
         g.current = Some(src);
         g.incoming = None;
         g.xf_len = 0;
@@ -235,6 +240,7 @@ impl Mixer {
         let mut g = self.inner.lock();
         g.sr = sr;
         g.ch = ch;
+        g.eq.set_sample_rate(sr);
         g.current = Some(src);
         g.incoming = None;
         g.xf_len = 0;
@@ -254,6 +260,11 @@ impl Mixer {
 
     pub fn fading_out(&self) {
         self.inner.lock().set_fade(0.0, CLICK_FADE);
+    }
+
+    pub fn set_eq(&self, gains: [f32; crate::eq::BANDS], enabled: bool) {
+        let mut g = self.inner.lock();
+        g.eq.set(gains, enabled);
     }
 
 
@@ -449,6 +460,7 @@ impl MixerSource {
         for s in mixed.iter_mut() {
             *s = (*s as f32 * gain).round() as i16;
         }
+        g.eq.process_frame(&mut mixed, ch);
         // The mixer owns the position clock. Do not increment while
         // buffering or paused — that was a source of "time runs, silence".
         // AudioSource used to also increment, doubling the clock (and
