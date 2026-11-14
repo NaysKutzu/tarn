@@ -183,6 +183,8 @@ export interface Settings {
   region: string;
   notifications: boolean;
   autoplay: boolean;
+  /** Resume and play the last session when the app starts. */
+  resume_on_start: boolean;
   cache_max_mb: number;
   crossfade: boolean;
   crossfade_seconds: number;

@@ -77,6 +77,9 @@ pub struct Player {
     /// Set by adopt_track after a successful blend; take_ended must not
     /// also advance (that restarted the same song or skipped ahead).
     blend_adopted: Arc<AtomicBool>,
+    /// Bumped on every prepare/play so a stale crossfade from the previous
+    /// queue cannot adopt into the new one.
+    play_gen: Arc<AtomicU64>,
 }
 
 impl Player {
@@ -104,6 +107,7 @@ impl Player {
         let last_ended = Arc::new(Mutex::new(None));
         let last_recover = Arc::new(Mutex::new(None));
         let blend_adopted = Arc::new(AtomicBool::new(false));
+        let play_gen = Arc::new(AtomicU64::new(0));
 
         let samples_t = samples.clone();
         let rate_t = sample_rate.clone();
@@ -167,7 +171,12 @@ impl Player {
             last_ended,
             last_recover,
             blend_adopted,
+            play_gen,
         }
+    }
+
+    pub fn play_gen(&self) -> u64 {
+        self.play_gen.load(Ordering::SeqCst)
     }
 
     pub fn snapshot(&self) -> PlayerState {
@@ -212,9 +221,13 @@ impl Player {
         position: f64,
         loading: bool,
     ) {
+        // Invalidate any in-flight end-of-track blend from the previous queue.
+        self.play_gen.fetch_add(1, Ordering::SeqCst);
         self.ended.store(false, Ordering::Relaxed);
         self.recover.store(false, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
+        self.blending.store(false, Ordering::Relaxed);
+        self.blend_adopted.store(false, Ordering::SeqCst);
         *self.last_ended.lock() = None;
         self.quiet_ms.store(0, Ordering::Relaxed);
         self.phase
@@ -541,7 +554,27 @@ impl Player {
     }
     pub fn take_ended(&self) -> bool {
         if self.blending.load(Ordering::Relaxed) {
-            self.ended.store(false, Ordering::Relaxed);
+            // Blend never adopted and the outgoing track finished — drop the
+            // latch so natural advance (and Next) can recover instead of
+            // sitting in silence with a stuck "next".
+            if self.ended.swap(false, Ordering::Relaxed) {
+                eprintln!("track-end during blend (no adopt); clearing blend latch");
+                self.blending.store(false, Ordering::Relaxed);
+                let id = self
+                    .state
+                    .lock()
+                    .track
+                    .as_ref()
+                    .map(|t| t.id.clone())
+                    .unwrap_or_default();
+                let mut last = self.last_ended.lock();
+                if !id.is_empty() && last.as_deref() == Some(id.as_str()) {
+                    return false;
+                }
+                *last = Some(id.clone());
+                eprintln!("track-end {id} (complete, blend recovered)");
+                return true;
+            }
             return false;
         }
         // Successful crossfade/gapless already adopted the next track.
@@ -708,8 +741,11 @@ impl Player {
             NextChoice::Play(0)
         } else if s.autoplay {
             NextChoice::Autoplay
-        } else if user && !s.queue.is_empty() {
-            NextChoice::Play(0)
+        } else if user {
+            // Manual next on the last track with autoplay off: restart
+            // current rather than wrapping to queue[0] (felt like old
+            // playlist songs coming back).
+            NextChoice::SeekZero
         } else {
             NextChoice::Stop
         }

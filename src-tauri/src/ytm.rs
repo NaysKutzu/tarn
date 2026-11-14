@@ -762,7 +762,7 @@ impl Ytm {
             .music_album(id)
             .await
             .map_err(|e| anyhow!("{e}"))?;
-        Ok(Collection {
+        let mut c = Collection {
             kind: "album".into(),
             id: a.id,
             playlist_id: a.playlist_id,
@@ -783,7 +783,9 @@ impl Ytm {
             related: a.variants.iter().map(album_from).collect(),
             owned: false,
             saved: false,
-        })
+        };
+        stamp_missing_track_covers(&mut c);
+        Ok(c)
     }
 
     pub async fn playlist(&self, id: &str) -> Result<Collection> {
@@ -818,6 +820,7 @@ impl Ytm {
                 eprintln!("playlist albums: {e}");
             }
         }
+        stamp_missing_track_covers(&mut c);
         Ok(c)
     }
 
@@ -1116,7 +1119,9 @@ impl Ytm {
                 Err(e) => crate::diag::log(format!("library innertube history: {e}")),
             }
         }
-        self.enrich_playlist_covers(&mut lib.playlists).await;
+        // Enrich a handful first so the sidebar paints quickly; the rest keep
+        // whatever single cover we already have until the next library refresh.
+        self.enrich_playlist_covers(&mut lib.playlists, 10).await;
         self.harvest_cookies();
         crate::diag::log(format!(
             "library done: liked={} playlists={} albums={} artists={} recents={}",
@@ -1140,36 +1145,90 @@ impl Ytm {
     }
 
     /// Fill missing / mixart playlist covers from the first tracks (2×2 mosaic).
-    async fn enrich_playlist_covers(&self, playlists: &mut [PlaylistCard]) {
-        for p in playlists.iter_mut() {
+    /// `limit` caps how many playlists we fetch tiles for (sidebar paint speed).
+    async fn enrich_playlist_covers(&self, playlists: &mut [PlaylistCard], limit: usize) {
+        let mut need: Vec<usize> = Vec::new();
+        for (i, p) in playlists.iter_mut().enumerate() {
             let pid = p.id.trim_start_matches("VL");
-            // YTM system playlists — UI draws a fixed icon, skip mosaic fetch.
             if pid == "LM" || pid == "SE" {
                 p.cover = None;
                 p.covers.clear();
                 continue;
             }
-            if p.covers.len() >= 2 {
+            if p.covers.len() >= 2
+                && p.covers.iter().all(|u| usable_cover(u))
+                && !p.covers.iter().any(|u| u.contains("/pl_c/") || u.contains("/s_p/"))
+            {
                 if p.cover.is_none() {
                     p.cover = p.covers.first().cloned();
                 }
                 continue;
             }
-            // One real custom cover is enough — don't fetch the whole playlist.
-            if p.covers.is_empty() && p.cover.as_deref().is_some_and(usable_cover) {
+            if p.covers.is_empty()
+                && p.cover.as_deref().is_some_and(|u| {
+                    usable_cover(u) && !u.contains("/pl_c/") && !u.contains("/s_p/")
+                })
+            {
                 continue;
             }
-            match self.playlist_cover_tiles(&p.id).await {
-                Ok(tiles) if !tiles.is_empty() => {
-                    if p.cover.as_deref().is_none_or(|u| !usable_cover(u)) {
-                        p.cover = tiles.first().cloned();
+            need.push(i);
+        }
+        if need.is_empty() || limit == 0 {
+            return;
+        }
+        need.truncate(limit);
+
+        // Fetch up to 4 playlists at a time (was fully sequential before).
+        let mut cursor = 0;
+        while cursor < need.len() {
+            let batch: Vec<usize> = need[cursor..].iter().copied().take(4).collect();
+            cursor += batch.len();
+            let ids: Vec<String> = batch.iter().map(|&i| playlists[i].id.clone()).collect();
+            let (r0, r1, r2, r3) = tokio::join!(
+                self.playlist_cover_tiles(&ids[0]),
+                async {
+                    if let Some(id) = ids.get(1) {
+                        self.playlist_cover_tiles(id).await
+                    } else {
+                        Ok(Vec::new())
                     }
-                    if tiles.len() >= 2 {
-                        p.covers = tiles;
+                },
+                async {
+                    if let Some(id) = ids.get(2) {
+                        self.playlist_cover_tiles(id).await
+                    } else {
+                        Ok(Vec::new())
+                    }
+                },
+                async {
+                    if let Some(id) = ids.get(3) {
+                        self.playlist_cover_tiles(id).await
+                    } else {
+                        Ok(Vec::new())
+                    }
+                },
+            );
+            let results = [r0, r1, r2, r3];
+            for (slot, res) in results.into_iter().enumerate() {
+                if slot >= batch.len() {
+                    break;
+                }
+                let idx = batch[slot];
+                match res {
+                    Ok(tiles) if !tiles.is_empty() => {
+                        let p = &mut playlists[idx];
+                        if p.cover.as_deref().is_none_or(|u| !usable_cover(u)) {
+                            p.cover = tiles.first().cloned();
+                        }
+                        if tiles.len() >= 2 {
+                            p.covers = tiles;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        crate::diag::log(format!("playlist cover {}: {e}", playlists[idx].id))
                     }
                 }
-                Ok(_) => {}
-                Err(e) => crate::diag::log(format!("playlist cover {}: {e}", p.id)),
             }
         }
     }
@@ -1181,33 +1240,34 @@ impl Ytm {
             .music_playlist(id)
             .await
             .map_err(|e| anyhow!("{e}"))?;
-        let from_header = mosaic_covers(&p.thumbnail);
-        if from_header.len() >= 2 {
-            return Ok(from_header);
-        }
-        if let Some(c) = best_thumb(&p.thumbnail) {
-            if usable_cover(&c) && from_header.is_empty() {
-                // Single custom art on the playlist itself.
-                return Ok(vec![c]);
-            }
-        }
-        let mut out = Vec::new();
+        // Prefer distinct track covers for the 2×2 mosaic. YTM header
+        // "collage" thumbs are often cropped strips that look broken in-app.
+        let mut from_tracks = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for t in p.tracks.items.iter().take(12) {
             if let Some(c) = best_thumb(&t.cover) {
                 let key = thumb_dedupe_key(&c);
                 if seen.insert(key) {
-                    out.push(c);
-                    if out.len() == 4 {
+                    from_tracks.push(c);
+                    if from_tracks.len() == 4 {
                         break;
                     }
                 }
             }
         }
-        if out.is_empty() {
-            out = from_header;
+        if from_tracks.len() >= 2 {
+            return Ok(from_tracks);
         }
-        Ok(out)
+        let from_header = mosaic_covers(&p.thumbnail);
+        if from_header.len() >= 2 {
+            return Ok(from_header);
+        }
+        if let Some(c) = best_thumb(&p.thumbnail) {
+            if usable_cover(&c) {
+                return Ok(vec![c]);
+            }
+        }
+        Ok(from_tracks)
     }
 
     /// Resolve a playable audio stream URL.
@@ -1861,6 +1921,19 @@ fn album_type_str(t: AlbumType) -> String {
 
 fn argb_to_hex(c: u32) -> String {
     format!("#{:06X}", c & 0x00FF_FFFF)
+}
+
+/// Album/playlist rows often omit per-track art; copy the collection cover
+/// so the player bar has the same image the track list already shows.
+fn stamp_missing_track_covers(c: &mut Collection) {
+    let Some(cover) = c.cover.clone().filter(|u| usable_cover(u)) else {
+        return;
+    };
+    for t in &mut c.tracks {
+        if t.cover.as_deref().is_none_or(|u| !usable_cover(u)) {
+            t.cover = Some(cover.clone());
+        }
+    }
 }
 
 fn best_thumb(thumbs: &[Thumbnail]) -> Option<String> {

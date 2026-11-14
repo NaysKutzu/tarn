@@ -248,6 +248,10 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub notifications_migrated: bool,
     pub autoplay: bool,
+    /// When on, resume the last session and start playing on app launch
+    /// (instead of arming paused).
+    #[serde(default)]
+    pub resume_on_start: bool,
     /// Disk cache cap for prefetched audio, in mebibytes. 0 disables it.
     #[serde(default = "default_cache_mb")]
     pub cache_max_mb: u64,
@@ -310,6 +314,7 @@ impl Default for Settings {
             notifications: false,
             notifications_migrated: true,
             autoplay: true,
+            resume_on_start: false,
             cache_max_mb: default_cache_mb(),
             crossfade: true,
             crossfade_seconds: default_xf_secs(),

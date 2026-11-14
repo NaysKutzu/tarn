@@ -395,6 +395,7 @@ pub(crate) async fn start_playback_at(
     }
     app.player.set_rating(false, false);
     app.player.prepare(track.clone(), queue.clone(), index, start, true);
+    let gen = app.player.play_gen();
 
     // Cover/accent is decorative — never block the play path on it.
     if let Some(url) = cover {
@@ -413,15 +414,25 @@ pub(crate) async fn start_playback_at(
 
     match app.ytm.stream(&id).await {
         Ok(stream) => {
+            if app.player.play_gen() != gen {
+                return Ok(());
+            }
             if let Some(d) = stream.duration {
                 app.player.set_duration(d);
             }
             match app.ytm.start_audio(&id, &stream).await {
                 Ok(audio) => {
+                    if app.player.play_gen() != gen {
+                        return Ok(());
+                    }
                     let r = app
                         .player
                         .play_stream(stream, audio, start, style)
                         .map_err(|e| e.to_string());
+                    if app.player.play_gen() != gen {
+                        // A newer play() won the race — don't prefetch for us.
+                        return Ok(());
+                    }
                     if r.is_ok() {
                         app.skip_fails.store(0, std::sync::atomic::Ordering::Relaxed);
                     }
@@ -429,12 +440,18 @@ pub(crate) async fn start_playback_at(
                     r
                 }
                 Err(e) => {
+                    if app.player.play_gen() != gen {
+                        return Ok(());
+                    }
                     let msg = short_err(&e.to_string());
                     playback_failed(app, &track, msg, paused, start).await
                 }
             }
         }
         Err(e) => {
+            if app.player.play_gen() != gen {
+                return Ok(());
+            }
             let msg = short_err(&e.to_string());
             playback_failed(app, &track, msg, paused, start).await
         }
@@ -516,7 +533,9 @@ async fn restore_playback(app: &App) {
             p
         }
     };
-    if let Err(e) = start_playback_at(app, track, queue, idx, pos, true, false).await {
+    let resume = app.settings.lock().resume_on_start;
+    // paused=true arms silently; paused=false starts playback immediately.
+    if let Err(e) = start_playback_at(app, track, queue, idx, pos, !resume, false).await {
         eprintln!("restore playback: {e}");
     }
 }
@@ -552,9 +571,11 @@ fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
             }
             ytm.prefetch(id).await;
         }
-        if remaining < 3 {
+        // Only grow the queue with radio when autoplay is on — otherwise
+        // leftover "similar" tracks stick around after the playlist ends.
+        if remaining < 3 && player.snapshot().autoplay {
             if let Ok(more) = ytm.radio_continue().await {
-                if !more.is_empty() {
+                if !more.is_empty() && player.snapshot().autoplay {
                     player.append_unique(more.clone());
                     for t in more.iter().take(3) {
                         ytm.prefetch(&t.id).await;
@@ -854,6 +875,16 @@ async fn get_library(app: State<'_, Arc<App>>) -> Result<Library, String> {
     if is_mock() {
         return Ok(mock_library());
     }
+    // Session restore runs in the background; a very early library call can
+    // see signed_in with cookies not applied yet (or the reverse). Wait briefly.
+    for _ in 0..30 {
+        let signed = app.auth.lock().signed_in;
+        let cookies = app.ytm.cookie_header().is_some();
+        if cookies || !signed {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
     app.ytm.library().await.map_err(|e| e.to_string())
 }
 
@@ -1049,6 +1080,7 @@ fn maybe_blend(app: &Arc<App>) {
     let Some((track, index, style)) = app.player.blend_due() else {
         return;
     };
+    let gen = app.player.play_gen();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let id = track.id.clone();
@@ -1060,9 +1092,34 @@ fn maybe_blend(app: &Arc<App>) {
                 .start_audio(&id, &stream)
                 .await
                 .map_err(|e| e.to_string())?;
+            // User started a different playlist/queue while we were resolving.
+            if app.player.play_gen() != gen {
+                eprintln!("blend: aborted (queue replaced during resolve)");
+                app.player.clear_blending();
+                return Ok(());
+            }
+            let still = app.player.queue_and_index().0.get(index).map(|t| t.id.as_str())
+                == Some(id.as_str());
+            if !still {
+                eprintln!("blend: aborted (index no longer matches {id})");
+                app.player.clear_blending();
+                return Ok(());
+            }
+            // Last chance before touching the mixer — a newer play() may
+            // have already prepared a different queue.
+            if app.player.play_gen() != gen {
+                eprintln!("blend: aborted (queue replaced before stream)");
+                app.player.clear_blending();
+                return Ok(());
+            }
             app.player
                 .play_stream(stream, audio, 0.0, style)
                 .map_err(|e| e.to_string())?;
+            if app.player.play_gen() != gen {
+                eprintln!("blend: aborted after stream (queue replaced)");
+                app.player.clear_blending();
+                return Ok(());
+            }
             app.player.adopt_track(track, index);
             // Set the new track's duration only AFTER adopt, so we never
             // shrink the outgoing track's duration mid-play (that made
@@ -1176,8 +1233,18 @@ pub fn run() {
                 let _ = win.set_focus();
             }
             let app_restore = app.clone();
+            let handle_restore = handle.clone();
             tauri::async_runtime::spawn(async move {
                 restore_session(&app_restore).await;
+                // Frontend often mounts before restore finishes and would keep
+                // signed_in=false forever without this — library/playlists stay empty
+                // until a manual reload.
+                if app_restore.auth.lock().signed_in {
+                    let _ = handle_restore.emit(
+                        "auth",
+                        serde_json::json!({ "signed_in": true, "restored": true }),
+                    );
+                }
                 restore_playback(&app_restore).await;
             });
             app.ytm.prewarm_players();

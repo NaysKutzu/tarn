@@ -38,6 +38,21 @@
   } from './lib/icons';
 
   const EQ_LABELS = ['60', '230', '910', '3.6k', '14k'] as const;
+  type EqBands = SettingsT['eq_bands'];
+  const EQ_PRESETS: { id: string; label: string; bands: EqBands }[] = [
+    { id: 'flat', label: 'Flat', bands: [0, 0, 0, 0, 0] },
+    { id: 'bass', label: 'Bass Boost', bands: [7.5, 4.5, 0, -1, 0] },
+    { id: 'bass-cut', label: 'Bass Cut', bands: [-6, -3.5, 0, 1.5, 2] },
+    { id: 'treble', label: 'Treble Boost', bands: [-1, 0, 1, 4.5, 7] },
+    { id: 'vocal', label: 'Vocal', bands: [-3, -1, 4, 3.5, 1] },
+    { id: 'rock', label: 'Rock', bands: [5, 2, -1.5, 2.5, 4] },
+    { id: 'electronic', label: 'Electronic', bands: [6, 3, -2, 2.5, 5] },
+    { id: 'hiphop', label: 'Hip-Hop', bands: [7, 3.5, 0, 1.5, 3] },
+    { id: 'night', label: 'Late Night', bands: [3, 1, 0, -2, -4] },
+  ];
+  function eqBandsMatch(a: EqBands, b: EqBands) {
+    return a.every((g, i) => Math.abs(g - b[i]) < 0.05);
+  }
 
   let view = $state<View>({ id: 'home' });
   let home = $state<Home | null>(null);
@@ -77,7 +92,10 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, autoplay: true, cache_max_mb: 1024, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, autoplay: true, resume_on_start: false, cache_max_mb: 1024, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
+  const eqPresetId = $derived(
+    EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
+  );
   function resetCrossfade() {
     Object.assign(settings, XF_DEFAULTS);
     api.setSettings(settings);
@@ -200,7 +218,20 @@
         }
       } catch {}
       if (view.id === 'home') await loadHome();
-      if (auth.signed_in) loadLibrary();
+      if (auth.signed_in) {
+        loadLibrary();
+      } else {
+        // restore_session may finish after first auth(); listen('auth') handles
+        // the happy path, this is a backup if the event is missed.
+        setTimeout(() => {
+          api.auth().then((a) => {
+            if (!a.signed_in) return;
+            auth = a;
+            loadLibrary({ retries: 4 });
+            if (!home) loadHome();
+          }).catch(() => {});
+        }, 900);
+      }
     })();
     import('@tauri-apps/api/app').then((m) => m.getVersion()).then((v) => { appVersion = v; }).catch(() => {});
     listen<PlayerState>('player', (e) => {
@@ -229,13 +260,14 @@
           explore = null;
         }
         if (a.signed_in) {
-          loadLibrary();
+          loadLibrary({ retries: was ? 2 : 4 });
           loadHome();
           if (view.id === 'explore') loadExplore();
           for (const t of localLikes()) {
             api.like(t.id, 'like').catch(() => {});
           }
         } else if (was) {
+          library = null;
           loadHome();
         }
       });
@@ -457,14 +489,29 @@
     loading = true;
     try { releases = await api.newReleases(); } catch (e) { fail(e, "Couldn't load new releases"); } finally { loading = false; }
   }
-  async function loadLibrary() {
+  async function loadLibrary(opts?: { retries?: number }) {
     if (!auth.signed_in) {
       libLoading = false;
       return;
     }
     if (!library) libLoading = true;
+    const retries = opts?.retries ?? 3;
     try {
-      library = await api.library();
+      let last = await api.library();
+      // Session restore / cookie settle can return an empty library once;
+      // retry a few times so the sidebar playlists show without a manual reload.
+      for (let i = 0; i < retries; i++) {
+        const empty =
+          !last.playlists?.length &&
+          !last.liked?.length &&
+          !last.albums?.length &&
+          !last.artists?.length;
+        if (!empty) break;
+        await new Promise((r) => setTimeout(r, 350 + i * 250));
+        if (!auth.signed_in) break;
+        last = await api.library();
+      }
+      library = last;
     } catch (e) {
       fail(e, "Couldn't load your library");
       if (!library) {
@@ -496,17 +543,35 @@
     }
   }
 
-  async function playTracks(tracks: Track[], index: number) {
+  function withCoverFallback(tracks: Track[], fallback?: string | null): Track[] {
+    if (!fallback) return tracks;
+    return tracks.map((t) => (t.cover ? t : { ...t, cover: fallback }));
+  }
+
+  /** Player bar / NP art — reuse album art when the track itself has none. */
+  let nowCover = $derived.by(() => {
+    const t = player.track;
+    if (!t) return null;
+    if (t.cover) return t.cover;
+    const fromQueue = player.queue.find((x) => x.id === t.id && x.cover)?.cover;
+    if (fromQueue) return fromQueue;
+    if (collection?.cover && collection.tracks.some((x) => x.id === t.id)) return collection.cover;
+    return null;
+  });
+
+  async function playTracks(tracks: Track[], index: number, fallbackCover?: string | null) {
     if (!tracks.length) return;
-    const t = tracks[index] ?? tracks[0];
+    const list = withCoverFallback(tracks, fallbackCover ?? null);
+    const t = list[index] ?? list[0];
     recents = recordRecent(t);
     try {
-      await api.play(t, tracks, index);
+      await api.play(t, list, index);
     } catch (e) {
       fail(e, "Can't play this track");
     }
   }
-  function playOne(t: Track) { playTracks([t, ...player.queue.filter((x) => x.id !== t.id)], 0); }
+  // Replace the queue — never keep leftover tracks from the previous playlist.
+  function playOne(t: Track) { playTracks([t], 0); }
 
   async function startRadio(id?: string) {
     const vid = id || player.track?.id;
@@ -532,21 +597,25 @@
   async function playCollection(item: ShelfItem, shuffle: boolean) {
     try {
       let tracks: Track[] = [];
+      let cover: string | null = item.cover ?? null;
       if (item.kind === 'artist') {
         const a = await api.artist(item.id || item.browse_id || '');
         tracks = a.tracks;
+        cover = a.cover ?? cover;
       } else if (item.kind === 'album') {
         const c = await api.album(item.id || item.browse_id || '');
         tracks = c.tracks;
+        cover = c.cover ?? cover;
       } else if (item.kind === 'playlist') {
         const c = await api.playlist(item.id);
         tracks = c.tracks;
+        cover = c.cover ?? cover;
       } else if (item.kind === 'track' || item.kind === 'video') {
         tracks = [itemToTrack(item)];
       }
       if (!tracks.length) { openItem(item); return; }
       if (shuffle) api.setShuffle(true);
-      playTracks(shuffle ? shuffled(tracks) : tracks, 0);
+      playTracks(shuffle ? shuffled(tracks) : tracks, 0, cover);
     } catch (e) { fail(e, "Can't play this"); }
   }
 
@@ -700,10 +769,16 @@
   }
 
   function setEqBand(i: number, gain: number) {
-    const bands = [...settings.eq_bands] as SettingsT['eq_bands'];
+    const bands = [...settings.eq_bands] as EqBands;
     bands[i] = Math.round(Math.max(-12, Math.min(12, gain)) * 10) / 10;
     settings.eq_bands = bands;
     if (!settings.eq_enabled) settings.eq_enabled = true;
+    api.setSettings(settings);
+  }
+
+  function applyEqPreset(bands: EqBands) {
+    settings.eq_bands = [...bands] as EqBands;
+    settings.eq_enabled = true;
     api.setSettings(settings);
   }
 
@@ -1255,8 +1330,8 @@
                 {#if collection.track_count} · {collection.track_count}{/if}
               </div>
               <div class="hero-acts">
-                <button class="btn" type="button" onclick={() => playTracks(collection!.tracks, 0)}><Hi icon={PlayIcon} size={18} /> Play</button>
-                <button class="btn ghost" type="button" onclick={() => { api.setShuffle(true); playTracks([...collection!.tracks].sort(() => Math.random() - 0.5), 0); }}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
+                <button class="btn" type="button" onclick={() => playTracks(collection!.tracks, 0, collection!.cover)}><Hi icon={PlayIcon} size={18} /> Play</button>
+                <button class="btn ghost" type="button" onclick={() => { api.setShuffle(true); playTracks([...collection!.tracks].sort(() => Math.random() - 0.5), 0, collection!.cover); }}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
                 <button class="btn ghost" type="button" onclick={() => collection!.tracks[0] && startRadio(collection!.tracks[0].id)}><Hi icon={Radio02Icon} size={18} /> Radio</button>
                 {#if auth.signed_in}
                   <button class="btn ghost {collection.saved ? 'on' : ''}" type="button" onclick={async () => { if (needAccount('save')) return; const s = !collection!.saved; try { await api.librarySave(collection!.playlist_id || collection!.id, s); collection = { ...collection!, saved: s }; } catch (e) { fail(e, "Couldn't save this", 'save'); } }}>
@@ -1268,7 +1343,7 @@
           </div>
         </div>
         <TrackTable tracks={collection.tracks} currentId={player.track?.id} playing={player.playing} showAlbum={collection.kind === 'playlist'} fallbackCover={collection.cover}
-          onPlay={(t, i) => playTracks(collection!.tracks, i)}
+          onPlay={(t, i) => playTracks(collection!.tracks, i, collection!.cover)}
           onArtist={(id, n) => goArtist(id, n)}
           onAlbum={(id) => go({ id: 'album', albumId: id })}
           onContext={(e, t) => contextTrack(e, t)} />
@@ -1327,8 +1402,16 @@
             <Toggle bind:checked={settings.notifications} label="Notifications" onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
-            <span class="lb"><Hi icon={Radio02Icon} size={20} /> Autoplay</span>
+            <span class="lb"><Hi icon={Radio02Icon} size={20} /> Autoplay
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Continue with similar music when the queue ends</span>
+            </span>
             <Toggle bind:checked={settings.autoplay} label="Autoplay" onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
+            <span class="lb"><Hi icon={PlayIcon} size={20} /> Resume on start
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Start playing the last session when Tarn opens</span>
+            </span>
+            <Toggle bind:checked={settings.resume_on_start} label="Resume on start" onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
             <span class="lb"><Hi icon={MusicNote01Icon} size={20} /> Crossfade</span>
@@ -1487,17 +1570,19 @@
               <span class="lb"><Hi icon={SlidersHorizontalIcon} size={20} /> Equalizer
                 <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Five bands, −12 to +12 dB</span>
               </span>
-              <div class="set-eq-actions">
+              <Toggle bind:checked={settings.eq_enabled} label="Equalizer" onchange={() => api.setSettings(settings)} />
+            </div>
+            <div class="eq-presets" role="listbox" aria-label="Equalizer presets">
+              {#each EQ_PRESETS as p}
                 <button
-                  class="btn ghost"
+                  class="eq-preset"
+                  class:on={eqPresetId === p.id}
                   type="button"
-                  onclick={() => {
-                    settings.eq_bands = [0, 0, 0, 0, 0];
-                    api.setSettings(settings);
-                  }}
-                >Reset</button>
-                <Toggle bind:checked={settings.eq_enabled} label="Equalizer" onchange={() => api.setSettings(settings)} />
-              </div>
+                  role="option"
+                  aria-selected={eqPresetId === p.id}
+                  onclick={() => applyEqPreset(p.bands)}
+                >{p.label}</button>
+              {/each}
             </div>
             <div class="eq-bands" class:off={!settings.eq_enabled}>
               {#each settings.eq_bands as gain, i}
@@ -1512,7 +1597,7 @@
                       showTip
                       format={(v) => `${(v - 12) > 0 ? '+' : ''}${(v - 12).toFixed(1)} dB`}
                       oninput={(v) => {
-                        const bands = [...settings.eq_bands] as SettingsT['eq_bands'];
+                        const bands = [...settings.eq_bands] as EqBands;
                         bands[i] = Math.round((v - 12) * 10) / 10;
                         settings.eq_bands = bands;
                       }}
@@ -1629,7 +1714,7 @@
 
   {#if expanded && player.track}
     <div class="np" onwheel={nudgeVolume}>
-      <Cover src={player.track.cover} width={1400} height={900} class="np-bg" alt="" />
+      <Cover src={nowCover} width={1400} height={900} class="np-bg" alt="" />
       <div class="np-shade"></div>
       <button
         class="ibtn lg np-close"
@@ -1643,7 +1728,7 @@
       </button>
       <div class="np-in">
         <div class="np-art">
-          <Cover src={player.track.cover} size={360} alt="" />
+          <Cover src={nowCover} size={360} alt="" />
           {#if volHud != null}
             <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
           {/if}
@@ -1670,7 +1755,7 @@
       <div class="now" onwheel={nudgeVolume}>
         {#if player.track}
           <button class="cov" type="button" onclick={() => (expanded = !expanded)} title="Now playing">
-            <Cover src={player.track.cover} size={64} alt="" />
+            <Cover src={nowCover} size={64} alt="" />
             {#if volHud != null}
               <div class="vol-hud" aria-live="polite">{volHud}%</div>
             {/if}

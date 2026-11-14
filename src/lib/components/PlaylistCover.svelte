@@ -69,7 +69,7 @@
   >
     {#each tiles as src, i (src + i)}
       <img
-        src={sizedCover(src, Math.round(size))}
+        src={sizedCover(src, Math.max(48, Math.round(size)))}
         {alt}
         referrerpolicy="no-referrer"
         draggable="false"
@@ -100,6 +100,8 @@
   .mosaic .ph {
     width: 100%;
     height: 100%;
+    min-width: 0;
+    min-height: 0;
     object-fit: cover;
     background: var(--bg-elev);
     display: block;
