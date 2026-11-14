@@ -58,7 +58,7 @@
   let settings = $state<SettingsT>({
     quality: 'high', language: 'en', region: 'US', notifications: false, autoplay: true,
     cache_max_mb: 1024, crossfade: true, crossfade_seconds: 4, album_continuity: true,
-    eq_enabled: false, eq_bands: [0, 0, 0, 0, 0],
+    crossfade_manual: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0],
   });
   let player = $state<PlayerState>({
     track: null, playing: false, loading: false, buffering: false, buffered: 0,
@@ -156,6 +156,7 @@
           settings.eq_bands = [0, 0, 0, 0, 0];
         }
         settings.eq_enabled = !!settings.eq_enabled;
+        if (settings.crossfade_manual == null) settings.crossfade_manual = true;
         const acct = auth.signed_in ? (auth.account?.name ?? 'user') : 'anon';
         if (auth.signed_in) {
           // Drop any leftover logged-out snapshot so we never flash it.
@@ -1326,6 +1327,17 @@
                 onchange={(v) => { settings.crossfade_seconds = Math.round(v * 10) / 10; api.setSettings(settings); }}
               />
             </div>
+          </div>
+          <div class="set-row">
+            <span class="lb">Also on skip
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Same fade when you skip or pick another song</span>
+            </span>
+            <Toggle
+              bind:checked={settings.crossfade_manual}
+              label="Also on skip"
+              disabled={!settings.crossfade}
+              onchange={() => api.setSettings(settings)}
+            />
           </div>
           <div class="set-row">
             <span class="lb">Album continuity

@@ -54,6 +54,7 @@ pub struct Player {
     current_audio: Arc<Mutex<Option<Arc<crate::decode::GrowingBody>>>>,
     xf_on: Arc<AtomicBool>,
     xf_ms: Arc<AtomicU32>,
+    xf_manual: Arc<AtomicBool>,
     album_cont: Arc<AtomicBool>,
     blending: Arc<AtomicBool>,
     /// If the user hits play while a session is still arming.
@@ -81,6 +82,7 @@ impl Player {
         let current_audio = Arc::new(Mutex::new(None));
         let xf_on = Arc::new(AtomicBool::new(true));
         let xf_ms = Arc::new(AtomicU32::new(4000));
+        let xf_manual = Arc::new(AtomicBool::new(true));
         let album_cont = Arc::new(AtomicBool::new(true));
         let blending = Arc::new(AtomicBool::new(false));
         let want_play = Arc::new(AtomicBool::new(false));
@@ -133,6 +135,7 @@ impl Player {
             current_audio,
             xf_on,
             xf_ms,
+            xf_manual,
             album_cont,
             blending,
             want_play,
@@ -286,19 +289,25 @@ impl Player {
         Ok(())
     }
 
-    pub fn set_crossfade(&self, on: bool, seconds: f64, album_continuity: bool) {
+    pub fn set_crossfade(&self, on: bool, seconds: f64, album_continuity: bool, manual: bool) {
         self.xf_on.store(on, Ordering::Relaxed);
         let ms = (seconds.clamp(0.0, 12.0) * 1000.0).round() as u32;
         self.xf_ms.store(ms, Ordering::Relaxed);
         self.album_cont.store(album_continuity, Ordering::Relaxed);
+        self.xf_manual.store(manual, Ordering::Relaxed);
     }
 
     pub fn crossfade_secs(&self) -> f32 {
         self.xf_ms.load(Ordering::Relaxed) as f32 / 1000.0
     }
 
-    pub fn should_crossfade(&self, from: Option<&Track>, to: &Track) -> bool {
+    /// `manual` is Next/Prev/clicking another track. Natural end-of-track
+    /// handoffs pass `false` and only need the main crossfade toggle.
+    pub fn should_crossfade(&self, from: Option<&Track>, to: &Track, manual: bool) -> bool {
         if !self.xf_on.load(Ordering::Relaxed) {
+            return false;
+        }
+        if manual && !self.xf_manual.load(Ordering::Relaxed) {
             return false;
         }
         if self.crossfade_secs() < 0.05 {
@@ -330,7 +339,7 @@ impl Player {
         if s.track.as_ref().map(|t| t.id.as_str()) == Some(track.id.as_str()) && s.repeat != "one" {
             return None;
         }
-        let xf = self.should_crossfade(s.track.as_ref(), &track);
+        let xf = self.should_crossfade(s.track.as_ref(), &track, false);
         let lead = if xf {
             self.crossfade_secs() as f64 + 0.2
         } else {
@@ -901,7 +910,7 @@ mod crossfade_tests {
     }
 
     fn run_xf_across(p: &Player, q: Vec<Track>, repeat: &str, shuffle: bool) -> Vec<String> {
-        p.set_crossfade(true, 2.0, false);
+        p.set_crossfade(true, 2.0, false, true);
         p.set_repeat(repeat);
         p.set_shuffle(shuffle);
         let n = q.len();

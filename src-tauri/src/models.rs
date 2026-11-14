@@ -257,6 +257,11 @@ pub struct Settings {
     pub crossfade_seconds: f64,
     #[serde(default = "default_true")]
     pub album_continuity: bool,
+    /// When on, Next / Prev / picking another track also uses the crossfade
+    /// length. When off, those stay a short cut even if crossfade is enabled
+    /// for natural end-of-track handoffs.
+    #[serde(default = "default_true")]
+    pub crossfade_manual: bool,
     /// Five-band graphic EQ. Gains are dB in [-12, 12].
     #[serde(default)]
     pub eq_enabled: bool,
@@ -277,6 +282,7 @@ impl Default for Settings {
             crossfade: true,
             crossfade_seconds: default_xf_secs(),
             album_continuity: true,
+            crossfade_manual: true,
             eq_enabled: false,
             eq_bands: default_eq_bands(),
         }

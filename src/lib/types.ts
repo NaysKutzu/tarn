@@ -187,6 +187,8 @@ export interface Settings {
   crossfade: boolean;
   crossfade_seconds: number;
   album_continuity: boolean;
+  /** Also fade when you skip or pick another song. */
+  crossfade_manual: boolean;
   eq_enabled: boolean;
   /** Five-band gains in dB, −12…+12. */
   eq_bands: [number, number, number, number, number];
