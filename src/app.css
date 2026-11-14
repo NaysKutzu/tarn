@@ -1250,11 +1250,10 @@ html { color-scheme: dark; }
 
 /* ---------- now playing expanded ---------- */
 .np {
-  /* Span the full content row (sidebar + main). Do not use the old
-     named-line placement - it left the sidebar (Settings / Sign in)
-     painting on top of Now Playing. */
+  /* Full app plane under chrome. Spanning only the middle row left
+     black titlebar/player gutters when chrome faded to opacity 0. */
   grid-column: 1 / -1;
-  grid-row: 2;
+  grid-row: 1 / -1;
   position: relative;
   z-index: 18;
   overflow: hidden;
@@ -1262,21 +1261,41 @@ html { color-scheme: dark; }
   min-width: 0;
   min-height: 0;
 }
+.np-stage {
+  position: absolute;
+  inset: 0;
+}
+.np-stage.slide-next {
+  animation: np-slide-next 0.48s var(--ease) both;
+}
+.np-stage.slide-prev {
+  animation: np-slide-prev 0.48s var(--ease) both;
+}
+@keyframes np-slide-next {
+  from { opacity: 0; transform: translateX(56px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes np-slide-prev {
+  from { opacity: 0; transform: translateX(-56px); }
+  to { opacity: 1; transform: translateX(0); }
+}
 .np-bg {
   position: absolute;
-  inset: -40px;
-  width: calc(100% + 80px);
-  height: calc(100% + 80px);
+  inset: -12%;
+  width: 124%;
+  height: 124%;
   object-fit: cover;
-  filter: blur(48px);
-  opacity: 0.4;
+  filter: blur(56px) saturate(1.08);
+  opacity: 0.48;
   pointer-events: none;
+  transition: transform 0.7s var(--ease), opacity 0.55s var(--ease);
 }
 .np-shade {
   position: absolute;
   inset: 0;
-  background: rgba(12,11,10,0.55);
+  background: rgba(12,11,10,0.52);
   pointer-events: none;
+  transition: background 0.55s var(--ease);
 }
 .np-in {
   position: relative;
@@ -1285,33 +1304,59 @@ html { color-scheme: dark; }
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 56px;
-  padding: 32px 48px 24px;
+  gap: clamp(28px, 4vw, 56px);
+  /* Reserve chrome while controls are visible; idle drops this. */
+  padding: calc(var(--titlebar, 36px) + 28px) 48px calc(var(--player) * 0.42 + 36px);
+  transition: padding 0.6s var(--ease), gap 0.6s var(--ease);
 }
 .np-art {
   position: relative;
-  width: 360px;
-  height: 360px;
-  flex: 0 0 360px;
+  width: min(360px, 42vmin);
+  height: min(360px, 42vmin);
+  flex: 0 0 min(360px, 42vmin);
   border-radius: 12px;
   overflow: hidden;
   box-shadow: var(--shadow);
   background: var(--bg-elev);
+  transition:
+    width 0.6s var(--ease),
+    height 0.6s var(--ease),
+    flex-basis 0.6s var(--ease),
+    box-shadow 0.6s var(--ease),
+    border-radius 0.6s var(--ease);
 }
 .np-art img, .np-art .ph {
-  width: 360px;
-  height: 360px;
-  border-radius: 12px;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
   object-fit: cover;
 }
-.np-meta { max-width: 480px; min-width: 0; }
+.np-meta {
+  max-width: min(480px, 42vw);
+  min-width: 0;
+  transition: opacity 0.5s var(--ease), transform 0.6s var(--ease);
+}
 .np-meta h1 {
-  font-size: 36px;
-  line-height: 42px;
+  font-size: clamp(28px, 3.4vw, 36px);
+  line-height: 1.15;
   font-weight: 750;
   letter-spacing: -0.03em;
 }
 .np-meta .ar { font-size: 18px; line-height: 24px; color: var(--text-2); margin-top: 8px; }
+
+@media (max-width: 820px) {
+  .np-in {
+    flex-direction: column;
+    text-align: center;
+    gap: 28px;
+  }
+  .np-meta { max-width: min(480px, 88vw); }
+  .app.np-idle .np-art {
+    width: min(440px, 72vmin);
+    height: min(440px, 72vmin);
+    flex-basis: min(440px, 72vmin);
+  }
+}
 
 /* ---------- settings ---------- */
 .set {
@@ -1365,6 +1410,45 @@ html { color-scheme: dark; }
   height: 20px;
   accent-color: var(--accent);
 }
+.set-cache {
+  align-items: flex-start;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.set-cache .lb { padding-top: 10px; }
+.cache-ctl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.cache-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cache-custom input[type=number] {
+  width: 96px;
+  height: 40px;
+  background: #1c1b19;
+  color: var(--text);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 14px;
+  line-height: 20px;
+  outline: none;
+  color-scheme: dark;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.cache-custom input[type=number]::-webkit-outer-spin-button,
+.cache-custom input[type=number]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.cache-custom .dd { min-width: 88px; }
 .set-eq {
   flex-direction: column;
   align-items: stretch;
@@ -2156,33 +2240,60 @@ html { color-scheme: dark; }
   border-top-color: #141312;
 }
 
-/* Fullscreen Now Playing: chrome auto-hides after idle */
+/* Fullscreen Now Playing: chrome auto-hides; art expands into that space */
 .np-close {
+  /* Below titlebar so it is not buried under z-index 40 / window buttons */
   position: absolute;
-  top: 16px;
+  top: calc(var(--titlebar, 36px) + 12px);
   right: 16px;
-  z-index: 24;
+  z-index: 50;
   width: 48px;
   height: 48px;
   min-width: 48px;
   min-height: 48px;
   border-radius: 12px;
 }
-.app.np-open .titlebar,
+.app.np-open .tb-wrap,
 .app.np-open .player,
 .app.np-open .np-close {
-  transition: opacity 0.45s ease;
+  transition:
+    opacity 0.5s var(--ease),
+    transform 0.5s var(--ease);
 }
-.app.np-idle .titlebar,
-.app.np-idle .player,
+/* Keep chrome opaque while visible - only fade+slide on idle. */
+.app.np-idle .tb-wrap {
+  opacity: 0;
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+.app.np-idle .player {
+  opacity: 0;
+  transform: translateY(100%);
+  pointer-events: none;
+}
 .app.np-idle .np-close {
   opacity: 0;
   pointer-events: none;
 }
-.app.np-open .np-in {
-  /* Keep the art + title centered in the full area, including over the
-     (visually hidden) player and title bar. */
-  padding: 36px 48px;
+.app.np-idle .np-in {
+  padding: 40px 48px;
+}
+.app.np-idle .np-art {
+  width: min(520px, 58vmin);
+  height: min(520px, 58vmin);
+  flex-basis: min(520px, 58vmin);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+.app.np-idle .np-bg {
+  transform: scale(1.06);
+  opacity: 0.56;
+}
+.app.np-idle .np-shade {
+  background: rgba(12, 11, 10, 0.4);
+}
+.app.np-idle .np-meta {
+  transform: translateY(6px);
 }
 
 /* Play overlay is a proper hover affordance, not a stray corner dot */

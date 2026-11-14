@@ -54,7 +54,8 @@ impl AudioCache {
     }
 
     pub fn set_max_mb(&self, mb: u64) {
-        let bytes = mb.saturating_mul(1024 * 1024);
+        // Saturate so joke sizes (TB/PB/EB) don't wrap the byte cap.
+        let bytes = mb.saturating_mul(1024).saturating_mul(1024);
         self.max_bytes.store(bytes, Ordering::Relaxed);
         if bytes == 0 {
             self.clear();

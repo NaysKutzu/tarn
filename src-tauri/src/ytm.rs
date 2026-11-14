@@ -990,13 +990,30 @@ impl Ytm {
         let Some(lid) = details.lyrics_id.clone() else {
             return Ok(Lyrics::default());
         };
-        if let Ok(Some(timed)) = self.it().timed_lyrics(&lid).await {
-            if !timed.lines.is_empty() {
+        match self.it().timed_lyrics(&lid).await {
+            Ok(Some(timed)) if !timed.lines.is_empty() => {
+                crate::diag::debug(format!(
+                    "lyrics {video_id}: timed {} lines (browse {lid})",
+                    timed.lines.len()
+                ));
                 return Ok(timed);
             }
+            Ok(_) => crate::diag::debug(format!(
+                "lyrics {video_id}: android browse ok but no timed lines; falling back"
+            )),
+            Err(e) => crate::diag::soft_fail(
+                "lyrics",
+                format!("{video_id} timed failed ({e}); falling back to plain"),
+            ),
         }
         match self.rp.query().music_lyrics(&lid).await {
-            Ok(l) => Ok(innertube::lyrics_from_body(&l.body, &l.footer)),
+            Ok(l) => {
+                crate::diag::debug(format!(
+                    "lyrics {video_id}: plain fallback body={}b",
+                    l.body.len()
+                ));
+                Ok(innertube::lyrics_from_body(&l.body, &l.footer))
+            }
             Err(e) => Err(anyhow!("{e}")),
         }
     }
@@ -1162,12 +1179,22 @@ impl Ytm {
             }
         }
         if lib.albums.is_empty() {
-            match it.library_browse("FEmusic_library_corpus_track_albums").await {
-                Ok((_, albs, _)) => {
-                    crate::diag::log(format!("library innertube albums: {}", albs.len()));
-                    lib.albums = albs;
+            // ytmusicapi uses liked_albums; corpus_track_albums often 400s.
+            for id in [
+                "FEmusic_liked_albums",
+                "FEmusic_library_corpus_track_albums",
+            ] {
+                match it.library_browse(id).await {
+                    Ok((_, albs, _)) if !albs.is_empty() => {
+                        crate::diag::log(format!("library innertube {id}: {}", albs.len()));
+                        lib.albums = albs;
+                        break;
+                    }
+                    Ok((_, _, _)) => {
+                        crate::diag::log(format!("library innertube {id}: empty"))
+                    }
+                    Err(e) => crate::diag::log(format!("library innertube {id}: {e}")),
                 }
-                Err(e) => crate::diag::log(format!("library innertube albums: {e}")),
             }
         }
         if lib.artists.is_empty() {
@@ -1224,10 +1251,15 @@ impl Ytm {
                 p.covers.clear();
                 continue;
             }
-            if p.covers.len() >= 2
-                && p.covers.iter().all(|u| usable_cover(u))
+            if distinct_cover_count(&p.covers) >= 2
                 && !p.covers.iter().any(|u| u.contains("/pl_c/") || u.contains("/s_p/"))
             {
+                // Keep only distinct tiles so the sidebar mosaic isn't 1 art × 4.
+                let mut seen = std::collections::HashSet::new();
+                p.covers.retain(|u| {
+                    usable_cover(u) && seen.insert(thumb_dedupe_key(u))
+                });
+                p.covers.truncate(4);
                 if p.cover.is_none() {
                     p.cover = p.covers.first().cloned();
                 }
@@ -1289,8 +1321,14 @@ impl Ytm {
                         if p.cover.as_deref().is_none_or(|u| !usable_cover(u)) {
                             p.cover = tiles.first().cloned();
                         }
-                        if tiles.len() >= 2 {
+                        if distinct_cover_count(&tiles) >= 2 {
                             p.covers = tiles;
+                        } else {
+                            // One unique art - single cover, no fake mosaic.
+                            p.covers.clear();
+                            if let Some(c) = tiles.into_iter().next() {
+                                p.cover = Some(c);
+                            }
                         }
                     }
                     Ok(_) => {}
@@ -2058,7 +2096,26 @@ fn thumb_dedupe_key(url: &str) -> String {
             }
         }
     }
-    url.split('?').next().unwrap_or(url).to_string()
+    let base = url.split('?').next().unwrap_or(url);
+    // Same art at =w60 / =w120 / =s88… used to fill all 4 mosaic slots.
+    if let Some(i) = base.rfind('=') {
+        let prefix = &base[..i];
+        if prefix.contains("googleusercontent.com")
+            || prefix.contains("ggpht.com")
+            || prefix.contains("yt3.")
+            || prefix.contains("google.com/image")
+        {
+            return prefix.to_string();
+        }
+    }
+    base.to_string()
+}
+
+fn distinct_cover_count(urls: &[String]) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    urls.iter()
+        .filter(|u| usable_cover(u) && seen.insert(thumb_dedupe_key(u)))
+        .count()
 }
 
 fn best_thumb_wide(thumbs: &[Thumbnail]) -> Option<String> {

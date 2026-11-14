@@ -31,7 +31,7 @@
   import {
     Home01Icon, Search01Icon, Compass01Icon, LibraryIcon, Settings02Icon,
     PlayIcon, PauseIcon, PreviousIcon, NextIcon, ShuffleIcon, RepeatIcon, RepeatOne01Icon,
-    VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, ThumbsDownIcon, Queue02Icon,
+    VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, FavouriteFilledIcon, ThumbsDownIcon, Queue02Icon,
     Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon,
     Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, Globe02Icon,
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
@@ -121,6 +121,9 @@
   let npShow = $state(true);
   let npHoverChrome = $state(false);
   let npHideTimer: ReturnType<typeof setTimeout> | undefined;
+  let npSlide = $state<'next' | 'prev' | null>(null);
+  let npPrevId = '';
+  let npPrevIndex = 0;
   let scrub = $state<number | null>(null);
   let volHud = $state<number | null>(null);
   let volHudTimer: ReturnType<typeof setTimeout> | undefined;
@@ -197,6 +200,10 @@
         }
         settings.eq_enabled = !!settings.eq_enabled;
         if (settings.crossfade_manual == null) settings.crossfade_manual = true;
+        if (settings.cache_max_mb == null || Number.isNaN(Number(settings.cache_max_mb))) {
+          settings.cache_max_mb = 1024;
+        }
+        syncCacheCustomFromSettings();
         const acct = auth.signed_in ? (auth.account?.name ?? 'user') : 'anon';
         if (auth.signed_in) {
           // Drop any leftover logged-out snapshot so we never flash it.
@@ -587,19 +594,11 @@
     try { await api.radio(vid); } catch (e) { fail(e, "Couldn't start radio"); }
   }
 
-  function shuffled<T>(xs: T[]): T[] {
-    const a = xs.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
-  }
-
-  function playTopShuffled(top: ShelfItem) {
+  async function playTopShuffled(top: ShelfItem) {
     const songs = results?.songs?.length ? results.songs : [itemToTrack(top)];
+    // Backend reshuffles the live queue so Up next matches; keep original order here.
+    await playTracks(songs, 0);
     api.setShuffle(true);
-    playTracks(shuffled(songs), 0);
   }
 
   async function playCollection(item: ShelfItem, shuffle: boolean) {
@@ -622,8 +621,9 @@
         tracks = [itemToTrack(item)];
       }
       if (!tracks.length) { openItem(item); return; }
+      await playTracks(tracks, 0, cover);
       if (shuffle) api.setShuffle(true);
-      playTracks(shuffle ? shuffled(tracks) : tracks, 0, cover);
+      else api.setShuffle(false);
     } catch (e) { fail(e, "Can't play this"); }
   }
 
@@ -891,9 +891,92 @@
 
   function fmtCache(n: number) {
     if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(n >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
-    return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
+    if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(n >= 10 * 1024 ** 2 ? 0 : 1)} MB`;
+    if (n < 1024 ** 4) return `${(n / 1024 ** 3).toFixed(n >= 10 * 1024 ** 3 ? 0 : 1)} GB`;
+    if (n < 1024 ** 5) return `${(n / 1024 ** 4).toFixed(1)} TB`;
+    if (n < 1024 ** 6) return `${(n / 1024 ** 5).toFixed(1)} PB`;
+    return `${(n / 1024 ** 6).toFixed(1)} EB`;
+  }
+  type CacheUnit = 'MB' | 'GB' | 'TB' | 'PB' | 'EB';
+  const CACHE_UNIT_MB: Record<CacheUnit, number> = {
+    MB: 1,
+    GB: 1024,
+    TB: 1024 ** 2,
+    PB: 1024 ** 3,
+    EB: 1024 ** 4,
+  };
+  const CACHE_PRESETS: { value: string; label: string }[] = [
+    { value: '0', label: 'Off' },
+    { value: '256', label: '256 MB' },
+    { value: '512', label: '512 MB' },
+    { value: '1024', label: '1 GB' },
+    { value: '2048', label: '2 GB' },
+    { value: '4096', label: '4 GB' },
+    { value: '5120', label: '5 GB' },
+    { value: '10240', label: '10 GB' },
+    { value: '15360', label: '15 GB' },
+    { value: '20480', label: '20 GB' },
+    { value: '25600', label: '25 GB' },
+    { value: String(1024 ** 2), label: '1 TB' },
+    { value: String(1024 ** 3), label: '1 PB' },
+    { value: String(1024 ** 4), label: '1 EB' },
+    { value: 'custom', label: 'Custom…' },
+  ];
+  let cacheMode = $state<'preset' | 'custom'>('preset');
+  let cacheCustomAmt = $state('8');
+  let cacheCustomUnit = $state<CacheUnit>('GB');
+  const cacheSelect = $derived(
+    CACHE_PRESETS.some((p) => p.value !== 'custom' && Number(p.value) === settings.cache_max_mb)
+      ? String(settings.cache_max_mb)
+      : 'custom',
+  );
+  function syncCacheCustomFromSettings() {
+    const mb = Number(settings.cache_max_mb) || 0;
+    const preset = CACHE_PRESETS.some((p) => p.value !== 'custom' && Number(p.value) === mb);
+    cacheMode = preset ? 'preset' : 'custom';
+    if (preset) return;
+    const units: CacheUnit[] = ['EB', 'PB', 'TB', 'GB', 'MB'];
+    for (const u of units) {
+      const f = CACHE_UNIT_MB[u];
+      if (mb >= f && mb % f === 0) {
+        cacheCustomAmt = String(mb / f);
+        cacheCustomUnit = u;
+        return;
+      }
+    }
+    cacheCustomAmt = String(mb);
+    cacheCustomUnit = 'MB';
+  }
+  async function applyCachePreset(v: string) {
+    if (v === 'custom') {
+      cacheMode = 'custom';
+      if (!cacheCustomAmt) {
+        cacheCustomAmt = '8';
+        cacheCustomUnit = 'GB';
+      }
+      await applyCacheCustom();
+      return;
+    }
+    cacheMode = 'preset';
+    const mb = Number(v);
+    settings.cache_max_mb = mb;
+    settings = { ...settings };
+    await api.setSettings(settings);
+    await refreshCacheStats();
+  }
+  async function applyCacheCustom() {
+    let n = Number(String(cacheCustomAmt).replace(',', '.'));
+    if (!Number.isFinite(n) || n < 0) return;
+    const mb = Math.min(
+      Math.round(n * CACHE_UNIT_MB[cacheCustomUnit]),
+      Number.MAX_SAFE_INTEGER,
+    );
+    cacheMode = 'custom';
+    settings.cache_max_mb = mb;
+    settings = { ...settings };
+    await api.setSettings(settings);
+    await refreshCacheStats();
   }
   async function refreshCacheStats() {
     try {
@@ -903,7 +986,8 @@
     } catch {}
   }
   $effect(() => {
-    if (view.id === 'settings') refreshCacheStats();
+    if (view.id !== 'settings') return;
+    void refreshCacheStats();
   });
 
   let navOn = (id: string) => view.id === id;
@@ -928,6 +1012,22 @@
       npShow = true;
       if (npHideTimer) clearTimeout(npHideTimer);
     }
+  });
+
+  $effect(() => {
+    const t = player.track;
+    const idx = player.index;
+    const id = t?.id ?? '';
+    if (!expanded || !id) {
+      npPrevId = id;
+      npPrevIndex = idx;
+      return;
+    }
+    if (npPrevId && id !== npPrevId) {
+      npSlide = idx < npPrevIndex ? 'prev' : 'next';
+    }
+    npPrevId = id;
+    npPrevIndex = idx;
   });
 </script>
 
@@ -1341,7 +1441,7 @@
               {/if}
               <div class="hero-acts">
                 <button class="btn" type="button" onclick={() => playTracks(artist!.tracks, 0)}><Hi icon={PlayIcon} size={18} /> Play</button>
-                <button class="btn ghost" type="button" onclick={() => { api.setShuffle(true); playTracks([...artist!.tracks].sort(() => Math.random() - 0.5), 0); }}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
+                <button class="btn ghost" type="button" onclick={async () => { await playTracks(artist!.tracks, 0); api.setShuffle(true); }}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
                 {#if artist.radio_id}
                   <button class="btn ghost" type="button" onclick={() => api.artistRadio(artist!.radio_id!)}><Hi icon={Radio02Icon} size={18} /> Radio</button>
                 {/if}
@@ -1445,7 +1545,7 @@
               </div>
               <div class="hero-acts">
                 <button class="btn" type="button" onclick={() => playTracks(collection!.tracks, 0, collection!.cover)}><Hi icon={PlayIcon} size={18} /> Play</button>
-                <button class="btn ghost" type="button" onclick={() => { api.setShuffle(true); playTracks([...collection!.tracks].sort(() => Math.random() - 0.5), 0, collection!.cover); }}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
+                <button class="btn ghost" type="button" onclick={async () => { await playTracks(collection!.tracks, 0, collection!.cover); api.setShuffle(true); }}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
                 <button class="btn ghost" type="button" onclick={() => collection!.tracks[0] && startRadio(collection!.tracks[0].id)}><Hi icon={Radio02Icon} size={18} /> Radio</button>
                 {#if auth.signed_in}
                   <button class="btn ghost {collection.saved ? 'on' : ''}" type="button" onclick={async () => { if (needAccount('save')) return; const s = !collection!.saved; try { await api.librarySave(collection!.playlist_id || collection!.id, s); collection = { ...collection!, saved: s }; } catch (e) { fail(e, "Couldn't save this", 'save'); } }}>
@@ -1723,22 +1823,42 @@
               {/each}
             </div>
           </div>
-          <div class="set-row">
+          <div class="set-row set-cache">
             <span class="lb"><Hi icon={Bookmark02Icon} size={20} /> Offline cache
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{fmtCache(cacheUsed)} of {fmtCache(cacheMax)}</span>
             </span>
-            <Dropdown
-              value={String(settings.cache_max_mb)}
-              options={[
-                { value: '0', label: 'Off' },
-                { value: '256', label: '256 MB' },
-                { value: '512', label: '512 MB' },
-                { value: '1024', label: '1 GB' },
-                { value: '2048', label: '2 GB' },
-                { value: '4096', label: '4 GB' },
-              ]}
-              onchange={(v) => { settings.cache_max_mb = Number(v); api.setSettings(settings); refreshCacheStats(); }}
-            />
+            <div class="cache-ctl">
+              <Dropdown
+                value={cacheMode === 'custom' ? 'custom' : cacheSelect}
+                options={CACHE_PRESETS}
+                onchange={(v) => { void applyCachePreset(v); }}
+              />
+              {#if cacheMode === 'custom' || cacheSelect === 'custom'}
+                <div class="cache-custom">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    inputmode="decimal"
+                    aria-label="Cache size"
+                    bind:value={cacheCustomAmt}
+                    onchange={() => { void applyCacheCustom(); }}
+                    onkeydown={(e) => { if (e.key === 'Enter') void applyCacheCustom(); }}
+                  />
+                  <Dropdown
+                    value={cacheCustomUnit}
+                    options={[
+                      { value: 'MB', label: 'MB' },
+                      { value: 'GB', label: 'GB' },
+                      { value: 'TB', label: 'TB' },
+                      { value: 'PB', label: 'PB' },
+                      { value: 'EB', label: 'EB' },
+                    ]}
+                    onchange={(v) => { cacheCustomUnit = v as CacheUnit; void applyCacheCustom(); }}
+                  />
+                </div>
+              {/if}
+            </div>
           </div>
           <div class="set-row">
             <span class="lb">Updates
@@ -1832,8 +1952,6 @@
 
   {#if expanded && player.track}
     <div class="np" onwheel={nudgeVolume}>
-      <Cover src={nowCover} videoId={player.track?.id} width={1400} height={900} class="np-bg" alt="" />
-      <div class="np-shade"></div>
       <button
         class="ibtn lg np-close"
         type="button"
@@ -1844,23 +1962,33 @@
       >
         <Hi icon={Cancel01Icon} size={26} />
       </button>
-      <div class="np-in">
-        <div class="np-art">
-          <Cover src={nowCover} videoId={player.track?.id} size={360} alt="" />
-          {#if volHud != null}
-            <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
-          {/if}
-        </div>
-        <div class="np-meta">
-          <h1>{player.track.title}</h1>
-          <div class="ar">
-            {#each player.track.artists as a, k}
-              {#if k > 0}<span>, </span>{/if}
-              <button class="linkish" type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
-            {/each}
+      {#key player.track.id}
+        <div
+          class="np-stage"
+          class:slide-next={npSlide === 'next'}
+          class:slide-prev={npSlide === 'prev'}
+        >
+          <Cover src={nowCover} videoId={player.track?.id} width={1400} height={900} class="np-bg" alt="" />
+          <div class="np-shade"></div>
+          <div class="np-in">
+            <div class="np-art">
+              <Cover src={nowCover} videoId={player.track?.id} size={560} alt="" />
+              {#if volHud != null}
+                <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
+              {/if}
+            </div>
+            <div class="np-meta">
+              <h1>{player.track.title}</h1>
+              <div class="ar">
+                {#each player.track.artists as a, k}
+                  {#if k > 0}<span>, </span>{/if}
+                  <button class="linkish" type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
+                {/each}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      {/key}
     </div>
   {/if}
 
@@ -1888,7 +2016,15 @@
             </div>
           </div>
           <div class="likes">
-            <IconBtn icon={FavouriteIcon} size={22} on={player.liked} onclick={toggleLike} title="Like" />
+            <IconBtn
+              icon={FavouriteIcon}
+              altIcon={FavouriteFilledIcon}
+              showAlt={player.liked}
+              size={22}
+              on={player.liked}
+              onclick={toggleLike}
+              title="Like"
+            />
             <IconBtn icon={ThumbsDownIcon} size={22} on={player.disliked} danger onclick={toggleDislike} title="Dislike" />
           </div>
         {/if}

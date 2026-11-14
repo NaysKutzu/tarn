@@ -30,11 +30,36 @@
     return 'normal' as const;
   })());
 
-  let tiles = $derived(
-    (covers ?? [])
-      .filter((u) => !!u && !u.includes('/mixart') && !u.includes('music.youtube.com/image/'))
-      .slice(0, 4),
-  );
+  function coverKey(u: string): string {
+    const vi = u.split('/vi/')[1];
+    if (vi) {
+      const id = vi.split('/')[0];
+      if (id && id.length === 11) return id;
+    }
+    const base = u.split('?')[0] || u;
+    const eq = base.lastIndexOf('=');
+    if (
+      eq > 0 &&
+      (base.includes('googleusercontent') || base.includes('ggpht') || base.includes('yt3.'))
+    ) {
+      return base.slice(0, eq);
+    }
+    return base;
+  }
+
+  let tiles = $derived((() => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const u of covers ?? []) {
+      if (!u || u.includes('/mixart') || u.includes('music.youtube.com/image/')) continue;
+      const k = coverKey(u);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(u);
+      if (out.length === 4) break;
+    }
+    return out;
+  })());
   let mosaic = $derived(kind === 'normal' && tiles.length >= 2);
   let iconSize = $derived(Math.max(14, Math.round(size * 0.42)));
 </script>

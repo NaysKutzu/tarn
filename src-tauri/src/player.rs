@@ -83,6 +83,8 @@ pub struct Player {
     /// Next track to show in the UI once the mixer actually starts it.
     /// Avoids "new title, old audio" while crossfade analysis is in flight.
     pending_adopt: Arc<Mutex<Option<(Track, usize, u64)>>>,
+    /// Original playlist order while shuffle is on (for restore + Up next).
+    linear_queue: Arc<Mutex<Option<Vec<Track>>>>,
 }
 
 impl Player {
@@ -112,6 +114,7 @@ impl Player {
         let blend_adopted = Arc::new(AtomicBool::new(false));
         let play_gen = Arc::new(AtomicU64::new(0));
         let pending_adopt = Arc::new(Mutex::new(None));
+        let linear_queue = Arc::new(Mutex::new(None));
 
         let samples_t = samples.clone();
         let rate_t = sample_rate.clone();
@@ -189,7 +192,39 @@ impl Player {
             blend_adopted,
             play_gen,
             pending_adopt,
+            linear_queue,
         }
+    }
+
+    fn same_track_set(a: &[Track], b: &[Track]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut aa: Vec<&str> = a.iter().map(|t| t.id.as_str()).collect();
+        let mut bb: Vec<&str> = b.iter().map(|t| t.id.as_str()).collect();
+        aa.sort_unstable();
+        bb.sort_unstable();
+        aa == bb
+    }
+
+    /// Put the current track first, shuffle the rest. Updates `index` to 0.
+    fn shuffle_queue_view(queue: &mut Vec<Track>, index: &mut usize) {
+        use rand::seq::SliceRandom;
+        if queue.len() <= 1 {
+            *index = 0;
+            return;
+        }
+        let cur = (*index).min(queue.len() - 1);
+        let current = queue[cur].clone();
+        let mut rest: Vec<Track> = queue
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != cur)
+            .map(|(_, t)| t.clone())
+            .collect();
+        rest.shuffle(&mut rand::thread_rng());
+        *queue = std::iter::once(current).chain(rest).collect();
+        *index = 0;
     }
 
     pub fn play_gen(&self) -> u64 {
@@ -264,12 +299,33 @@ impl Player {
             }
         }
         s.track = Some(track);
-        s.queue = queue;
-        s.index = index;
         s.loading = loading;
         s.playing = false;
         s.position = position.max(0.0);
         s.error = None;
+        if s.shuffle {
+            let mut lin = self.linear_queue.lock();
+            if lin
+                .as_ref()
+                .is_some_and(|orig| Self::same_track_set(orig, &queue))
+            {
+                // Same playlist (e.g. click in Up next) - keep linear, keep order.
+                s.queue = queue;
+                s.index = index;
+            } else {
+                // New playlist while shuffle is on: remember linear, show shuffled.
+                *lin = Some(queue.clone());
+                let mut q = queue;
+                let mut i = index;
+                Self::shuffle_queue_view(&mut q, &mut i);
+                s.queue = q;
+                s.index = i;
+            }
+        } else {
+            *self.linear_queue.lock() = None;
+            s.queue = queue;
+            s.index = index;
+        }
     }
 
 
@@ -667,7 +723,64 @@ impl Player {
     }
 
     pub fn set_shuffle(&self, on: bool) {
-        self.state.lock().shuffle = on;
+        let mut s = self.state.lock();
+        if on == s.shuffle {
+            return;
+        }
+        if on {
+            let mut lin = self.linear_queue.lock();
+            if lin.is_none() {
+                *lin = Some(s.queue.clone());
+            }
+            let source = lin.as_ref().cloned().unwrap_or_else(|| s.queue.clone());
+            let cur_id = s
+                .track
+                .as_ref()
+                .map(|t| t.id.clone())
+                .or_else(|| s.queue.get(s.index).map(|t| t.id.clone()));
+            let cur_idx = cur_id
+                .as_ref()
+                .and_then(|id| source.iter().position(|t| &t.id == id))
+                .unwrap_or(s.index.min(source.len().saturating_sub(1)));
+            let mut q = source;
+            let mut i = cur_idx;
+            Self::shuffle_queue_view(&mut q, &mut i);
+            s.queue = q;
+            s.index = i;
+            // Keep track pointer on the same song (now at 0).
+            if let Some(t) = s.queue.first().cloned() {
+                s.track = Some(t);
+            }
+            s.shuffle = true;
+            crate::diag::log(format!(
+                "shuffle on: queue={} current={}",
+                s.queue.len(),
+                s.queue.first().map(|t| t.id.as_str()).unwrap_or("-")
+            ));
+        } else {
+            s.shuffle = false;
+            if let Some(linear) = self.linear_queue.lock().take() {
+                let cur_id = s
+                    .track
+                    .as_ref()
+                    .map(|t| t.id.clone())
+                    .or_else(|| s.queue.get(s.index).map(|t| t.id.clone()));
+                s.queue = linear;
+                if let Some(id) = cur_id {
+                    s.index = s
+                        .queue
+                        .iter()
+                        .position(|t| t.id == id)
+                        .unwrap_or(0);
+                }
+                crate::diag::log(format!(
+                    "shuffle off: restored linear, index={}",
+                    s.index
+                ));
+            } else {
+                crate::diag::log("shuffle off: no linear snapshot");
+            }
+        }
     }
 
     pub fn set_repeat(&self, mode: &str) {
@@ -701,24 +814,43 @@ impl Player {
     pub fn insert_next(&self, tracks: Vec<Track>) {
         let mut s = self.state.lock();
         let i = s.index.saturating_add(1).min(s.queue.len());
-        for (k, t) in tracks.into_iter().enumerate() {
-            s.queue.insert(i + k, t);
+        let cur_id = s.queue.get(s.index).map(|t| t.id.clone());
+        for (k, t) in tracks.iter().enumerate() {
+            s.queue.insert(i + k, t.clone());
+        }
+        if let Some(lin) = self.linear_queue.lock().as_mut() {
+            let at = cur_id
+                .and_then(|id| lin.iter().position(|t| t.id == id))
+                .map(|p| p + 1)
+                .unwrap_or(lin.len());
+            for (k, t) in tracks.into_iter().enumerate() {
+                lin.insert(at + k, t);
+            }
         }
     }
 
     pub fn append(&self, tracks: Vec<Track>) {
-        self.state.lock().queue.extend(tracks);
+        let mut s = self.state.lock();
+        s.queue.extend(tracks.iter().cloned());
+        if let Some(lin) = self.linear_queue.lock().as_mut() {
+            lin.extend(tracks);
+        }
     }
 
     pub fn append_unique(&self, tracks: Vec<Track>) {
         let mut s = self.state.lock();
         let existing: std::collections::HashSet<_> =
             s.queue.iter().map(|t| t.id.clone()).collect();
+        let mut added = Vec::new();
         for mut t in tracks {
             if !t.id.is_empty() && !existing.contains(&t.id) {
                 t.ensure_cover();
+                added.push(t.clone());
                 s.queue.push(t);
             }
+        }
+        if let Some(lin) = self.linear_queue.lock().as_mut() {
+            lin.extend(added);
         }
     }
 
@@ -730,19 +862,33 @@ impl Player {
             t.ensure_cover();
         }
         let mut s = self.state.lock();
-        s.queue = queue;
-        s.index = index;
+        if s.shuffle {
+            *self.linear_queue.lock() = Some(queue.clone());
+            let mut q = queue;
+            let mut i = index;
+            Self::shuffle_queue_view(&mut q, &mut i);
+            s.queue = q;
+            s.index = i;
+        } else {
+            *self.linear_queue.lock() = None;
+            s.queue = queue;
+            s.index = index;
+        }
     }
 
     pub fn remove_at(&self, i: usize) {
         let mut s = self.state.lock();
         if i < s.queue.len() {
+            let removed_id = s.queue[i].id.clone();
             s.queue.remove(i);
             if s.index > i {
                 s.index -= 1;
             }
             if s.index >= s.queue.len() && !s.queue.is_empty() {
                 s.index = s.queue.len() - 1;
+            }
+            if let Some(lin) = self.linear_queue.lock().as_mut() {
+                lin.retain(|t| t.id != removed_id);
             }
         }
     }
@@ -772,21 +918,8 @@ impl Player {
         if !user && s.repeat == "one" {
             return NextChoice::Play(s.index);
         }
-        if s.shuffle && s.queue.len() > 1 {
-            // pick a different random index
-            let n = s.queue.len();
-            let mut idx = (s.index + 1) % n;
-            // Prefer an unplayed-looking next: just walk a shuffled offset.
-            let step = (s.position as usize).wrapping_mul(17).wrapping_add(3).max(1);
-            for k in 0..n {
-                let j = (s.index + 1 + k * step) % n;
-                if j != s.index {
-                    idx = j;
-                    break;
-                }
-            }
-            return NextChoice::Play(idx);
-        }
+        // Shuffle reorders the queue itself so Up next matches playback;
+        // advance is just sequential through that view.
         let n = s.index + 1;
         if n < s.queue.len() {
             NextChoice::Play(n)
@@ -1377,6 +1510,33 @@ mod crossfade_tests {
         for w in order.windows(2) {
             assert_ne!(w[0], w[1], "shuffle must not pick the current track again: {order:?}");
         }
+    }
+
+    #[test]
+    fn shuffle_reorders_queue_and_restores() {
+        let p = Player::start();
+        let q = queue(8);
+        let original: Vec<String> = q.iter().map(|t| t.id.clone()).collect();
+        arm(&p, q, 3, 1.0, 10.0);
+        p.set_shuffle(true);
+        let on = p.snapshot();
+        assert!(on.shuffle);
+        assert_eq!(on.index, 0, "current track moves to front of Up next");
+        assert_eq!(on.queue[0].id, original[3]);
+        let shuffled_ids: Vec<_> = on.queue.iter().map(|t| t.id.clone()).collect();
+        assert_ne!(
+            shuffled_ids, original,
+            "Up next order should change when shuffle turns on"
+        );
+        // Sequential next through the shuffled view.
+        assert!(matches!(p.next_choice(true), NextChoice::Play(1)));
+
+        p.set_shuffle(false);
+        let off = p.snapshot();
+        assert!(!off.shuffle);
+        let restored: Vec<_> = off.queue.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(restored, original);
+        assert_eq!(off.index, 3);
     }
 
     #[test]

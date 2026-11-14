@@ -20,7 +20,8 @@ const CLIENT_VERSION: &str = "1.20260516.01.00";
 /// Timed lyrics only show up on the Android Music client; WEB_REMIX returns
 /// plain text (or an older untimed shape) for the same browse id.
 const ANDROID_MUSIC_NAME: &str = "ANDROID_MUSIC";
-const ANDROID_MUSIC_VERSION: &str = "7.27.52";
+// Known-good for timed lyrics (ytmusicapi / ytmusic-rs). Newer builds 400.
+const ANDROID_MUSIC_VERSION: &str = "7.21.50";
 const ANDROID_MUSIC_CLIENT_ID: &str = "21";
 
 #[derive(Clone)]
@@ -125,8 +126,18 @@ impl InnerTube {
             crate::auth::note_set_cookies(&set_cookies);
         }
         if !status.is_success() {
+            let reason = crate::diag::yt_error_reason(&text);
+            crate::diag::soft_fail(
+                "innertube",
+                format!("{endpoint}{browse_bit} HTTP {status} reason={reason}", browse_bit = if browse.is_empty() { String::new() } else { format!(" {browse}") }),
+            );
+            crate::diag::debug(format!(
+                "innertube {endpoint} raw body ({}b): {}",
+                text.len(),
+                text.chars().take(400).collect::<String>()
+            ));
             // A transient 401/403 is NOT a sign-out. Callers log and retry.
-            return Err(anyhow!("innertube {endpoint}: HTTP {status}"));
+            return Err(anyhow!("innertube {endpoint}: HTTP {status} ({reason})"));
         }
         // Detect logged-out responses that still return 200.
         if text.contains("LOGIN_REQUIRED") || text.contains("loggedOut") {
@@ -422,6 +433,10 @@ impl InnerTube {
 
     /// Same browse endpoint as [`browse`], but with an Android Music client
     /// so timed lyric models are included in the response.
+    ///
+    /// Important: do **not** attach WEB browser cookies / SAPISIDHASH here.
+    /// Mixing WEB auth with ANDROID_MUSIC yields HTTP 400
+    /// "Request contains an invalid argument" (same as ytmusicapi #835).
     async fn browse_android_music(&self, browse_id: &str) -> Result<Value> {
         let body = json!({
             "browseId": browse_id,
@@ -431,31 +446,29 @@ impl InnerTube {
                     "clientVersion": ANDROID_MUSIC_VERSION,
                     "hl": self.lang,
                     "gl": self.region.to_uppercase(),
+                    "androidSdkVersion": 34,
+                    "osName": "Android",
+                    "osVersion": "14",
                 }
             }
         });
-        let url = format!("https://music.youtube.com/youtubei/v1/browse?prettyPrint=false");
-        let mut req = self
+        let url = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false";
+        crate::diag::debug(format!(
+            "lyrics android browse {browse_id}: no-cookie ANDROID_MUSIC {ANDROID_MUSIC_VERSION}"
+        ));
+        let resp = self
             .http
-            .post(&url)
-            .header("User-Agent", "com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14; en_US)")
+            .post(url)
+            .header(
+                "User-Agent",
+                "com.google.android.apps.youtube.music/7.21.50 (Linux; U; Android 14; en_US)",
+            )
             .header("Content-Type", "application/json")
-            .header("Origin", ORIGIN)
-            .header("Referer", "https://music.youtube.com/")
             .header("X-YouTube-Client-Name", ANDROID_MUSIC_CLIENT_ID)
             .header("X-YouTube-Client-Version", ANDROID_MUSIC_VERSION)
-            .header("X-Origin", ORIGIN);
-        if let Some(c) = &self.cookie {
-            req = req.header("Cookie", c);
-            if let Some(sap) = sapisid_from_header(c) {
-                req = req.header("Authorization", sapisidhash_now(&sap));
-            }
-            req = req.header("X-Goog-AuthUser", "0");
-            if let Some(v) = crate::auth::header_value(c, "VISITOR_INFO1_LIVE") {
-                req = req.header("X-Goog-Visitor-Id", v);
-            }
-        }
-        let resp = req.json(&body).send().await?;
+            .json(&body)
+            .send()
+            .await?;
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         crate::diag::log(format!(
@@ -463,8 +476,22 @@ impl InnerTube {
             text.len()
         ));
         if !status.is_success() {
-            return Err(anyhow!("innertube browse(android): HTTP {status}"));
+            let reason = crate::diag::yt_error_reason(&text);
+            crate::diag::soft_fail(
+                "lyrics",
+                format!("android browse {browse_id} HTTP {status} reason={reason}"),
+            );
+            crate::diag::debug(format!(
+                "lyrics android raw ({}b): {}",
+                text.len(),
+                text.chars().take(400).collect::<String>()
+            ));
+            return Err(anyhow!("innertube browse(android): HTTP {status} ({reason})"));
         }
+        crate::diag::debug(format!(
+            "lyrics android ok {browse_id}: timed={}",
+            text.contains("timedLyrics")
+        ));
         serde_json::from_str(&text).map_err(|e| anyhow!("innertube json: {e}"))
     }
 }
@@ -1486,7 +1513,21 @@ impl InnerTube {
     /// Browse a library / likes page and collect tracks, playlists, albums, artists.
     pub async fn library_browse(&self, browse_id: &str) -> Result<(Vec<Track>, Vec<PlaylistCard>, Vec<ArtistCard>)> {
         let v = self.browse(browse_id, None).await?;
-        Ok(parse_library_page(&v))
+        let (tracks, cards, artists) = parse_library_page(&v);
+        crate::diag::debug(format!(
+            "library_browse {browse_id}: tracks={} cards={} artists={} body≈{}b",
+            tracks.len(),
+            cards.len(),
+            artists.len(),
+            v.to_string().len()
+        ));
+        if tracks.is_empty() && cards.is_empty() && artists.is_empty() {
+            crate::diag::soft_fail(
+                "library",
+                format!("{browse_id}: parsed empty (HTTP ok) - check renderer shapes"),
+            );
+        }
+        Ok((tracks, cards, artists))
     }
 }
 
