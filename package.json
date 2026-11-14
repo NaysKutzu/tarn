@@ -9,6 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "build:ci": "tauri build",
+    "build:linux:ci": "tauri build --bundles deb,rpm,appimage",
+    "build:macos:ci": "tauri build --bundles app",
     "probe": "cargo run --release --manifest-path src-tauri/Cargo.toml --bin probe --",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
