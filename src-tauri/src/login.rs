@@ -1,5 +1,7 @@
 //! Isolated sign-in webview. Cookie values are never logged.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,12 +21,19 @@ const LOGIN_LABEL: &str = "login";
 /// accounts.google.com → music.youtube.com after a successful sign-in.
 const LOGIN_URL: &str = "https://accounts.google.com/ServiceLogin?service=youtube&passive=true&continue=https%3A%2F%2Fmusic.youtube.com%2F&followup=https%3A%2F%2Fmusic.youtube.com%2F&hl=en";
 
+type OnSession = Arc<
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync,
+>;
+
 /// `on_session` is called with the Cookie header once a complete session is
 /// captured. It should persist the session and verify it (account menu).
 /// Return `Ok` to close the window; `Err` to keep polling.
 pub fn open_login(
     app: AppHandle,
-    on_session: impl Fn(String) -> Result<(), String> + Send + Sync + 'static,
+    on_session: impl Fn(String) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
+        + Send
+        + Sync
+        + 'static,
 ) -> Result<()> {
     if let Some(w) = app.get_webview_window(LOGIN_LABEL) {
         let _ = w.set_focus();
@@ -32,7 +41,7 @@ pub fn open_login(
     }
 
     let done = Arc::new(AtomicBool::new(false));
-    let on_session = Arc::new(on_session);
+    let on_session: OnSession = Arc::new(on_session);
     let app_for_load = app.clone();
     let done_for_load = done.clone();
     let on_for_load = on_session.clone();
@@ -109,7 +118,7 @@ pub fn open_login(
 async fn poll_for_session(
     window: tauri::WebviewWindow,
     done: Arc<AtomicBool>,
-    on_session: Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>,
+    on_session: OnSession,
     app: AppHandle,
 ) {
     // Up to ~45s of polling after we land on music.youtube.com.
@@ -166,7 +175,9 @@ async fn poll_for_session(
             names.len(),
             names
         ));
-        match on_session(header) {
+        // Await apply on this task — never block_on / recv from the async
+        // runtime (that used to deadlock and leave the window open).
+        match on_session(header).await {
             Ok(()) => {
                 if done.swap(true, Ordering::SeqCst) {
                     return;

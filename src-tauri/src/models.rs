@@ -29,6 +29,9 @@ pub struct PlaylistCard {
     pub id: String,
     pub name: String,
     pub cover: Option<String>,
+    /// Up to 4 track covers for a 2×2 mosaic when there's no custom art.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub covers: Vec<String>,
     pub track_count: Option<u64>,
     pub subtitle: Option<String>,
     pub year: Option<u16>,

@@ -21,6 +21,8 @@ export interface PlaylistCard {
   id: string;
   name: string;
   cover: string | null;
+  /** Up to 4 track covers for a 2×2 mosaic when there's no custom art. */
+  covers?: string[];
   track_count: number | null;
   subtitle: string | null;
   year: number | null;

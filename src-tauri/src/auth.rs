@@ -156,18 +156,52 @@ pub fn merge_set_cookie(header: &str, set_cookie: &str) -> String {
     parts.join("; ")
 }
 
+/// Prefer music/youtube domains over google.com when the jar has duplicates.
+/// SAPISIDHASH for music.youtube.com must use the .youtube.com SAPISID; the
+/// .google.com twin silently fails auth and account_menu returns the
+/// "Get Music Premium" promo instead of the real profile.
+fn cookie_domain_rank(domain: &str) -> u8 {
+    let d = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    if d == "music.youtube.com" || d.ends_with(".music.youtube.com") {
+        3
+    } else if d == "youtube.com" || d.ends_with(".youtube.com") {
+        2
+    } else if d == "google.com" || d.ends_with(".google.com") {
+        1
+    } else {
+        0
+    }
+}
+
 /// Cookie request header (`Name=Value; Name2=Value2`).
 pub fn to_header(cookies: &[CookieRec]) -> String {
-    let mut seen = std::collections::HashSet::new();
-    let mut parts = Vec::new();
+    let mut best: std::collections::HashMap<String, &CookieRec> =
+        std::collections::HashMap::new();
     for c in cookies {
-        if !is_youtube_related(&c.domain) {
+        if !is_youtube_related(&c.domain) || c.name.is_empty() {
             continue;
         }
-        if c.name.is_empty() || !seen.insert(c.name.clone()) {
+        match best.get(&c.name) {
+            None => {
+                best.insert(c.name.clone(), c);
+            }
+            Some(prev) => {
+                if cookie_domain_rank(&c.domain) > cookie_domain_rank(&prev.domain) {
+                    best.insert(c.name.clone(), c);
+                }
+            }
+        }
+    }
+    // Stable-ish order: keep first-seen name order from the input list.
+    let mut parts = Vec::new();
+    let mut emitted = std::collections::HashSet::new();
+    for c in cookies {
+        if !emitted.insert(c.name.clone()) {
             continue;
         }
-        parts.push(format!("{}={}", c.name, c.value));
+        if let Some(rec) = best.get(&c.name) {
+            parts.push(format!("{}={}", rec.name, rec.value));
+        }
     }
     parts.join("; ")
 }
@@ -500,6 +534,22 @@ mod tests {
         assert!(!h.contains("unrelated"));
         assert!(session_ready_from_header(&h));
         assert_eq!(cookie_names(&cookies), vec!["VISITOR_INFO1_LIVE", "SAPISID", "PREF", "unrelated"]);
+    }
+
+    #[test]
+    fn header_prefers_youtube_sapisid_over_google() {
+        let cookies = vec![
+            c("SAPISID", "google-sapi", ".google.com"),
+            c("SID", "google-sid", ".google.com"),
+            c("SAPISID", "yt-sapi", ".youtube.com"),
+            c("SID", "yt-sid", ".youtube.com"),
+            c("LOGIN_INFO", "li", ".youtube.com"),
+        ];
+        let h = to_header(&cookies);
+        assert!(h.contains("SAPISID=yt-sapi"), "got {h}");
+        assert!(!h.contains("google-sapi"), "got {h}");
+        assert!(h.contains("SID=yt-sid"), "got {h}");
+        assert_eq!(sapisid_from_header(&h).as_deref(), Some("yt-sapi"));
     }
 
     #[test]

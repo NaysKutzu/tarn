@@ -49,3 +49,10 @@ Thumbs.db
 # fetched at build time from official yt-dlp releases (Tauri sidecar)
 src-tauri/binaries/yt-dlp*
 !src-tauri/binaries/.gitkeep
+
+.claude/
+.cursor/
+.codex/
+AGENTS.md
+CLAUDE.md
+package-lock.json

@@ -11,6 +11,7 @@
   import { artistsLine, fmtCount, fmtTime, shareUrl } from './lib/format';
   import { paintAccent } from './lib/contrast';
   import Cover from './lib/components/Cover.svelte';
+  import PlaylistCover from './lib/components/PlaylistCover.svelte';
   import Hi from './lib/components/Hi.svelte';
   import IconBtn from './lib/components/IconBtn.svelte';
   import ShelfRow from './lib/components/ShelfRow.svelte';
@@ -775,7 +776,7 @@
         <div class="side-label">Playlists</div>
         {#each library.playlists as p}
           <button class="side-pl" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
-            <Cover src={p.cover} size={36} alt="" />
+            <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={36} alt="" />
             <span class="clamp one">{p.name}</span>
           </button>
         {/each}
@@ -969,7 +970,7 @@
               <div class="row">
                 {#each results.playlists as p}
                   <button class="card" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
-                    <div class="art"><Cover src={p.cover} size={152} alt="" /></div>
+                    <div class="art"><PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" /></div>
                     <div class="c-a"><div class="title">{p.name}</div><div class="sub">{p.subtitle || ''}</div></div>
                   </button>
                 {/each}
@@ -980,7 +981,7 @@
             <div class="row">
               {#each results.community as p}
                 <button class="card" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
-                  <div class="art"><Cover src={p.cover} size={152} alt="" /></div>
+                  <div class="art"><PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" /></div>
                   <div class="c-a"><div class="title">{p.name}</div><div class="sub">{p.subtitle || ''}</div></div>
                 </button>
               {/each}
@@ -1040,7 +1041,7 @@
             <div class="row">
               {#each library.playlists as p}
                 <button class="card" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
-                  <div class="art"><Cover src={p.cover} size={152} alt="" /></div>
+                  <div class="art"><PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" /></div>
                   <div class="c-a"><div class="title">{p.name}</div><div class="sub">{p.track_count ? `${p.track_count}` : ''}</div></div>
                 </button>
               {/each}
@@ -1156,7 +1157,7 @@
           <div class="row">
             {#each artist.playlists as p}
               <button class="card" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
-                <div class="art"><Cover src={p.cover} size={152} alt="" /></div>
+                <div class="art"><PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" /></div>
                 <div class="c-a"><div class="title">{p.name}</div></div>
               </button>
             {/each}

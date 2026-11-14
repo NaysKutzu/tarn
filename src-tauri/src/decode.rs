@@ -530,16 +530,23 @@ impl AudioSource {
         if start <= 0.05 {
             return Ok(());
         }
-        // Fetch the range around the playhead before asking the demuxer to
-        // seek. Sequential download will catch up; we wait for those bytes
-        // (not the entire file) and reopen as seekable so the sidx jump works.
-        let needed = self.body.bytes_for_secs(start).saturating_add(READY_BYTES);
+        // force_seekable advertises the full content_len; the ISO-MP4 demuxer
+        // then scans to EOF during probe. Waiting only for the playhead range
+        // still underruns at the tail ("probe: audio underrun" → Can't play).
+        // Hold the seekable open until the body is complete.
+        let needed = self
+            .body
+            .content_len()
+            .map(|n| n as usize)
+            .unwrap_or_else(|| self.body.bytes_for_secs(start).saturating_add(READY_BYTES));
         self.body.request_urgent(needed as u64);
         eprintln!(
             "seek: waiting for ~{needed} bytes at {start:.2}s (have {})",
             self.body.len()
         );
-        let _ = self.body.wait_len(needed, Duration::from_secs(30));
+        self.body
+            .wait_len(needed, Duration::from_secs(120))
+            .map_err(|e| anyhow!("seek: {e}"))?;
         if self.body.error().is_some() {
             return Err(anyhow!(
                 "seek: {}",
@@ -599,14 +606,18 @@ impl AudioSource {
         if self.reopens >= 8 {
             return false;
         }
+        // Seekable reopen probes with full content_len; only do it once the
+        // body is complete or the probe underruns at the unread tail.
+        if !self.body.is_complete() {
+            return false;
+        }
         let pos = self.playhead();
         let dur = self.body.duration().unwrap_or(0.0);
         let early = dur > 2.0 && pos + 1.5 < dur;
         if ended {
-            // Demuxer said EOF well before the track's duration, or while
-            // the download is still going — almost certainly a fragment
-            // boundary, not the real end.
-            return early || !self.body.is_complete();
+            // Demuxer said EOF well before the track's duration — almost
+            // certainly a fragment boundary, not the real end.
+            return early;
         }
         // Underrun only if many seconds of audio are already sitting in
         // the body past the playhead (stuck demuxer, not a real wait).

@@ -331,7 +331,7 @@ html { color-scheme: dark; }
   font-weight: 500;
 }
 .side-pl:hover { background: var(--bg-hover); color: var(--text); }
-.side-pl img, .side-pl .ph {
+.side-pl img, .side-pl .ph, .side-pl .mosaic, .side-pl .special {
   width: 36px;
   height: 36px;
   border-radius: 6px;
@@ -507,7 +507,9 @@ html { color-scheme: dark; }
   flex: 0 0 152px;
 }
 .card .art img,
-.card .art .ph {
+.card .art .ph,
+.card .art .mosaic,
+.card .art .special {
   display: block;
   width: 100%;
   height: 100%;

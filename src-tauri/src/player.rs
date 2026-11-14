@@ -731,7 +731,7 @@ fn audio_thread(
                 }
             }
             Ok(Cmd::Arm(audio, start)) => {
-                match make_source(audio, start) {
+                match make_source(audio.clone(), start) {
                     Ok(src) => {
                         let mut s = state.lock();
                         s.position = start;
@@ -742,8 +742,15 @@ fn audio_thread(
                     }
                     Err(e) => {
                         eprintln!("arm: {e}");
-                        state.lock().error = Some("Can't play this track".into());
-                        phase.store(0, Ordering::Relaxed);
+                        if !audio.is_complete() {
+                            // Still downloading — retry via recover instead of
+                            // sticking "Can't play" on a restore seek.
+                            buffering.store(true, Ordering::Relaxed);
+                            recover.store(true, Ordering::SeqCst);
+                        } else {
+                            state.lock().error = Some("Can't play this track".into());
+                            phase.store(0, Ordering::Relaxed);
+                        }
                     }
                 }
             }

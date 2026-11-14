@@ -203,6 +203,12 @@ async fn restore_session(app: &App) {
                     return;
                 }
                 let account = app.ytm.account().await.ok().flatten();
+                if account.is_none() {
+                    eprintln!("restore session: account menu looks logged out; clearing");
+                    let _ = app.ytm.set_cookie_header(None).await;
+                    let _ = app.store.clear();
+                    return;
+                }
                 let mut a = app.auth.lock();
                 a.signed_in = true;
                 a.mock = false;
@@ -861,18 +867,11 @@ async fn open_login(app: State<'_, Arc<App>>, handle: AppHandle) -> Result<(), S
     let app_ref = app.inner().clone();
     login::open_login(handle, move |header| {
         let app_ref = app_ref.clone();
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        tauri::async_runtime::spawn(async move {
-            let r = apply_session(&app_ref, header)
+        Box::pin(async move {
+            apply_session(&app_ref, header)
                 .await
-                .map_err(|e| e.to_string());
-            let _ = tx.send(r);
-        });
-        match rx.recv_timeout(std::time::Duration::from_secs(25)) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err("timed out applying session".into()),
-        }
+                .map_err(|e| e.to_string())
+        })
     })
     .map_err(|e| e.to_string())
 }
@@ -891,10 +890,16 @@ async fn apply_session(app: &App, header: String) -> anyhow::Result<()> {
         "apply_session: account={}",
         account.as_ref().map(|a| a.name.as_str()).unwrap_or("(none)")
     ));
+    // account_menu can 200 with only the Premium CTA when SAPISIDHASH used
+    // the wrong-domain cookie. Keep the login window open and retry.
+    let Some(account) = account else {
+        let _ = app.ytm.set_cookie_header(None).await;
+        anyhow::bail!("account menu looks logged out; retrying with fresher cookies");
+    };
     let mut a = app.auth.lock();
     a.signed_in = true;
     a.mock = false;
-    a.account = account;
+    a.account = Some(account);
     a.store = Some(match kind {
         auth::StoreKind::Keyring => "keyring".into(),
         auth::StoreKind::EncryptedFile => "encrypted_file".into(),

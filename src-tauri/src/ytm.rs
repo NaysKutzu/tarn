@@ -91,7 +91,7 @@ impl Ytm {
 
     pub fn prewarm_players(&self) {
         let players = self.players.clone();
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             players.prewarm().await;
         });
     }
@@ -1116,6 +1116,7 @@ impl Ytm {
                 Err(e) => crate::diag::log(format!("library innertube history: {e}")),
             }
         }
+        self.enrich_playlist_covers(&mut lib.playlists).await;
         self.harvest_cookies();
         crate::diag::log(format!(
             "library done: liked={} playlists={} albums={} artists={} recents={}",
@@ -1136,6 +1137,77 @@ impl Ytm {
             .await
             .map_err(|e| anyhow!("{e}"))?;
         Ok(h.items.iter().map(|hi| track_from(&hi.item)).collect())
+    }
+
+    /// Fill missing / mixart playlist covers from the first tracks (2×2 mosaic).
+    async fn enrich_playlist_covers(&self, playlists: &mut [PlaylistCard]) {
+        for p in playlists.iter_mut() {
+            let pid = p.id.trim_start_matches("VL");
+            // YTM system playlists — UI draws a fixed icon, skip mosaic fetch.
+            if pid == "LM" || pid == "SE" {
+                p.cover = None;
+                p.covers.clear();
+                continue;
+            }
+            if p.covers.len() >= 2 {
+                if p.cover.is_none() {
+                    p.cover = p.covers.first().cloned();
+                }
+                continue;
+            }
+            // One real custom cover is enough — don't fetch the whole playlist.
+            if p.covers.is_empty() && p.cover.as_deref().is_some_and(usable_cover) {
+                continue;
+            }
+            match self.playlist_cover_tiles(&p.id).await {
+                Ok(tiles) if !tiles.is_empty() => {
+                    if p.cover.as_deref().is_none_or(|u| !usable_cover(u)) {
+                        p.cover = tiles.first().cloned();
+                    }
+                    if tiles.len() >= 2 {
+                        p.covers = tiles;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => crate::diag::log(format!("playlist cover {}: {e}", p.id)),
+            }
+        }
+    }
+
+    async fn playlist_cover_tiles(&self, id: &str) -> Result<Vec<String>> {
+        let p = self
+            .rp
+            .query()
+            .music_playlist(id)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+        let from_header = mosaic_covers(&p.thumbnail);
+        if from_header.len() >= 2 {
+            return Ok(from_header);
+        }
+        if let Some(c) = best_thumb(&p.thumbnail) {
+            if usable_cover(&c) && from_header.is_empty() {
+                // Single custom art on the playlist itself.
+                return Ok(vec![c]);
+            }
+        }
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for t in p.tracks.items.iter().take(12) {
+            if let Some(c) = best_thumb(&t.cover) {
+                let key = thumb_dedupe_key(&c);
+                if seen.insert(key) {
+                    out.push(c);
+                    if out.len() == 4 {
+                        break;
+                    }
+                }
+            }
+        }
+        if out.is_empty() {
+            out = from_header;
+        }
+        Ok(out)
     }
 
     /// Resolve a playable audio stream URL.
@@ -1662,10 +1734,16 @@ fn artist_from(a: &ArtistItem) -> ArtistCard {
 }
 
 fn playlist_from(p: &MusicPlaylistItem) -> PlaylistCard {
+    let covers = mosaic_covers(&p.thumbnail);
+    let cover = covers
+        .first()
+        .cloned()
+        .or_else(|| best_thumb(&p.thumbnail).filter(|u| usable_cover(u)));
     PlaylistCard {
         id: p.id.clone(),
         name: p.name.clone(),
-        cover: best_thumb(&p.thumbnail),
+        cover,
+        covers,
         track_count: p.track_count,
         subtitle: p.channel.as_ref().map(|c| c.name.clone()),
         author: p.channel.as_ref().map(|c| c.name.clone()),
@@ -1786,8 +1864,56 @@ fn argb_to_hex(c: u32) -> String {
 }
 
 fn best_thumb(thumbs: &[Thumbnail]) -> Option<String> {
-    let t = thumbs.iter().max_by_key(|t| t.width.max(t.height))?;
-    Some(upgrade_cover(&t.url))
+    // Prefer a mid/large candidate from the API — do not rewrite size here.
+    // Aggressive =w512 upgrades often 404; the frontend sizedCover handles DPR.
+    let t = thumbs
+        .iter()
+        .filter(|t| usable_cover(&t.url))
+        .max_by_key(|t| t.width.max(t.height))?;
+    Some(t.url.clone())
+}
+
+/// True when the URL can load in the Tauri webview without YTM cookies.
+fn usable_cover(url: &str) -> bool {
+    if url.is_empty() || !url.starts_with("http") {
+        return false;
+    }
+    // Needs music.youtube.com session cookies — broken in the app webview.
+    if url.contains("music.youtube.com/image/") || url.contains("/mixart") {
+        return false;
+    }
+    true
+}
+
+/// Distinct cover tiles for a playlist mosaic (max 4).
+fn mosaic_covers(thumbs: &[Thumbnail]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for t in thumbs {
+        if !usable_cover(&t.url) {
+            continue;
+        }
+        let key = thumb_dedupe_key(&t.url);
+        if seen.insert(key) {
+            out.push(t.url.clone());
+            if out.len() == 4 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn thumb_dedupe_key(url: &str) -> String {
+    // i.ytimg.com/vi/VIDEO_ID/... → prefer one tile per video
+    if let Some(rest) = url.split("/vi/").nth(1) {
+        if let Some(id) = rest.split('/').next() {
+            if id.len() == 11 {
+                return id.to_string();
+            }
+        }
+    }
+    url.split('?').next().unwrap_or(url).to_string()
 }
 
 fn best_thumb_wide(thumbs: &[Thumbnail]) -> Option<String> {
@@ -1815,7 +1941,21 @@ fn resize_yt3(url: &str, size: u32) -> String {
 }
 
 pub fn upgrade_cover(url: &str) -> String {
+    // Signed / special playlist paths break if rewritten.
+    if url.contains("sqp=") || url.contains("/pl_c/") || url.contains("/s_p/") {
+        return url.to_string();
+    }
+    if url.contains("music.youtube.com/image/") || url.contains("/mixart") {
+        return url.to_string();
+    }
     if is_yt3(url) {
+        // Avatars use =sN-c-k-…; playlist/album art on yt3 uses =wN-hN-…
+        if url.contains("-c-k-") {
+            return resize_yt3(url, 512);
+        }
+        if let Some(i) = url.rfind('=') {
+            return format!("{}=w512-h512-l90-rj", &url[..i]);
+        }
         return resize_yt3(url, 512);
     }
     if url.contains("googleusercontent.com") || url.contains("ggpht.com") {

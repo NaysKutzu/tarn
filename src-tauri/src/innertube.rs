@@ -10,7 +10,7 @@ use crate::models::{
     AccountInfo, ArtistCard, Explore, Home, LikeState, LyricLine, Lyrics, MoodChip, PlaylistCard,
     Shelf, ShelfItem, Track,
 };
-use crate::ytm::{upgrade_cover, user_agent};
+use crate::ytm::user_agent;
 
 const ORIGIN: &str = "https://music.youtube.com";
 const CLIENT_NAME: &str = "WEB_REMIX";
@@ -815,6 +815,16 @@ fn parse_chips(v: &Value) -> Vec<MoodChip> {
     out
 }
 
+fn is_promo_account_name(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    n.is_empty()
+        || n.contains("premium")
+        || n.contains("sign in")
+        || n.contains("log in")
+        || n.contains("upgrade")
+        || n == "guest"
+}
+
 fn parse_account(v: &Value) -> Option<AccountInfo> {
     let mut name = None;
     let mut photo = None;
@@ -823,7 +833,11 @@ fn parse_account(v: &Value) -> Option<AccountInfo> {
     walk(v, &mut |key, val| {
         if key == "accountName" || key == "accountNameButtonRenderer" {
             if name.is_none() {
-                name = yt_text(val);
+                if let Some(t) = yt_text(val) {
+                    if !is_promo_account_name(&t) {
+                        name = Some(t);
+                    }
+                }
             }
         }
         if page_id.is_none() && (key == "pageId" || key == "onBehalfOfUser") {
@@ -838,7 +852,7 @@ fn parse_account(v: &Value) -> Option<AccountInfo> {
                 photo = thumb_of(val).or_else(|| {
                     val.as_array()
                         .and_then(|a| a.last())
-                        .and_then(|t| t["url"].as_str().map(|s| upgrade_cover(s)))
+                        .and_then(|t| t["url"].as_str().map(|s| s.to_string()))
                 });
             }
         }
@@ -853,14 +867,16 @@ fn parse_account(v: &Value) -> Option<AccountInfo> {
         walk(v, &mut |key, val| {
             if name.is_none() && key == "runs" {
                 if let Some(t) = yt_text(&json!({"runs": val.clone()})) {
-                    if t.len() < 80 && !t.contains("http") {
+                    if t.len() < 80 && !t.contains("http") && !is_promo_account_name(&t) {
                         name = Some(t);
                     }
                 }
             }
         });
     }
-    name.map(|name| AccountInfo {
+    // Logged-out account_menu often only has the Premium CTA — treat as no account.
+    let name = name.filter(|n| !is_promo_account_name(n))?;
+    Some(AccountInfo {
         name,
         photo,
         handle,
@@ -1056,7 +1072,10 @@ fn thumb_of(v: &Value) -> Option<String> {
             if let Some(arr) = val.as_array() {
                 for t in arr {
                     if let Some(url) = t["url"].as_str() {
-                        if url.starts_with("http") {
+                        if url.starts_with("http")
+                            && !url.contains("music.youtube.com/image/")
+                            && !url.contains("/mixart")
+                        {
                             let w = t["width"].as_u64().unwrap_or(0)
                                 + t["height"].as_u64().unwrap_or(0);
                             if best.as_ref().map(|(bw, _)| w > *bw).unwrap_or(true) {
@@ -1068,7 +1087,9 @@ fn thumb_of(v: &Value) -> Option<String> {
             }
         }
     });
-    best.map(|(_, u)| upgrade_cover(&u))
+    // Keep the API URL as-is; frontend sizedCover picks a display size.
+    // Rewriting to =w512 here used to 404 many album arts.
+    best.map(|(_, u)| u)
 }
 
 fn video_id_of(v: &Value) -> Option<String> {
@@ -1407,7 +1428,9 @@ pub fn parse_library_page(v: &Value) -> (Vec<Track>, Vec<PlaylistCard>, Vec<Arti
                     extra_pls.push(crate::models::PlaylistCard {
                         id: item.id.clone(),
                         name: item.title.clone(),
-                        cover: item.cover.clone(),
+                        cover: item.cover.clone().filter(|u| {
+                            !u.contains("music.youtube.com/image/") && !u.contains("/mixart")
+                        }),
                         subtitle: item.subtitle.clone(),
                         browse_id: item.browse_id.clone(),
                         year: item.year,
@@ -1417,6 +1440,7 @@ pub fn parse_library_page(v: &Value) -> (Vec<Track>, Vec<PlaylistCard>, Vec<Arti
                         from_ytm: Some(true),
                         color: item.color.clone(),
                         params: item.params.clone(),
+                        ..Default::default()
                     });
                 }
             }
@@ -1437,7 +1461,9 @@ pub fn parse_library_page(v: &Value) -> (Vec<Track>, Vec<PlaylistCard>, Vec<Arti
                     playlists.push(crate::models::PlaylistCard {
                         id: i.id.clone(),
                         name: i.title.clone(),
-                        cover: i.cover.clone(),
+                        cover: i.cover.clone().filter(|u| {
+                            !u.contains("music.youtube.com/image/") && !u.contains("/mixart")
+                        }),
                         subtitle: i.subtitle.clone(),
                         browse_id: i.browse_id.clone(),
                         year: i.year,
@@ -1447,6 +1473,7 @@ pub fn parse_library_page(v: &Value) -> (Vec<Track>, Vec<PlaylistCard>, Vec<Arti
                         from_ytm: Some(true),
                         color: i.color.clone(),
                         params: i.params.clone(),
+                        ..Default::default()
                     });
                 }
                 "artist" => {

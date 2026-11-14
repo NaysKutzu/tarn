@@ -7,20 +7,43 @@ export function sizedCover(url: string | null | undefined, w: number, h?: number
   if (!url) return '';
   const width = Math.round(w);
   const height = Math.round(h ?? w);
-  // Channel avatars on yt3 only accept =sN-c-k-…; the album-art
-  // =wN-hN-l90-rj suffix 404s and shows as a broken image.
+  // Signed / special paths break if rewritten; mixart needs YTM cookies.
+  if (
+    url.includes('sqp=') ||
+    url.includes('/pl_c/') ||
+    url.includes('/s_p/') ||
+    url.includes('/mixart') ||
+    url.includes('music.youtube.com/image/')
+  ) {
+    return url;
+  }
+  // Channel avatars on yt3 only accept =sN-c-k-…; playlist/album art on
+  // yt3 uses =wN-hN-l90-rj (avatar suffix 404s those).
   if (isYt3(url)) {
     const i = url.lastIndexOf('=');
     const base = i >= 0 ? url.slice(0, i) : url;
-    const s = Math.max(width, height);
-    return `${base}=s${s}-c-k-c0x00ffffff-no-rj`;
+    if (url.includes('-c-k-') || /[=/]s\d+/.test(url)) {
+      const s = Math.max(width, height);
+      return `${base}=s${s}-c-k-c0x00ffffff-no-rj`;
+    }
+    return `${base}=w${width}-h${height}-l90-rj`;
   }
   if (url.includes('googleusercontent.com') || url.includes('ggpht.com')) {
     const i = url.lastIndexOf('=');
-    if (i >= 0) return `${url.slice(0, i)}=w${width}-h${height}-l90-rj`;
+    if (i < 0) return url;
+    const suffix = url.slice(i + 1);
+    // Avatar-style size token — keep sN, don't force w/h.
+    if (suffix.startsWith('s') && (suffix.includes('-c-k-') || suffix.includes('-c-c0x'))) {
+      const s = Math.max(width, height);
+      return `${url.slice(0, i)}=s${s}-c-k-c0x00ffffff-no-rj`;
+    }
+    // Cap DPR rewrites — huge w/h on small assets 404s for some album arts.
+    const tw = Math.min(width, 544);
+    const th = Math.min(height, 544);
+    return `${url.slice(0, i)}=w${tw}-h${th}-l90-rj`;
   }
   if (url.includes('i.ytimg.com')) {
-    if (width >= 1280) return swapYt(url, 'maxresdefault');
+    // maxresdefault 404s for many videos — prefer hq which almost always exists.
     if (width >= 480) return swapYt(url, 'hqdefault');
     if (width >= 320) return swapYt(url, 'mqdefault');
   }

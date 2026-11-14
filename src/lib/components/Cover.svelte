@@ -30,20 +30,34 @@
 
   let broken = $state(false);
   let useOrig = $state(false);
+  let fallback = $state<string | null>(null);
 
   $effect(() => {
     void src;
     broken = false;
     useOrig = false;
+    fallback = null;
   });
 
-  let shown = $derived(useOrig && src ? src : srcUrl);
-  let shownSet = $derived(useOrig ? '' : srcset);
+  let shown = $derived(fallback || (useOrig && src ? src : srcUrl));
+  let shownSet = $derived(fallback || useOrig ? '' : srcset);
+  let empty = $derived(!src);
 
   function onErr() {
-    if (!useOrig && src && shown !== src) {
+    // Rewritten size failed — try the original URL from the API.
+    if (!useOrig && !fallback && src && shown !== src) {
       useOrig = true;
       return;
+    }
+    // Some videos have no hq/maxres — step down the i.ytimg quality ladder.
+    if (src?.includes('i.ytimg.com') && !fallback) {
+      const lower = src
+        .replace(/\/(maxresdefault|hq720|sddefault|hqdefault)\.jpg/, '/mqdefault.jpg')
+        .replace(/\/mqdefault\.jpg/, '/default.jpg');
+      if (lower !== shown) {
+        fallback = lower;
+        return;
+      }
     }
     broken = true;
   }
@@ -59,9 +73,28 @@
     src={shown}
     srcset={shownSet}
     sizes="{w}px"
+    referrerpolicy="no-referrer"
     draggable="false"
     onerror={onErr}
   />
 {:else}
-  <div class="ph {cls}" class:round style="width:{w}px;height:{h}px" aria-hidden="true"></div>
+  <div
+    class="ph {cls}"
+    class:round
+    class:ask={broken || empty}
+    style="width:{w}px;height:{h}px"
+    aria-hidden="true"
+  >{#if broken || empty}?{/if}</div>
 {/if}
+
+<style>
+  .ph.ask {
+    display: grid;
+    place-items: center;
+    color: var(--text-3, #6b7280);
+    font-size: clamp(12px, 40%, 28px);
+    font-weight: 600;
+    line-height: 1;
+    user-select: none;
+  }
+</style>
