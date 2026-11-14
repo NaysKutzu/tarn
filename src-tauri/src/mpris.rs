@@ -174,9 +174,8 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
 
     eprintln!("media controls: registered (MPRIS name org.mpris.MediaPlayer2.tarn / SMTC)");
 
-    // Publish an initial Stopped state so the player is visible to
-    // playerctl / GNOME / SMTC before the first track is chosen.
-    let _ = controls.set_playback(MediaPlayback::Stopped);
+    // Paused (not Stopped) so OS media keys are routed to us before play.
+    let _ = controls.set_playback(MediaPlayback::Paused { progress: None });
     let _ = controls.set_metadata(MediaMetadata {
         title: Some("Tarn"),
         artist: Some(""),
@@ -225,10 +224,8 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
             )));
             let _ = controls.set_playback(if playing {
                 MediaPlayback::Playing { progress }
-            } else if snap.track.is_some() {
-                MediaPlayback::Paused { progress }
             } else {
-                MediaPlayback::Stopped
+                MediaPlayback::Paused { progress }
             });
             last_id = id;
             last_playing = Some(playing);
@@ -267,7 +264,11 @@ fn maybe_notify(app: &crate::App, t: &Track) {
 fn run_global_hotkeys(app: Arc<crate::App>) -> Result<(), String> {
     use global_hotkey::hotkey::{Code, HotKey, Modifiers};
     use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+    use souvlaki::MediaControlEvent;
 
+    // On Windows, GlobalHotKeyManager creates an HWND and RegisterHotKey posts
+    // WM_HOTKEY to *this* thread. Blocking on the channel without a message
+    // pump means the WndProc never runs and keys appear "registered" but dead.
     let manager = GlobalHotKeyManager::new().map_err(|e| format!("init: {e}"))?;
     let play = HotKey::new(None::<Modifiers>, Code::MediaPlayPause);
     let stop = HotKey::new(None::<Modifiers>, Code::MediaStop);
@@ -291,40 +292,75 @@ fn run_global_hotkeys(app: Arc<crate::App>) -> Result<(), String> {
         }
     }
 
+    let map = |id: u32| -> Option<MediaControlEvent> {
+        if id == play.id() || id == play2.id() {
+            Some(MediaControlEvent::Toggle)
+        } else if id == pause2.id() {
+            Some(MediaControlEvent::Pause)
+        } else if id == stop.id() {
+            Some(MediaControlEvent::Stop)
+        } else if id == next.id() {
+            Some(MediaControlEvent::Next)
+        } else if id == prev.id() {
+            Some(MediaControlEvent::Previous)
+        } else {
+            None
+        }
+    };
+
     let rx = GlobalHotKeyEvent::receiver();
     let mut last = std::time::Instant::now() - Duration::from_secs(1);
-    for ev in rx {
-        if ev.state != HotKeyState::Pressed {
-            continue;
+
+    #[cfg(windows)]
+    {
+        loop {
+            win_pump::pump();
+            while let Ok(ev) = rx.try_recv() {
+                if ev.state != HotKeyState::Pressed {
+                    continue;
+                }
+                let Some(cmd) = map(ev.id) else {
+                    eprintln!("media key shortcuts: unknown id {}", ev.id);
+                    continue;
+                };
+                let now = std::time::Instant::now();
+                if now.duration_since(last) < Duration::from_millis(250) {
+                    eprintln!("media key: debounce skip {cmd:?}");
+                    continue;
+                }
+                last = now;
+                eprintln!("media key (global): {cmd:?}");
+                dispatch(&app, cmd);
+            }
+            std::thread::sleep(Duration::from_millis(8));
         }
-        use souvlaki::MediaControlEvent;
-        let cmd = if ev.id == play.id() || ev.id == play2.id() {
-            MediaControlEvent::Toggle
-        } else if ev.id == pause2.id() {
-            MediaControlEvent::Pause
-        } else if ev.id == stop.id() {
-            MediaControlEvent::Stop
-        } else if ev.id == next.id() {
-            MediaControlEvent::Next
-        } else if ev.id == prev.id() {
-            MediaControlEvent::Previous
-        } else {
-            eprintln!("media key shortcuts: unknown id {}", ev.id);
-            continue;
-        };
-        // Debounce so SMTC and the global hook don't double-fire.
-        let now = std::time::Instant::now();
-        if now.duration_since(last) < Duration::from_millis(250) {
-            eprintln!("media key: debounce skip {cmd:?}");
-            continue;
-        }
-        last = now;
-        eprintln!("media key (global): {cmd:?}");
-        dispatch(&app, cmd);
     }
+
+    #[cfg(not(windows))]
+    {
+        for ev in rx.iter() {
+            if ev.state != HotKeyState::Pressed {
+                continue;
+            }
+            let Some(cmd) = map(ev.id) else {
+                continue;
+            };
+            let now = std::time::Instant::now();
+            if now.duration_since(last) < Duration::from_millis(250) {
+                continue;
+            }
+            last = now;
+            eprintln!("media key (global): {cmd:?}");
+            dispatch(&app, cmd);
+        }
+    }
+
     // Keep the manager alive for the lifetime of the receiver loop.
-    drop(manager);
-    Ok(())
+    #[allow(unreachable_code)]
+    {
+        drop(manager);
+        Ok(())
+    }
 }
 
 
@@ -360,7 +396,9 @@ fn start_smtc_ui(
         })
         .map_err(|e| format!("SMTC attach: {e:?}"))?;
 
-    let _ = controls.set_playback(MediaPlayback::Stopped);
+    // Prefer Paused over Stopped so Windows routes hardware media keys to us
+    // even before the first track is armed (Stopped sessions swallow them).
+    let _ = controls.set_playback(MediaPlayback::Paused { progress: None });
     let _ = controls.set_metadata(MediaMetadata {
         title: Some("Tarn"),
         artist: Some(""),
@@ -427,13 +465,12 @@ fn start_smtc_ui(
                             snap.position.max(0.0),
                         )));
                         // SMTC ignores media keys unless status is Playing
-                        // or Paused (a Stopped session swallows them).
+                        // or Paused (a Stopped session swallows them). Keep
+                        // Paused with no track so keys still reach us.
                         let status = if playing {
                             MediaPlayback::Playing { progress }
-                        } else if snap.track.is_some() {
-                            MediaPlayback::Paused { progress }
                         } else {
-                            MediaPlayback::Stopped
+                            MediaPlayback::Paused { progress }
                         };
                         if let Err(e) = controls.set_playback(status) {
                             eprintln!("media controls: set_playback: {e:?}");
@@ -476,7 +513,7 @@ fn run_windows_smtc(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), Stri
         })
         .map_err(|e| format!("SMTC attach: {e:?}"))?;
 
-    let _ = controls.set_playback(MediaPlayback::Stopped);
+    let _ = controls.set_playback(MediaPlayback::Paused { progress: None });
     let _ = controls.set_metadata(MediaMetadata {
         title: Some("Tarn"),
         artist: Some(""),
@@ -531,14 +568,10 @@ fn smtc_update_loop(
             let progress = Some(souvlaki::MediaPosition(Duration::from_secs_f64(
                 snap.position.max(0.0),
             )));
-            // SMTC ignores media keys unless status is Playing or Paused
-            // (Stopped with no session swallows them). Always publish.
             let status = if playing {
                 MediaPlayback::Playing { progress }
-            } else if snap.track.is_some() {
-                MediaPlayback::Paused { progress }
             } else {
-                MediaPlayback::Stopped
+                MediaPlayback::Paused { progress }
             };
             if let Err(e) = controls.set_playback(status) {
                 eprintln!("media controls: set_playback: {e:?}");
@@ -597,10 +630,8 @@ fn smtc_update_loop_pumped(
             )));
             let status = if playing {
                 MediaPlayback::Playing { progress }
-            } else if snap.track.is_some() {
-                MediaPlayback::Paused { progress }
             } else {
-                MediaPlayback::Stopped
+                MediaPlayback::Paused { progress }
             };
             let _ = controls.set_playback(status);
             last_id = id;
