@@ -3,6 +3,7 @@ mod diag;
 mod cache;
 mod color;
 pub mod decode;
+mod eq;
 mod innertube;
 mod player_client;
 mod login;
@@ -70,8 +71,10 @@ impl App {
             settings.crossfade,
             settings.crossfade_seconds,
             settings.album_continuity,
+            settings.crossfade_manual,
         );
-        player.set_transition(settings.transition(), settings.crossfade_on_skip);
+        player.set_eq(settings.eq_bands, settings.eq_enabled);
+        player.set_transition(settings.transition());
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata — audio is armed later.
             player.set_volume(sess.volume);
@@ -352,7 +355,7 @@ pub(crate) async fn start_playback(
     queue: Vec<Track>,
     index: usize,
 ) -> Result<(), String> {
-    start_playback_at(app, track, queue, index, 0.0, false).await
+    start_playback_at(app, track, queue, index, 0.0, false, true).await
 }
 
 pub(crate) async fn start_playback_at(
@@ -362,6 +365,8 @@ pub(crate) async fn start_playback_at(
     index: usize,
     start: f64,
     paused: bool,
+    // True for Next/Prev/clicking a track; false for natural end advance.
+    manual: bool,
 ) -> Result<(), String> {
     let id = track.id.clone();
     let cover = track.cover.clone();
@@ -377,9 +382,7 @@ pub(crate) async fn start_playback_at(
     } else if same && start > 0.05 {
         crate::player::PlayStyle::Fresh
     } else if snap.playing && snap.track.is_some() {
-        if app.player.crossfade_on_skip()
-            && app.player.should_crossfade(snap.track.as_ref(), &track)
-        {
+        if app.player.should_crossfade(snap.track.as_ref(), &track, manual) {
             crate::player::PlayStyle::Crossfade(app.player.crossfade_secs())
         } else {
             crate::player::PlayStyle::Cut
@@ -513,7 +516,7 @@ async fn restore_playback(app: &App) {
             p
         }
     };
-    if let Err(e) = start_playback_at(app, track, queue, idx, pos, true).await {
+    if let Err(e) = start_playback_at(app, track, queue, idx, pos, true, false).await {
         eprintln!("restore playback: {e}");
     }
 }
@@ -716,7 +719,7 @@ pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
         NextChoice::Play(i) => {
             let (queue, _) = app.player.queue_and_index();
             if let Some(t) = queue.get(i).cloned() {
-                start_playback(app, t, queue, i).await
+                start_playback_at(app, t, queue, i, 0.0, false, user).await
             } else {
                 Ok(())
             }
@@ -747,7 +750,8 @@ pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
             let i = index + 1;
             if i < queue.len() {
                 let t = queue[i].clone();
-                start_playback(app, t, queue, i).await
+                // Autoplay continuation is a natural advance, not a user skip.
+                start_playback_at(app, t, queue, i, 0.0, false, user).await
             } else {
                 Ok(())
             }
@@ -966,9 +970,15 @@ fn set_settings(app: State<Arc<App>>, settings: Settings) {
         settings.crossfade,
         settings.crossfade_seconds,
         settings.album_continuity,
+        settings.crossfade_manual,
     );
-    app.player
-        .set_transition(settings.transition(), settings.crossfade_on_skip);
+    let mut bands = settings.eq_bands;
+    for g in bands.iter_mut() {
+        *g = g.clamp(-12.0, 12.0);
+    }
+    settings.eq_bands = bands;
+    app.player.set_eq(settings.eq_bands, settings.eq_enabled);
+    app.player.set_transition(settings.transition());
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
 }
@@ -1092,7 +1102,7 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
                         track.id, pos
                     );
                     app2.ytm.invalidate(&track.id);
-                    let r = start_playback_at(&app2, track, queue, index, pos, !play).await;
+                    let r = start_playback_at(&app2, track, queue, index, pos, !play, false).await;
                     app2.player.recover_finished();
                     if let Err(e) = r {
                         eprintln!("recover failed: {e}; not advancing");
@@ -1333,7 +1343,7 @@ mod settings_tests {
         // Missing keys must reproduce the classic equal-power blend.
         assert_eq!(t.shape, crate::transition::XfShape::equal_power(4.0));
         assert!(!t.smart && !t.bpm_match);
-        assert!(s.crossfade_on_skip);
+        assert!(s.crossfade_manual);
         // New keys round-trip.
         let mut c = s.clone();
         c.crossfade_curve_in = "s_curve".into();

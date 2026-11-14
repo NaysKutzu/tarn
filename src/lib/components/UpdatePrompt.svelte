@@ -19,6 +19,8 @@
   let update: Awaited<ReturnType<typeof import('@tauri-apps/plugin-updater').check>> = null;
   let lastRequest = 0;
 
+  const isDev = import.meta.env.DEV;
+
   async function load() {
     try {
       const { check } = await import('@tauri-apps/plugin-updater');
@@ -30,6 +32,11 @@
 
   async function run(manual: boolean) {
     err = '';
+    // Never auto-prompt (or install) updates while running `tauri dev`.
+    if (isDev) {
+      if (manual) toast('Updates are off in development');
+      return;
+    }
     const u = await load();
     update = u;
     if (!u) {
@@ -83,6 +90,7 @@
   }
 
   onMount(() => {
+    if (isDev) return;
     const t = setTimeout(() => run(false), 4000);
     return () => clearTimeout(t);
   });

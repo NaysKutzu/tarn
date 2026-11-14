@@ -245,9 +245,11 @@ impl GrowingBody {
         let mut g = self.data.lock().unwrap();
         loop {
             if let Some(e) = self.error.lock().unwrap().as_ref() {
+                self.buffering.store(false, Ordering::Relaxed);
                 return Err(anyhow!("audio download: {e}"));
             }
             if g.len() >= n || self.done.load(Ordering::SeqCst) {
+                self.buffering.store(false, Ordering::Relaxed);
                 if g.len() < 64 && self.done.load(Ordering::SeqCst) {
                     return Err(anyhow!("audio download too small ({} bytes)", g.len()));
                 }
@@ -255,12 +257,14 @@ impl GrowingBody {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
+                self.buffering.store(false, Ordering::Relaxed);
                 return Err(anyhow!("audio download timed out"));
             }
             self.buffering.store(true, Ordering::Relaxed);
             let (gg, t) = self.more.wait_timeout(g, left).unwrap();
             g = gg;
             if t.timed_out() {
+                self.buffering.store(false, Ordering::Relaxed);
                 return Err(anyhow!("audio download timed out"));
             }
         }

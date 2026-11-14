@@ -34,8 +34,10 @@
     VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, ThumbsDownIcon, Queue02Icon,
     Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon,
     Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, Globe02Icon,
-    LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon,
+    LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
   } from './lib/icons';
+
+  const EQ_LABELS = ['60', '230', '910', '3.6k', '14k'] as const;
 
   let view = $state<View>({ id: 'home' });
   let home = $state<Home | null>(null);
@@ -60,7 +62,7 @@
     crossfade_curve_in: 'equal_power',
     crossfade_out_len: 100,
     crossfade_in_len: 100,
-    crossfade_on_skip: true,
+    crossfade_manual: true,
     crossfade_smart: false,
     crossfade_filter: 'off',
     bpm_match: false,
@@ -75,7 +77,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, autoplay: true, cache_max_mb: 1024, crossfade: true, ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, autoplay: true, cache_max_mb: 1024, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
   function resetCrossfade() {
     Object.assign(settings, XF_DEFAULTS);
     api.setSettings(settings);
@@ -102,6 +104,8 @@
   let npHoverChrome = $state(false);
   let npHideTimer: ReturnType<typeof setTimeout> | undefined;
   let scrub = $state<number | null>(null);
+  let volHud = $state<number | null>(null);
+  let volHudTimer: ReturnType<typeof setTimeout> | undefined;
   let lyrics = $state<Lyrics | null>(null);
   let related = $state<Related | null>(null);
   let ctx = $state<CtxTarget | null>(null);
@@ -170,6 +174,11 @@
         }));
         auth = await api.auth();
         settings = await api.settings();
+        if (!Array.isArray(settings.eq_bands) || settings.eq_bands.length !== 5) {
+          settings.eq_bands = [0, 0, 0, 0, 0];
+        }
+        settings.eq_enabled = !!settings.eq_enabled;
+        if (settings.crossfade_manual == null) settings.crossfade_manual = true;
         const acct = auth.signed_in ? (auth.account?.name ?? 'user') : 'anon';
         if (auth.signed_in) {
           // Drop any leftover logged-out snapshot so we never flash it.
@@ -668,6 +677,34 @@
 
   function previewSeek(seconds: number | null) {
     scrub = seconds;
+  }
+
+  function showVolHud(v: number) {
+    volHud = Math.round(Math.max(0, Math.min(1, v)) * 100);
+    clearTimeout(volHudTimer);
+    volHudTimer = setTimeout(() => { volHud = null; }, 900);
+  }
+
+  function setVolumePrecise(v: number) {
+    const next = Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
+    if (Math.abs(next - player.volume) < 1e-6) return;
+    api.setVolume(next);
+    showVolHud(next);
+  }
+
+  function nudgeVolume(e: WheelEvent) {
+    if (!player.track) return;
+    e.preventDefault();
+    const step = e.shiftKey ? 0.05 : 0.01;
+    setVolumePrecise(player.volume + (e.deltaY > 0 ? -step : step));
+  }
+
+  function setEqBand(i: number, gain: number) {
+    const bands = [...settings.eq_bands] as SettingsT['eq_bands'];
+    bands[i] = Math.round(Math.max(-12, Math.min(12, gain)) * 10) / 10;
+    settings.eq_bands = bands;
+    if (!settings.eq_enabled) settings.eq_enabled = true;
+    api.setSettings(settings);
   }
 
   async function share(t?: Track) {
@@ -1376,10 +1413,15 @@
             <Toggle bind:checked={settings.crossfade_smart} label="Smart start" onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
-            <span class="lb">Crossfade on skip
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Blend when you press next, instead of a quick cut</span>
+            <span class="lb">Also on skip
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Same fade when you skip or pick another song</span>
             </span>
-            <Toggle bind:checked={settings.crossfade_on_skip} label="Crossfade on skip" onchange={() => api.setSettings(settings)} />
+            <Toggle
+              bind:checked={settings.crossfade_manual}
+              label="Also on skip"
+              disabled={!settings.crossfade}
+              onchange={() => api.setSettings(settings)}
+            />
           </div>
           <div class="set-row">
             <span class="lb">Album continuity
@@ -1440,6 +1482,48 @@
             <button class="btn ghost" type="button" onclick={resetCrossfade}>Reset</button>
           </div>
           {/if}
+          <div class="set-row set-eq">
+            <div class="set-eq-head">
+              <span class="lb"><Hi icon={SlidersHorizontalIcon} size={20} /> Equalizer
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Five bands, −12 to +12 dB</span>
+              </span>
+              <div class="set-eq-actions">
+                <button
+                  class="btn ghost"
+                  type="button"
+                  onclick={() => {
+                    settings.eq_bands = [0, 0, 0, 0, 0];
+                    api.setSettings(settings);
+                  }}
+                >Reset</button>
+                <Toggle bind:checked={settings.eq_enabled} label="Equalizer" onchange={() => api.setSettings(settings)} />
+              </div>
+            </div>
+            <div class="eq-bands" class:off={!settings.eq_enabled}>
+              {#each settings.eq_bands as gain, i}
+                <div class="eq-band">
+                  <span class="eq-gain">{gain > 0 ? '+' : ''}{gain.toFixed(1)}</span>
+                  <div class="eq-sl">
+                    <Slider
+                      value={gain + 12}
+                      max={24}
+                      step={0.5}
+                      live
+                      showTip
+                      format={(v) => `${(v - 12) > 0 ? '+' : ''}${(v - 12).toFixed(1)} dB`}
+                      oninput={(v) => {
+                        const bands = [...settings.eq_bands] as SettingsT['eq_bands'];
+                        bands[i] = Math.round((v - 12) * 10) / 10;
+                        settings.eq_bands = bands;
+                      }}
+                      onchange={(v) => setEqBand(i, v - 12)}
+                    />
+                  </div>
+                  <span class="eq-hz">{EQ_LABELS[i]}</span>
+                </div>
+              {/each}
+            </div>
+          </div>
           <div class="set-row">
             <span class="lb"><Hi icon={Bookmark02Icon} size={20} /> Offline cache
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{fmtCache(cacheUsed)} of {fmtCache(cacheMax)}</span>
@@ -1544,7 +1628,7 @@
   {/if}
 
   {#if expanded && player.track}
-    <div class="np">
+    <div class="np" onwheel={nudgeVolume}>
       <Cover src={player.track.cover} width={1400} height={900} class="np-bg" alt="" />
       <div class="np-shade"></div>
       <button
@@ -1558,7 +1642,12 @@
         <Hi icon={Cancel01Icon} size={22} />
       </button>
       <div class="np-in">
-        <div class="np-art"><Cover src={player.track.cover} size={360} alt="" /></div>
+        <div class="np-art">
+          <Cover src={player.track.cover} size={360} alt="" />
+          {#if volHud != null}
+            <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
+          {/if}
+        </div>
         <div class="np-meta">
           <h1>{player.track.title}</h1>
           <div class="ar">
@@ -1578,10 +1667,13 @@
     onpointerleave={() => { if (expanded) { npHoverChrome = false; armNpHide(); } }}
   >
     <div class="player-in">
-      <div class="now">
+      <div class="now" onwheel={nudgeVolume}>
         {#if player.track}
           <button class="cov" type="button" onclick={() => (expanded = !expanded)} title="Now playing">
             <Cover src={player.track.cover} size={64} alt="" />
+            {#if volHud != null}
+              <div class="vol-hud" aria-live="polite">{volHud}%</div>
+            {/if}
           </button>
           <div class="meta">
             <div class="title">{player.track.title}</div>
@@ -1642,7 +1734,7 @@
       </div>
       <div class="right-c">
         {#if player.error}<span class="err">{friendlyError(player.error, "Can't play this track")}</span>{/if}
-        {#if player.loading}<div class="spin"></div>{/if}
+        {#if player.loading && !player.playing}<div class="spin"></div>{/if}
         <IconBtn icon={MicVocalIcon} size={22} on={panel === 'lyrics'} onclick={() => openPanel('lyrics')} title="Lyrics" btnSize="lg" />
         <IconBtn icon={Queue02Icon} size={22} on={panel === 'queue'} onclick={() => openPanel('queue')} title="Queue" btnSize="lg" />
         <IconBtn icon={Radio02Icon} size={22} onclick={() => startRadio()} title="Radio" btnSize="lg" />
@@ -1651,9 +1743,12 @@
           <Slider
             value={player.volume}
             max={1}
+            step={0.01}
             live
             wheel
-            oninput={(v) => api.setVolume(v)}
+            showTip
+            format={(v) => `${Math.round(v * 100)}%`}
+            oninput={(v) => setVolumePrecise(v)}
           />
         </div>
       </div>

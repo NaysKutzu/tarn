@@ -25,6 +25,7 @@ enum Cmd {
     Stop,
     Seek(f64),
     Volume(f32),
+    Eq([f32; crate::eq::BANDS], bool),
 }
 
 /// How to start a new decoder relative to whatever is already playing.
@@ -58,8 +59,8 @@ pub struct Player {
     current_audio: Arc<Mutex<Option<Arc<crate::decode::GrowingBody>>>>,
     xf_on: Arc<AtomicBool>,
     xf_ms: Arc<AtomicU32>,
+    xf_manual: Arc<AtomicBool>,
     album_cont: Arc<AtomicBool>,
-    xf_on_skip: Arc<AtomicBool>,
     /// Curves, filter, smart start, and BPM matching settings.
     xf_cfg: Arc<Mutex<XfConfig>>,
     /// How long the current track has been silent (smart start).
@@ -90,8 +91,8 @@ impl Player {
         let current_audio = Arc::new(Mutex::new(None));
         let xf_on = Arc::new(AtomicBool::new(true));
         let xf_ms = Arc::new(AtomicU32::new(4000));
+        let xf_manual = Arc::new(AtomicBool::new(true));
         let album_cont = Arc::new(AtomicBool::new(true));
-        let xf_on_skip = Arc::new(AtomicBool::new(true));
         let xf_cfg = Arc::new(Mutex::new(XfConfig::simple(4.0)));
         let quiet_ms = Arc::new(AtomicU32::new(0));
         let blending = Arc::new(AtomicBool::new(false));
@@ -153,8 +154,8 @@ impl Player {
             current_audio,
             xf_on,
             xf_ms,
+            xf_manual,
             album_cont,
-            xf_on_skip,
             xf_cfg,
             quiet_ms,
             blending,
@@ -188,8 +189,10 @@ impl Player {
         s.playing = ph == 1 || ph == 4;
         s.loading = ph == 3;
         let body = self.current_audio.lock().clone();
-        let body_buf = body.as_ref().is_some_and(|b| b.is_buffering() || b.is_stalled());
-        s.buffering = ph == 4 || self.buffering.load(Ordering::Relaxed) || body_buf;
+        // Only the mixer/phase own the UI buffering bit. OR-ing the body's
+        // transient wait flag left the play button spinning while audio was
+        // already flowing (e.g. after a seek wait_len that never cleared it).
+        s.buffering = ph == 4 || self.buffering.load(Ordering::Relaxed);
         s.buffered = match body {
             Some(b) => b.buffered_secs(s.duration),
             None => if s.duration > 0.0 && !s.loading { s.duration } else { 0.0 },
@@ -312,17 +315,17 @@ impl Player {
         Ok(())
     }
 
-    pub fn set_crossfade(&self, on: bool, seconds: f64, album_continuity: bool) {
+    pub fn set_crossfade(&self, on: bool, seconds: f64, album_continuity: bool, manual: bool) {
         self.xf_on.store(on, Ordering::Relaxed);
         let ms = (seconds.clamp(0.0, 20.0) * 1000.0).round() as u32;
         self.xf_ms.store(ms, Ordering::Relaxed);
         self.album_cont.store(album_continuity, Ordering::Relaxed);
+        self.xf_manual.store(manual, Ordering::Relaxed);
         self.xf_cfg.lock().shape.secs = ms as f32 / 1000.0;
     }
 
     /// Curves, filter sweep, smart start, and BPM matching.
-    pub fn set_transition(&self, cfg: XfConfig, on_skip: bool) {
-        self.xf_on_skip.store(on_skip, Ordering::Relaxed);
+    pub fn set_transition(&self, cfg: XfConfig) {
         let mut cur = self.xf_cfg.lock();
         let secs = cur.shape.secs;
         *cur = cfg;
@@ -330,17 +333,17 @@ impl Player {
         cur.shape.secs = secs;
     }
 
-    /// Whether a manual skip should crossfade (when crossfade applies).
-    pub fn crossfade_on_skip(&self) -> bool {
-        self.xf_on_skip.load(Ordering::Relaxed)
-    }
-
     pub fn crossfade_secs(&self) -> f32 {
         self.xf_ms.load(Ordering::Relaxed) as f32 / 1000.0
     }
 
-    pub fn should_crossfade(&self, from: Option<&Track>, to: &Track) -> bool {
+    /// `manual` is Next/Prev/clicking another track. Natural end-of-track
+    /// handoffs pass `false` and only need the main crossfade toggle.
+    pub fn should_crossfade(&self, from: Option<&Track>, to: &Track, manual: bool) -> bool {
         if !self.xf_on.load(Ordering::Relaxed) {
+            return false;
+        }
+        if manual && !self.xf_manual.load(Ordering::Relaxed) {
             return false;
         }
         if self.crossfade_secs() < 0.05 {
@@ -372,7 +375,7 @@ impl Player {
         if s.track.as_ref().map(|t| t.id.as_str()) == Some(track.id.as_str()) && s.repeat != "one" {
             return None;
         }
-        let xf = self.should_crossfade(s.track.as_ref(), &track);
+        let xf = self.should_crossfade(s.track.as_ref(), &track, false);
         let (smart, bpm) = {
             let c = self.xf_cfg.lock();
             (c.smart, c.bpm_match)
@@ -510,13 +513,7 @@ impl Player {
     }
 
     pub fn is_buffering(&self) -> bool {
-        self.buffering.load(Ordering::Relaxed)
-            || self.phase.load(Ordering::Relaxed) == 4
-            || self
-                .current_audio
-                .lock()
-                .as_ref()
-                .is_some_and(|b| b.is_buffering())
+        self.buffering.load(Ordering::Relaxed) || self.phase.load(Ordering::Relaxed) == 4
     }
     pub fn stop(&self) {
         let _ = self.tx.send(Cmd::Stop);
@@ -530,9 +527,17 @@ impl Player {
         let _ = self.tx.send(Cmd::Seek(secs));
     }
     pub fn set_volume(&self, v: f32) {
-        let v = v.clamp(0.0, 1.0);
+        let v = (v.clamp(0.0, 1.0) * 100.0).round() / 100.0;
         self.state.lock().volume = v;
         let _ = self.tx.send(Cmd::Volume(v));
+    }
+
+    pub fn set_eq(&self, gains: [f32; crate::eq::BANDS], enabled: bool) {
+        let mut cleaned = [0.0f32; crate::eq::BANDS];
+        for i in 0..crate::eq::BANDS {
+            cleaned[i] = (gains[i].clamp(-12.0, 12.0) * 10.0).round() / 10.0;
+        }
+        let _ = self.tx.send(Cmd::Eq(cleaned, enabled));
     }
     pub fn take_ended(&self) -> bool {
         if self.blending.load(Ordering::Relaxed) {
@@ -921,6 +926,7 @@ fn audio_thread(
                         buffering.store(true, Ordering::Relaxed);
                         phase.store(4, Ordering::Relaxed);
                         let _ = audio.wait_len(needed, Duration::from_secs(30));
+                        audio.set_buffering(false);
                     }
                     match make_source(audio.clone(), secs) {
                         Ok(src) => {
@@ -939,6 +945,7 @@ fn audio_thread(
                 }
             }
             Ok(Cmd::Volume(v)) => sink.set_volume(v),
+            Ok(Cmd::Eq(gains, on)) => mix.set_eq(gains, on),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -1125,7 +1132,7 @@ mod crossfade_tests {
     }
 
     fn run_xf_across(p: &Player, q: Vec<Track>, repeat: &str, shuffle: bool) -> Vec<String> {
-        p.set_crossfade(true, 2.0, false);
+        p.set_crossfade(true, 2.0, false, true);
         p.set_repeat(repeat);
         p.set_shuffle(shuffle);
         let n = q.len();
