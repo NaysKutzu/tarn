@@ -789,6 +789,15 @@ impl Ytm {
     }
 
     pub async fn playlist(&self, id: &str) -> Result<Collection> {
+        let bare = id.strip_prefix("VL").unwrap_or(id);
+        // Liked Music / Episodes: rustypipe's music_playlist("LM") can panic
+        // inside visitor-data fetch (302). Use the dedicated liked endpoints.
+        if bare == "LM" {
+            return self.liked_music_collection().await;
+        }
+        if bare == "SE" {
+            return self.episodes_collection().await;
+        }
         let p = self
             .rp
             .query()
@@ -822,6 +831,66 @@ impl Ytm {
         }
         stamp_missing_track_covers(&mut c);
         Ok(c)
+    }
+
+    async fn liked_music_collection(&self) -> Result<Collection> {
+        // Prefer our InnerTube browse - rustypipe music_playlist("LM") and
+        // sometimes visitor-data fetches panic on 302.
+        let tracks = match self.it().library_browse("FEmusic_liked_videos").await {
+            Ok((tracks, _, _)) if !tracks.is_empty() => tracks,
+            Ok(_) | Err(_) => match self.rp.query().music_liked_tracks().await {
+                Ok(liked) => liked.tracks.items.iter().map(track_from).collect(),
+                Err(e) => return Err(anyhow!("liked music: {e}")),
+            },
+        };
+        let n = tracks.len() as u64;
+        let mut c = Collection {
+            kind: "playlist".into(),
+            id: "LM".into(),
+            playlist_id: Some("LM".into()),
+            name: "Liked Music".into(),
+            cover: tracks.first().and_then(|t| t.cover.clone()),
+            artists: Vec::new(),
+            artist_ids: Vec::new(),
+            author: None,
+            year: None,
+            description: None,
+            track_count: Some(n),
+            album_type: None,
+            tracks,
+            related: Vec::new(),
+            owned: true,
+            saved: true,
+        };
+        stamp_missing_track_covers(&mut c);
+        Ok(c)
+    }
+
+    async fn episodes_collection(&self) -> Result<Collection> {
+        // Soft fallback: empty owned playlist rather than panicking in rustypipe.
+        let tracks = match self.it().library_browse("FEmusic_liked_episodes").await {
+            Ok((tracks, _, _)) => tracks,
+            Err(_) => Vec::new(),
+        };
+        let n = tracks.len() as u64;
+        Ok(Collection {
+            kind: "playlist".into(),
+            id: "SE".into(),
+            playlist_id: Some("SE".into()),
+            name: "Episodes for later".into(),
+            cover: tracks.first().and_then(|t| t.cover.clone()),
+            artists: Vec::new(),
+            artist_ids: Vec::new(),
+            author: None,
+            year: None,
+            description: None,
+            track_count: Some(n),
+            album_type: None,
+            tracks,
+            related: Vec::new(),
+            owned: true,
+            saved: true,
+        })
     }
 
     async fn fill_playlist_albums(&self, c: &mut Collection) -> Result<()> {

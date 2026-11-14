@@ -10,25 +10,37 @@
     onPlayItems,
     onOpen,
     onContext,
+    onPlayCollection,
   }: {
     shelf: Shelf;
     onPlayItems: (tracks: Track[], index: number) => void;
     onOpen: (item: ShelfItem) => void;
     onContext: (e: MouseEvent, item: ShelfItem) => void;
+    /** Cover click for album/playlist/artist - play without opening. */
+    onPlayCollection?: (item: ShelfItem) => void;
   } = $props();
 
   function tracksOf(items: ShelfItem[]): Track[] {
     return items.filter((i) => i.kind === 'track' || i.kind === 'video').map(itemToTrack);
   }
 
-  function click(item: ShelfItem, i: number) {
+  function playItem(item: ShelfItem, i: number) {
     if (item.kind === 'track' || item.kind === 'video') {
       const ts = tracksOf(shelf.items);
       const idx = ts.findIndex((t) => t.id === item.id);
       onPlayItems(ts.length ? ts : [itemToTrack(item)], Math.max(0, idx === -1 ? i : idx));
-    } else {
-      onOpen(item);
+      return;
     }
+    if (onPlayCollection) onPlayCollection(item);
+    else onOpen(item);
+  }
+
+  function openOrPlay(item: ShelfItem, i: number) {
+    if (item.kind === 'track' || item.kind === 'video') {
+      playItem(item, i);
+      return;
+    }
+    onOpen(item);
   }
 
   let compact = $derived(
@@ -37,6 +49,15 @@
       shelf.items.every((i) => i.kind === 'track' || i.kind === 'video'),
   );
   let moods = $derived(shelf.kind === 'moods' || shelf.items.every((i) => i.kind === 'mood'));
+
+  function isArtistCard(item: ShelfItem) {
+    return (
+      item.kind === 'artist' &&
+      shelf.kind !== 'albums' &&
+      shelf.kind !== 'playlists' &&
+      !shelf.title.toLowerCase().includes('album')
+    );
+  }
 </script>
 
 <section class="shelf">
@@ -67,7 +88,7 @@
       {#each shelf.items as item, i}
         <button
           class="qp-row"
-          onclick={() => click(item, i)}
+          onclick={() => playItem(item, i)}
           oncontextmenu={(e) => onContext(e, item)}
         >
           <span class="cov qp-cov">
@@ -86,29 +107,32 @@
   {:else}
     <div class="row">
       {#each shelf.items as item, i}
-        <button
-          class="card {item.kind === 'artist' && shelf.kind !== 'albums' && shelf.kind !== 'playlists' && !shelf.title.toLowerCase().includes('album') ? 'artist' : ''}"
-          onclick={() => click(item, i)}
+        <div
+          class="card {isArtistCard(item) ? 'artist' : ''}"
           oncontextmenu={(e) => onContext(e, item)}
+          role="group"
         >
-          <div class="art">
+          <button
+            class="art"
+            type="button"
+            title="Play"
+            onclick={() => playItem(item, i)}
+          >
             <Cover
               src={item.cover}
-              size={item.kind === 'artist' && shelf.kind !== 'albums' && !shelf.title.toLowerCase().includes('album') ? 132 : 152}
-              round={item.kind === 'artist' && shelf.kind !== 'albums' && !shelf.title.toLowerCase().includes('album')}
+              size={isArtistCard(item) ? 132 : 152}
+              round={isArtistCard(item)}
               alt=""
             />
-            {#if item.kind === 'track' || item.kind === 'video'}
-              <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
-            {/if}
-          </div>
-          <div class="c-a">
+            <span class="play-ov"><Hi icon={PlayIcon} size={isArtistCard(item) ? 28 : 36} /></span>
+          </button>
+          <button class="c-a" type="button" onclick={() => openOrPlay(item, i)}>
             <div class="title">{item.title}</div>
             <div class="sub">
               {item.subtitle || item.artists.join(', ') || item.album_type || item.year || ''}
             </div>
-          </div>
-        </button>
+          </button>
+        </div>
       {/each}
     </div>
   {/if}

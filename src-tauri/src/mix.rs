@@ -287,6 +287,9 @@ impl Mixer {
         if g.current.is_none() || g.sr != sr || g.ch != ch {
             drop(g);
             self.play(src, CLICK_FADE);
+            // play() zeros the clock; re-apply silence/beat trim so the
+            // progress bar matches the audio that already skipped ahead.
+            self.apply_skipped_frames(plan.skipped_frames);
             return;
         }
         let mut secs = plan.shape.secs.clamp(0.05, 20.0);
@@ -322,10 +325,16 @@ impl Mixer {
         g.clock_acc = 0.0;
         self.ended.store(false, Ordering::Relaxed);
         self.phase.store(1, Ordering::Relaxed);
-        self.samples
-            .store(plan.skipped_frames.saturating_mul(ch as u64), Ordering::SeqCst);
+        self.apply_skipped_frames(plan.skipped_frames);
         self.has_src.store(true, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
+    }
+
+    /// Seed the position clock after smart-start / beat-align trim.
+    pub fn apply_skipped_frames(&self, frames: u64) {
+        let ch = self.channels.load(Ordering::Relaxed).max(1) as u64;
+        self.samples
+            .store(frames.saturating_mul(ch), Ordering::SeqCst);
     }
 
     /// Short fade-out of the current track, then fade-in of `src` (skip).

@@ -80,6 +80,9 @@ pub struct Player {
     /// Bumped on every prepare/play so a stale crossfade from the previous
     /// queue cannot adopt into the new one.
     play_gen: Arc<AtomicU64>,
+    /// Next track to show in the UI once the mixer actually starts it.
+    /// Avoids "new title, old audio" while crossfade analysis is in flight.
+    pending_adopt: Arc<Mutex<Option<(Track, usize, u64)>>>,
 }
 
 impl Player {
@@ -108,6 +111,7 @@ impl Player {
         let last_recover = Arc::new(Mutex::new(None));
         let blend_adopted = Arc::new(AtomicBool::new(false));
         let play_gen = Arc::new(AtomicU64::new(0));
+        let pending_adopt = Arc::new(Mutex::new(None));
 
         let samples_t = samples.clone();
         let rate_t = sample_rate.clone();
@@ -122,6 +126,12 @@ impl Player {
         let tx_t = tx.clone();
         let cfg_t = xf_cfg.clone();
         let quiet_t = quiet_ms.clone();
+        let pending_t = pending_adopt.clone();
+        let play_gen_t = play_gen.clone();
+        let blend_adopted_t = blend_adopted.clone();
+        let quiet_ms_t = quiet_ms.clone();
+        let blending_t = blending.clone();
+        let last_ended_t = last_ended.clone();
 
         std::thread::Builder::new()
             .name("tarn-audio".into())
@@ -142,6 +152,12 @@ impl Player {
                         tx: tx_t,
                         cfg: cfg_t,
                         quiet_ms: quiet_t,
+                        pending_adopt: pending_t,
+                        play_gen: play_gen_t,
+                        blend_adopted: blend_adopted_t,
+                        quiet_clear: quiet_ms_t,
+                        blending: blending_t,
+                        last_ended: last_ended_t,
                     },
                 )
             })
@@ -172,6 +188,7 @@ impl Player {
             last_recover,
             blend_adopted,
             play_gen,
+            pending_adopt,
         }
     }
 
@@ -223,6 +240,7 @@ impl Player {
     ) {
         // Invalidate any in-flight end-of-track blend from the previous queue.
         self.play_gen.fetch_add(1, Ordering::SeqCst);
+        *self.pending_adopt.lock() = None;
         self.ended.store(false, Ordering::Relaxed);
         self.recover.store(false, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
@@ -292,20 +310,25 @@ impl Player {
             }
         }
         *self.current_audio.lock() = Some(audio.clone());
-        self.samples.store(0, Ordering::Relaxed);
-        {
+        let blendish = matches!(
+            style,
+            PlayStyle::Crossfade(_) | PlayStyle::Gapless | PlayStyle::Cut
+        );
+        // Natural end-blend queues adopt first; keep the outgoing clock so
+        // the UI doesn't show the next title at 0:00 while old audio plays.
+        // Manual next/prepare already swapped the track - reset as usual.
+        let keep_clock = self.pending_adopt.lock().is_some();
+        if !keep_clock {
+            self.samples.store(0, Ordering::Relaxed);
             let mut s = self.state.lock();
             s.position = start;
         }
         self.ended.store(false, Ordering::Relaxed);
-        if !matches!(style, PlayStyle::Crossfade(_) | PlayStyle::Gapless | PlayStyle::Cut) {
+        if !blendish {
             *self.last_ended.lock() = None;
         }
         self.recovering.store(false, Ordering::Relaxed);
-        self.blending.store(
-            matches!(style, PlayStyle::Crossfade(_) | PlayStyle::Gapless | PlayStyle::Cut),
-            Ordering::Relaxed,
-        );
+        self.blending.store(blendish, Ordering::Relaxed);
         let cmd = match style {
             PlayStyle::Fresh => Cmd::Play(audio, start),
             PlayStyle::Armed => {
@@ -433,6 +456,13 @@ impl Player {
 
     pub fn clear_blending(&self) {
         self.blending.store(false, Ordering::Relaxed);
+        *self.pending_adopt.lock() = None;
+    }
+
+    /// Show `track` in the UI only after the mixer has started it.
+    pub fn queue_adopt(&self, track: Track, index: usize) {
+        let gen = self.play_gen.load(Ordering::SeqCst);
+        *self.pending_adopt.lock() = Some((track, index, gen));
     }
 
     pub fn adopt_track(&self, track: Track, index: usize) {
@@ -808,6 +838,46 @@ struct AudioExtras {
     tx: std::sync::mpsc::Sender<Cmd>,
     cfg: Arc<Mutex<XfConfig>>,
     quiet_ms: Arc<AtomicU32>,
+    pending_adopt: Arc<Mutex<Option<(Track, usize, u64)>>>,
+    play_gen: Arc<AtomicU64>,
+    blend_adopted: Arc<AtomicBool>,
+    quiet_clear: Arc<AtomicU32>,
+    blending: Arc<AtomicBool>,
+    last_ended: Arc<Mutex<Option<String>>>,
+}
+
+fn flush_pending_adopt(extras: &AudioExtras, state: &Mutex<PlayerState>) {
+    let Some((mut track, index, gen)) = extras.pending_adopt.lock().take() else {
+        return;
+    };
+    if extras.play_gen.load(Ordering::SeqCst) != gen {
+        return;
+    }
+    track.ensure_cover();
+    let mut s = state.lock();
+    if track.cover.is_none() {
+        if let Some(q) = s.queue.get(index).and_then(|t| t.cover.clone()) {
+            track.cover = Some(q);
+        }
+    } else if let Some(slot) = s.queue.get_mut(index) {
+        if slot.cover.as_deref().is_none_or(|u| u.contains("/mixart")) {
+            slot.cover = track.cover.clone();
+        }
+    }
+    let prev = s.track.as_ref().map(|t| t.id.clone()).unwrap_or_default();
+    s.track = Some(track);
+    s.index = index;
+    s.loading = false;
+    s.playing = true;
+    s.position = 0.0;
+    s.error = None;
+    drop(s);
+    if !prev.is_empty() {
+        *extras.last_ended.lock() = Some(prev);
+    }
+    extras.blend_adopted.store(true, Ordering::SeqCst);
+    extras.quiet_clear.store(0, Ordering::Relaxed);
+    extras.blending.store(false, Ordering::Relaxed);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -929,7 +999,10 @@ fn audio_thread(
                     }
                 } else {
                     match make_source(audio, start) {
-                        Ok(src) => mix.crossfade_plan(src, plain_plan(&cfg)),
+                        Ok(src) => {
+                            mix.crossfade_plan(src, plain_plan(&cfg));
+                            flush_pending_adopt(&extras, &state);
+                        }
                         Err(e) => eprintln!("crossfade: {e}"),
                     }
                 }
@@ -937,22 +1010,34 @@ fn audio_thread(
             Ok(Cmd::XfReady(src, plan, gen)) => {
                 if gen != generation {
                     eprintln!("crossfade: analysis superseded, dropping");
+                    *extras.pending_adopt.lock() = None;
                 } else if mix.is_paused() {
                     // Paused while analysing: swap silently, stay paused.
+                    let skipped = plan.skipped_frames;
                     mix.arm(*src);
+                    // arm() zeros the clock; keep smart-start / beat trim.
+                    mix.apply_skipped_frames(skipped);
+                    flush_pending_adopt(&extras, &state);
                 } else {
                     mix.crossfade_plan(*src, *plan);
+                    flush_pending_adopt(&extras, &state);
                 }
             }
             Ok(Cmd::Gapless(audio, start)) => {
                 match make_source(audio, start) {
-                    Ok(src) => mix.queue_gapless(src),
+                    Ok(src) => {
+                        mix.queue_gapless(src);
+                        flush_pending_adopt(&extras, &state);
+                    }
                     Err(e) => eprintln!("gapless: {e}"),
                 }
             }
             Ok(Cmd::Cut(audio, start)) => {
                 match make_source(audio, start) {
-                    Ok(src) => mix.cut(src, crate::mix::CLICK_FADE),
+                    Ok(src) => {
+                        mix.cut(src, crate::mix::CLICK_FADE);
+                        flush_pending_adopt(&extras, &state);
+                    }
                     Err(e) => eprintln!("cut: {e}"),
                 }
             }
@@ -1076,7 +1161,7 @@ fn prepare_transition(
     let mut env = EnvBuilder::new(sr, 12.0);
     let mut lead_silence = 0u64;
     if start <= 0.05 {
-        if let Ok(mut probe) = make_source(audio, start) {
+        if let Ok(mut probe) = make_source(audio.clone(), start) {
             let max_frames = 10 * sr as u64;
             let mut f = vec![0i16; ch];
             let mut heard = false;
@@ -1142,15 +1227,30 @@ fn prepare_transition(
         }
     }
     if skip > 0 {
-        let mut f = vec![0i16; ch];
-        let mut done = 0u64;
-        while done < skip {
-            if !matches!(crate::mix::pull_raw(&mut src, &mut f), FrameRes::Ok) {
-                break;
+        let skip_secs = skip as f64 / sr as f64;
+        // Prefer a real seek so the decoder timeline matches the clock.
+        // Frame-pulling also works, but a later play()/arm() that forgot
+        // skipped_frames left the progress bar at 0 while audio was ahead.
+        match make_source(audio.clone(), start + skip_secs) {
+            Ok(s) => {
+                src = s;
+                plan.skipped_frames = skip;
+                eprintln!(
+                    "smart-start: skipped {skip_secs:.2}s of lead silence/beat align"
+                );
             }
-            done += 1;
+            Err(_) => {
+                let mut f = vec![0i16; ch];
+                let mut done = 0u64;
+                while done < skip {
+                    if !matches!(crate::mix::pull_raw(&mut src, &mut f), FrameRes::Ok) {
+                        break;
+                    }
+                    done += 1;
+                }
+                plan.skipped_frames = done;
+            }
         }
-        plan.skipped_frames = done;
     }
     Ok((src, plan))
 }

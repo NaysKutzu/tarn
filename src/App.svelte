@@ -236,9 +236,15 @@
     import('@tauri-apps/api/app').then((m) => m.getVersion()).then((v) => { appVersion = v; }).catch(() => {});
     listen<PlayerState>('player', (e) => {
       const next = e.payload;
-      if (!auth.signed_in && next.track && isLocalLiked(next.track.id)) {
-        next.liked = true;
-        next.disliked = false;
+      if (next.track) {
+        const id = next.track.id;
+        const known =
+          isLocalLiked(id) ||
+          !!library?.liked?.some((t) => t.id === id);
+        if (known && !next.liked) {
+          next.liked = true;
+          next.disliked = false;
+        }
       }
       if (next.error) {
         if (isAuthError(next.error)) {
@@ -621,6 +627,31 @@
     } catch (e) { fail(e, "Can't play this"); }
   }
 
+  function playAlbumId(id: string, cover?: string | null) {
+    playCollection({
+      kind: 'album', id, title: '', cover: cover ?? null, subtitle: null,
+      artists: [], artist_ids: [], album: null, album_id: null, duration: null,
+      playlist_id: null, color: null, browse_id: id, params: null, year: null,
+      album_type: null, track_count: null, is_video: false,
+    }, false);
+  }
+  function playPlaylistId(id: string, cover?: string | null, covers?: string[]) {
+    playCollection({
+      kind: 'playlist', id, title: '', cover: cover ?? covers?.[0] ?? null, subtitle: null,
+      artists: [], artist_ids: [], album: null, album_id: null, duration: null,
+      playlist_id: id, color: null, browse_id: null, params: null, year: null,
+      album_type: null, track_count: null, is_video: false,
+    }, false);
+  }
+  function playArtistId(id: string, cover?: string | null) {
+    playCollection({
+      kind: 'artist', id, title: '', cover: cover ?? null, subtitle: null,
+      artists: [], artist_ids: [], album: null, album_id: null, duration: null,
+      playlist_id: null, color: null, browse_id: id, params: null, year: null,
+      album_type: null, track_count: null, is_video: false,
+    }, false);
+  }
+
   function openItem(item: ShelfItem) {
     if (item.kind === 'artist') go({ id: 'artist', artistId: item.id || item.browse_id || '' });
     else if (item.kind === 'album') go({ id: 'album', albumId: item.id || item.browse_id || '' });
@@ -987,7 +1018,7 @@
         {/if}
         {#if loading && !home}<Skeleton kind="home" />{/if}
         {#each home?.shelves ?? [] as s}
-          <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} />
+          <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} onPlayCollection={(it) => playCollection(it, false)} />
         {/each}
 
       {:else if view.id === 'explore'}
@@ -1005,7 +1036,7 @@
         </div>
         {#if loading && !explore}<Skeleton kind="explore" />{/if}
         {#each (explore?.shelves ?? []).filter((s) => s.kind !== 'moods' && !s.title.toLowerCase().includes('mood')) as s}
-          <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} />
+          <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} onPlayCollection={(it) => playCollection(it, false)} />
         {/each}
         {#if explore?.moods?.length}
           <section class="shelf" id="moods">
@@ -1022,7 +1053,7 @@
         <h1 class="page-title">{view.id === 'charts' ? 'Charts' : 'New releases'}</h1>
         {#if loading && !(view.id === 'charts' ? charts : releases)}<Skeleton kind="home" />{/if}
         {#each (view.id === 'charts' ? charts : releases)?.shelves ?? [] as s}
-          <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} />
+          <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} onPlayCollection={(it) => playCollection(it, false)} />
         {/each}
 
       {:else if view.id === 'search'}
@@ -1053,31 +1084,36 @@
             <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
             <div
               class="top-card {top.kind === 'artist' ? 'artist' : ''}"
-              role="button"
-              tabindex="0"
-              onclick={() => openItem(top)}
-              onkeydown={(e) => e.key === 'Enter' && openItem(top)}
               oncontextmenu={(e) => contextItem(e, top)}
+              role="group"
             >
-              <div class="top-art">
+              <button
+                class="top-art"
+                type="button"
+                title="Play"
+                onclick={() => {
+                  if (top.kind === 'track' || top.kind === 'video') playOne(itemToTrack(top));
+                  else playCollection(top, false);
+                }}
+              >
                 <Cover src={top.cover} size={160} round={top.kind === 'artist'} alt="" />
-                {#if top.kind === 'track' || top.kind === 'video'}
-                  <span class="play-ov"><Hi icon={PlayIcon} size={40} /></span>
-                {/if}
-              </div>
+                <span class="play-ov"><Hi icon={PlayIcon} size={40} /></span>
+              </button>
               <div>
-                <div class="k">{top.kind}</div>
-                <div class="ttl">{top.title}</div>
-                <div class="sub">{top.subtitle || artistsLine(top.artists)}</div>
+                <button class="top-meta" type="button" onclick={() => openItem(top)}>
+                  <div class="k">{top.kind}</div>
+                  <div class="ttl">{top.title}</div>
+                  <div class="sub">{top.subtitle || artistsLine(top.artists)}</div>
+                </button>
                 <div class="acts">
                   {#if top.kind === 'track' || top.kind === 'video'}
-                    <button class="btn" type="button" onclick={(e) => { e.stopPropagation(); playOne(itemToTrack(top)); }}><Hi icon={PlayIcon} size={18} /> Play</button>
-                    <button class="btn ghost" type="button" onclick={(e) => { e.stopPropagation(); playTopShuffled(top); }}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
-                    <button class="btn ghost" type="button" onclick={(e) => { e.stopPropagation(); startRadio(top.id); }}><Hi icon={Radio02Icon} size={18} /> Radio</button>
+                    <button class="btn" type="button" onclick={() => playOne(itemToTrack(top))}><Hi icon={PlayIcon} size={18} /> Play</button>
+                    <button class="btn ghost" type="button" onclick={() => playTopShuffled(top)}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
+                    <button class="btn ghost" type="button" onclick={() => startRadio(top.id)}><Hi icon={Radio02Icon} size={18} /> Radio</button>
                   {:else}
-                    <button class="btn" type="button" onclick={(e) => { e.stopPropagation(); playCollection(top, false); }}><Hi icon={PlayIcon} size={18} /> Play</button>
-                    <button class="btn ghost" type="button" onclick={(e) => { e.stopPropagation(); playCollection(top, true); }}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
-                    <button class="btn ghost" type="button" onclick={(e) => { e.stopPropagation(); openItem(top); }}>Open</button>
+                    <button class="btn" type="button" onclick={() => playCollection(top, false)}><Hi icon={PlayIcon} size={18} /> Play</button>
+                    <button class="btn ghost" type="button" onclick={() => playCollection(top, true)}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
+                    <button class="btn ghost" type="button" onclick={() => openItem(top)}>Open</button>
                   {/if}
                 </div>
               </div>
@@ -1107,10 +1143,16 @@
               {#if searchTab === 'top'}<h2 class="shelf-title" style="margin:28px 0 12px">Albums</h2>{/if}
               <div class="row">
                 {#each results.albums as a}
-                  <button class="card" type="button" onclick={() => go({ id: 'album', albumId: a.id })}>
-                    <div class="art"><Cover src={a.cover} size={152} alt="" /></div>
-                    <div class="c-a"><div class="title">{a.name}</div><div class="sub">{a.subtitle || a.album_type || ''}{a.year ? ` · ${a.year}` : ''}</div></div>
-                  </button>
+                  <div class="card" role="group">
+                    <button class="art" type="button" title="Play" onclick={() => playAlbumId(a.id, a.cover)}>
+                      <Cover src={a.cover} size={152} alt="" />
+                      <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
+                    </button>
+                    <button class="c-a" type="button" onclick={() => go({ id: 'album', albumId: a.id })}>
+                      <div class="title">{a.name}</div>
+                      <div class="sub">{a.subtitle || a.album_type || ''}{a.year ? ` · ${a.year}` : ''}</div>
+                    </button>
+                  </div>
                 {/each}
               </div>
             {/if}
@@ -1120,10 +1162,15 @@
               {#if searchTab === 'top'}<h2 class="shelf-title" style="margin:28px 0 12px">Artists</h2>{/if}
               <div class="row">
                 {#each results.artists as a}
-                  <button class="card artist" type="button" onclick={() => go({ id: 'artist', artistId: a.id })}>
-                    <div class="art"><Cover src={a.cover} size={132} round alt="" /></div>
-                    <div class="c-a"><div class="title">{a.name}</div></div>
-                  </button>
+                  <div class="card artist" role="group">
+                    <button class="art" type="button" title="Play" onclick={() => playArtistId(a.id, a.cover)}>
+                      <Cover src={a.cover} size={132} round alt="" />
+                      <span class="play-ov"><Hi icon={PlayIcon} size={28} /></span>
+                    </button>
+                    <button class="c-a" type="button" onclick={() => go({ id: 'artist', artistId: a.id })}>
+                      <div class="title">{a.name}</div>
+                    </button>
+                  </div>
                 {/each}
               </div>
             {/if}
@@ -1133,10 +1180,16 @@
               {#if searchTab === 'top'}<h2 class="shelf-title" style="margin:28px 0 12px">Playlists</h2>{/if}
               <div class="row">
                 {#each results.playlists as p}
-                  <button class="card" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
-                    <div class="art"><PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" /></div>
-                    <div class="c-a"><div class="title">{p.name}</div><div class="sub">{p.subtitle || ''}</div></div>
-                  </button>
+                  <div class="card" role="group">
+                    <button class="art" type="button" title="Play" onclick={() => playPlaylistId(p.id, p.cover, p.covers)}>
+                      <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" />
+                      <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
+                    </button>
+                    <button class="c-a" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
+                      <div class="title">{p.name}</div>
+                      <div class="sub">{p.subtitle || ''}</div>
+                    </button>
+                  </div>
                 {/each}
               </div>
             {/if}
@@ -1144,10 +1197,16 @@
           {#if searchTab === 'community'}
             <div class="row">
               {#each results.community as p}
-                <button class="card" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
-                  <div class="art"><PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" /></div>
-                  <div class="c-a"><div class="title">{p.name}</div><div class="sub">{p.subtitle || ''}</div></div>
-                </button>
+                <div class="card" role="group">
+                  <button class="art" type="button" title="Play" onclick={() => playPlaylistId(p.id, p.cover, p.covers)}>
+                    <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" />
+                    <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
+                  </button>
+                  <button class="c-a" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
+                    <div class="title">{p.name}</div>
+                    <div class="sub">{p.subtitle || ''}</div>
+                  </button>
+                </div>
               {/each}
             </div>
           {/if}
@@ -1204,10 +1263,16 @@
             <h2 class="shelf-title" style="margin:28px 0 12px">Playlists</h2>
             <div class="row">
               {#each library.playlists as p}
-                <button class="card" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
-                  <div class="art"><PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" /></div>
-                  <div class="c-a"><div class="title">{p.name}</div><div class="sub">{p.track_count ? `${p.track_count}` : ''}</div></div>
-                </button>
+                <div class="card" role="group">
+                  <button class="art" type="button" title="Play" onclick={() => playPlaylistId(p.id, p.cover, p.covers)}>
+                    <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" />
+                    <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
+                  </button>
+                  <button class="c-a" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
+                    <div class="title">{p.name}</div>
+                    <div class="sub">{p.track_count ? `${p.track_count}` : ''}</div>
+                  </button>
+                </div>
               {/each}
             </div>
           {/if}
@@ -1215,10 +1280,16 @@
             <h2 class="shelf-title" style="margin:28px 0 12px">Albums</h2>
             <div class="row">
               {#each library.albums as a}
-                <button class="card" type="button" onclick={() => go({ id: 'album', albumId: a.id })}>
-                  <div class="art"><Cover src={a.cover} size={152} alt="" /></div>
-                  <div class="c-a"><div class="title">{a.name}</div><div class="sub">{a.subtitle || ''}</div></div>
-                </button>
+                <div class="card" role="group">
+                  <button class="art" type="button" title="Play" onclick={() => playAlbumId(a.id, a.cover)}>
+                    <Cover src={a.cover} size={152} alt="" />
+                    <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
+                  </button>
+                  <button class="c-a" type="button" onclick={() => go({ id: 'album', albumId: a.id })}>
+                    <div class="title">{a.name}</div>
+                    <div class="sub">{a.subtitle || ''}</div>
+                  </button>
+                </div>
               {/each}
             </div>
           {/if}
@@ -1226,10 +1297,15 @@
             <h2 class="shelf-title" style="margin:28px 0 12px">Artists</h2>
             <div class="row">
               {#each library.artists as a}
-                <button class="card artist" type="button" onclick={() => go({ id: 'artist', artistId: a.id })}>
-                  <div class="art"><Cover src={a.cover} size={132} round alt="" /></div>
-                  <div class="c-a"><div class="title">{a.name}</div></div>
-                </button>
+                <div class="card artist" role="group">
+                  <button class="art" type="button" title="Play" onclick={() => playArtistId(a.id, a.cover)}>
+                    <Cover src={a.cover} size={132} round alt="" />
+                    <span class="play-ov"><Hi icon={PlayIcon} size={28} /></span>
+                  </button>
+                  <button class="c-a" type="button" onclick={() => go({ id: 'artist', artistId: a.id })}>
+                    <div class="title">{a.name}</div>
+                  </button>
+                </div>
               {/each}
             </div>
           {/if}
@@ -1290,10 +1366,16 @@
           <h2 class="shelf-title" style="margin:28px 0 12px">Albums</h2>
           <div class="row">
             {#each artist.albums as a}
-              <button class="card" type="button" onclick={() => go({ id: 'album', albumId: a.id })}>
-                <div class="art"><Cover src={a.cover} size={152} alt="" /></div>
-                <div class="c-a"><div class="title">{a.name}</div><div class="sub">{a.year || a.album_type || ''}</div></div>
-              </button>
+              <div class="card" role="group">
+                <button class="art" type="button" title="Play" onclick={() => playAlbumId(a.id, a.cover)}>
+                  <Cover src={a.cover} size={152} alt="" />
+                  <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
+                </button>
+                <button class="c-a" type="button" onclick={() => go({ id: 'album', albumId: a.id })}>
+                  <div class="title">{a.name}</div>
+                  <div class="sub">{a.year || a.album_type || ''}</div>
+                </button>
+              </div>
             {/each}
           </div>
         {/if}
@@ -1301,10 +1383,16 @@
           <h2 class="shelf-title" style="margin:28px 0 12px">Singles</h2>
           <div class="row">
             {#each artist.singles as a}
-              <button class="card" type="button" onclick={() => go({ id: 'album', albumId: a.id })}>
-                <div class="art"><Cover src={a.cover} size={152} alt="" /></div>
-                <div class="c-a"><div class="title">{a.name}</div><div class="sub">{a.year || a.album_type || ''}</div></div>
-              </button>
+              <div class="card" role="group">
+                <button class="art" type="button" title="Play" onclick={() => playAlbumId(a.id, a.cover)}>
+                  <Cover src={a.cover} size={152} alt="" />
+                  <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
+                </button>
+                <button class="c-a" type="button" onclick={() => go({ id: 'album', albumId: a.id })}>
+                  <div class="title">{a.name}</div>
+                  <div class="sub">{a.year || a.album_type || ''}</div>
+                </button>
+              </div>
             {/each}
           </div>
         {/if}
@@ -1390,7 +1478,7 @@
         {#if loading && !genre}<Skeleton kind="page" />{/if}
         <h1 class="page-title">{genre?.name || (view as { title?: string }).title || ''}</h1>
         {#each genre?.sections ?? [] as s}
-          <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} />
+          <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} onPlayCollection={(it) => playCollection(it, false)} />
         {/each}
 
       {:else if view.id === 'settings'}
@@ -1679,7 +1767,7 @@
     <aside class="panel">
       <div class="panel-h">
         <h2>{{ queue: 'Up next', lyrics: 'Lyrics', related: 'Related' }[panel]}</h2>
-        <IconBtn icon={Cancel01Icon} onclick={() => (panel = null)} title="Close" />
+        <IconBtn icon={Cancel01Icon} size={24} btnSize="lg" onclick={() => (panel = null)} title="Close" />
       </div>
       <div class="ptabs">
         <button class="ptab {panel === 'queue' ? 'on' : ''}" type="button" onclick={() => openPanel('queue')}>Queue</button>
@@ -1695,17 +1783,21 @@
                 <div class="tn">{t.title}</div>
                 <div class="ta">{artistsLine(t.artists)}</div>
               </div>
-              {#if i !== player.index}
-                <IconBtn icon={Cancel01Icon} size={16} onclick={(e) => { e.stopPropagation(); api.queueRemove(i); }} title="Remove" />
-              {/if}
             </button>
           {/each}
         {:else if panel === 'lyrics'}
           <div class="lyrics">
             {#if lyrics && lyrics.lines.length}
+              {#if !lyrics.synced}
+                <div class="ly-note">Lyrics for this aren't synced yet</div>
+              {/if}
               {#each lyrics.lines as ln, i}
-                <button type="button" class="ly {i === activeLyric ? 'on' : ''}" data-i={i}
-                  onclick={() => ln.start_ms != null && api.seek(ln.start_ms / 1000)}
+                <button
+                  type="button"
+                  class="ly {i === activeLyric ? 'on' : ''}"
+                  class:static={!lyrics.synced || ln.start_ms == null}
+                  data-i={i}
+                  onclick={() => lyrics.synced && ln.start_ms != null && api.seek(ln.start_ms / 1000)}
                 >{ln.text}</button>
               {/each}
               {#if lyrics.source}<div class="ly-src">{lyrics.source}</div>{/if}
@@ -1750,7 +1842,7 @@
         onpointerenter={() => { npHoverChrome = true; armNpHide(); }}
         onpointerleave={() => { npHoverChrome = false; armNpHide(); }}
       >
-        <Hi icon={Cancel01Icon} size={22} />
+        <Hi icon={Cancel01Icon} size={26} />
       </button>
       <div class="np-in">
         <div class="np-art">

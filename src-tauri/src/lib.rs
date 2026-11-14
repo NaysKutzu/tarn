@@ -41,6 +41,10 @@ pub struct App {
     pub ui: Mutex<persist::UiMem>,
     pub pending_toast: Mutex<Option<String>>,
     skip_fails: std::sync::atomic::AtomicU32,
+    /// Video ids known to be in Liked Music (from library + like toggles).
+    liked_ids: Mutex<std::collections::HashSet<String>>,
+    /// Last library liked track list - used to open LM without rustypipe.
+    liked_tracks: Mutex<Vec<Track>>,
 }
 
 impl App {
@@ -94,11 +98,74 @@ impl App {
             ui: Mutex::new(persist::UiMem::default()),
             pending_toast: Mutex::new(None),
             skip_fails: std::sync::atomic::AtomicU32::new(0),
+            liked_ids: Mutex::new(std::collections::HashSet::new()),
+            liked_tracks: Mutex::new(Vec::new()),
         })
     }
 
     pub fn notifications_enabled(&self) -> bool {
         *self.notify.lock()
+    }
+
+    pub fn remember_liked(&self, ids: impl IntoIterator<Item = String>) {
+        let mut g = self.liked_ids.lock();
+        for id in ids {
+            if !id.is_empty() {
+                g.insert(id);
+            }
+        }
+    }
+
+    pub fn remember_liked_tracks(&self, tracks: Vec<Track>) {
+        self.remember_liked(tracks.iter().map(|t| t.id.clone()));
+        *self.liked_tracks.lock() = tracks;
+    }
+
+    pub fn liked_music_snapshot(&self) -> Option<Collection> {
+        let tracks = self.liked_tracks.lock().clone();
+        if tracks.is_empty() {
+            return None;
+        }
+        let n = tracks.len() as u64;
+        Some(Collection {
+            kind: "playlist".into(),
+            id: "LM".into(),
+            playlist_id: Some("LM".into()),
+            name: "Liked Music".into(),
+            cover: tracks.first().and_then(|t| t.cover.clone()),
+            artists: Vec::new(),
+            artist_ids: Vec::new(),
+            author: None,
+            year: None,
+            description: None,
+            track_count: Some(n),
+            album_type: None,
+            tracks,
+            related: Vec::new(),
+            owned: true,
+            saved: true,
+        })
+    }
+
+    pub fn set_liked_id(&self, id: &str, liked: bool) {
+        if id.is_empty() {
+            return;
+        }
+        let mut g = self.liked_ids.lock();
+        if liked {
+            g.insert(id.to_string());
+        } else {
+            g.remove(id);
+        }
+    }
+
+    pub fn is_liked_id(&self, id: &str) -> bool {
+        !id.is_empty() && self.liked_ids.lock().contains(id)
+    }
+
+    pub fn apply_known_rating(&self, id: &str) {
+        let liked = self.is_liked_id(id);
+        self.player.set_rating(liked, false);
     }
 }
 
@@ -290,6 +357,12 @@ async fn get_album(app: State<'_, Arc<App>>, id: String) -> Result<Collection, S
 
 #[tauri::command]
 async fn get_playlist(app: State<'_, Arc<App>>, id: String) -> Result<Collection, String> {
+    let bare = id.strip_prefix("VL").unwrap_or(&id);
+    if bare == "LM" {
+        if let Some(c) = app.liked_music_snapshot() {
+            return Ok(c);
+        }
+    }
     app.ytm.playlist(&id).await.map_err(|e| e.to_string())
 }
 
@@ -395,7 +468,8 @@ pub(crate) async fn start_playback_at(
     if let Some(d) = track.duration {
         app.player.set_duration(d as f64);
     }
-    app.player.set_rating(false, false);
+    // Keep heart state if this id is already in Liked Music.
+    app.apply_known_rating(&id);
     app.player.prepare(track.clone(), queue.clone(), index, start, true);
     let gen = app.player.play_gen();
 
@@ -802,6 +876,7 @@ async fn like_track(app: State<'_, Arc<App>>, id: String, action: String) -> Res
             _ => LikeState::default(),
         };
         app.player.set_rating(st.liked, st.disliked);
+        app.set_liked_id(&id, st.liked);
         return Ok(st);
     }
     let st = app
@@ -810,6 +885,10 @@ async fn like_track(app: State<'_, Arc<App>>, id: String, action: String) -> Res
         .await
         .map_err(|e| e.to_string())?;
     app.player.set_rating(st.liked, st.disliked);
+    app.set_liked_id(&id, st.liked);
+    if !st.liked {
+        app.liked_tracks.lock().retain(|t| t.id != id);
+    }
     Ok(st)
 }
 
@@ -887,7 +966,12 @@ async fn get_library(app: State<'_, Arc<App>>) -> Result<Library, String> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(40)).await;
     }
-    app.ytm.library().await.map_err(|e| e.to_string())
+    let lib = app.ytm.library().await.map_err(|e| e.to_string())?;
+    app.remember_liked_tracks(lib.liked.clone());
+    if let Some(id) = app.player.snapshot().track.as_ref().map(|t| t.id.clone()) {
+        app.apply_known_rating(&id);
+    }
+    Ok(lib)
 }
 
 #[tauri::command]
@@ -1114,6 +1198,13 @@ fn maybe_blend(app: &Arc<App>) {
                 app.player.clear_blending();
                 return Ok(());
             }
+            // Queue the UI swap before the mixer command so XfReady can
+            // adopt as soon as audio actually starts - never before.
+            app.player.queue_adopt(track, index);
+            if let Some(d) = next_dur {
+                // Stash on the body so the first snapshot after adopt is right.
+                audio.set_duration(d);
+            }
             app.player
                 .play_stream(stream, audio, 0.0, style)
                 .map_err(|e| e.to_string())?;
@@ -1122,11 +1213,8 @@ fn maybe_blend(app: &Arc<App>) {
                 app.player.clear_blending();
                 return Ok(());
             }
-            app.player.adopt_track(track, index);
-            // Set the new track's duration only AFTER adopt, so we never
-            // shrink the outgoing track's duration mid-play (that made
-            // the same song look like it restarted).
             if let Some(d) = next_dur {
+                // If adopt already flushed, keep duration in sync.
                 app.player.set_duration(d);
             }
             let (q, _) = app.player.queue_and_index();

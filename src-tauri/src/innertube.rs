@@ -14,7 +14,14 @@ use crate::ytm::user_agent;
 
 const ORIGIN: &str = "https://music.youtube.com";
 const CLIENT_NAME: &str = "WEB_REMIX";
-const CLIENT_VERSION: &str = "1.20241216.01.00";
+// Keep this on a known-good WEB_REMIX build. Made-up "today" versions
+// get HTTP 400 on some library browses.
+const CLIENT_VERSION: &str = "1.20260516.01.00";
+/// Timed lyrics only show up on the Android Music client; WEB_REMIX returns
+/// plain text (or an older untimed shape) for the same browse id.
+const ANDROID_MUSIC_NAME: &str = "ANDROID_MUSIC";
+const ANDROID_MUSIC_VERSION: &str = "7.27.52";
+const ANDROID_MUSIC_CLIENT_ID: &str = "21";
 
 #[derive(Clone)]
 pub struct InnerTube {
@@ -409,8 +416,56 @@ impl InnerTube {
 
     /// Timed lyrics if YouTube returns them; otherwise empty (caller falls back).
     pub async fn timed_lyrics(&self, lyrics_browse_id: &str) -> Result<Option<Lyrics>> {
-        let v = self.browse(lyrics_browse_id, None).await?;
+        let v = self.browse_android_music(lyrics_browse_id).await?;
         Ok(parse_timed_lyrics(&v))
+    }
+
+    /// Same browse endpoint as [`browse`], but with an Android Music client
+    /// so timed lyric models are included in the response.
+    async fn browse_android_music(&self, browse_id: &str) -> Result<Value> {
+        let body = json!({
+            "browseId": browse_id,
+            "context": {
+                "client": {
+                    "clientName": ANDROID_MUSIC_NAME,
+                    "clientVersion": ANDROID_MUSIC_VERSION,
+                    "hl": self.lang,
+                    "gl": self.region.to_uppercase(),
+                }
+            }
+        });
+        let url = format!("https://music.youtube.com/youtubei/v1/browse?prettyPrint=false");
+        let mut req = self
+            .http
+            .post(&url)
+            .header("User-Agent", "com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14; en_US)")
+            .header("Content-Type", "application/json")
+            .header("Origin", ORIGIN)
+            .header("Referer", "https://music.youtube.com/")
+            .header("X-YouTube-Client-Name", ANDROID_MUSIC_CLIENT_ID)
+            .header("X-YouTube-Client-Version", ANDROID_MUSIC_VERSION)
+            .header("X-Origin", ORIGIN);
+        if let Some(c) = &self.cookie {
+            req = req.header("Cookie", c);
+            if let Some(sap) = sapisid_from_header(c) {
+                req = req.header("Authorization", sapisidhash_now(&sap));
+            }
+            req = req.header("X-Goog-AuthUser", "0");
+            if let Some(v) = crate::auth::header_value(c, "VISITOR_INFO1_LIVE") {
+                req = req.header("X-Goog-Visitor-Id", v);
+            }
+        }
+        let resp = req.json(&body).send().await?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        crate::diag::log(format!(
+            "innertube browse(android) {browse_id}: HTTP {status} bytes={}",
+            text.len()
+        ));
+        if !status.is_success() {
+            return Err(anyhow!("innertube browse(android): HTTP {status}"));
+        }
+        serde_json::from_str(&text).map_err(|e| anyhow!("innertube json: {e}"))
     }
 }
 
@@ -890,36 +945,60 @@ fn parse_timed_lyrics(v: &Value) -> Option<Lyrics> {
         if key == "timedLyricsData" {
             if let Some(arr) = val.as_array() {
                 for ln in arr {
-                    let text = ln["lyricLine"]
-                        .as_str()
-                        .map(|s| s.to_string())
-                        .or_else(|| yt_text(&ln["lyricLine"]))
-                        .unwrap_or_default();
-                    let start = ln["cueRange"]["startTimeMilliseconds"]
-                        .as_str()
-                        .and_then(|s| s.parse().ok())
-                        .or_else(|| ln["cueRange"]["startTimeMilliseconds"].as_u64().map(|n| n as u32));
-                    if !text.is_empty() {
-                        lines.push(LyricLine {
-                            text,
-                            start_ms: start,
-                        });
+                    if let Some(line) = timed_lyric_line(ln) {
+                        lines.push(line);
                     }
                 }
             }
         }
-        if key == "lyricsData" {
-            // unsynced alternative
-        }
     });
+    // Prefer the Android Music path when walk somehow missed nested keys.
+    if lines.is_empty() {
+        if let Some(arr) = v
+            .pointer(
+                "/contents/elementRenderer/newElement/type/componentType/model/timedLyricsModel/lyricsData/timedLyricsData",
+            )
+            .and_then(|x| x.as_array())
+        {
+            for ln in arr {
+                if let Some(line) = timed_lyric_line(ln) {
+                    lines.push(line);
+                }
+            }
+        }
+    }
     if lines.is_empty() {
         return None;
     }
-    let synced = lines.iter().any(|l| l.start_ms.is_some());
+    // YouTube sometimes returns timedLyricsData with no cueRange - treat
+    // as plain lyrics so we don't claim sync we don't have.
+    let timed = lines.iter().filter(|l| l.start_ms.is_some()).count();
+    let synced = timed > 0 && timed * 2 >= lines.len();
     Some(Lyrics {
         source: None,
         lines,
         synced,
+    })
+}
+
+fn timed_lyric_line(ln: &Value) -> Option<LyricLine> {
+    let text = ln["lyricLine"]
+        .as_str()
+        .map(|s| s.to_string())
+        .or_else(|| yt_text(&ln["lyricLine"]))
+        .unwrap_or_default();
+    if text.is_empty() {
+        return None;
+    }
+    let cue = &ln["cueRange"];
+    let start = cue["startTimeMilliseconds"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| cue["startTimeMilliseconds"].as_u64().map(|n| n as u32))
+        .or_else(|| cue["startTimeMilliseconds"].as_i64().map(|n| n.max(0) as u32));
+    Some(LyricLine {
+        text,
+        start_ms: start,
     })
 }
 
