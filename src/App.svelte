@@ -53,7 +53,33 @@
   let auth = $state<AuthStatus>({ signed_in: false, mock: false, account: null, store: null });
   let updateCheck = $state(0);
   let appVersion = $state('0.1.0');
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, autoplay: true, cache_max_mb: 1024, crossfade: true, crossfade_seconds: 4, album_continuity: true });
+  const XF_DEFAULTS = {
+    crossfade_seconds: 4,
+    album_continuity: true,
+    crossfade_curve_out: 'equal_power',
+    crossfade_curve_in: 'equal_power',
+    crossfade_out_len: 100,
+    crossfade_in_len: 100,
+    crossfade_on_skip: true,
+    crossfade_smart: false,
+    crossfade_filter: 'off',
+    bpm_match: false,
+    bpm_max_change: 6,
+    bpm_beat_align: true,
+    bpm_return_seconds: 8,
+  } satisfies Partial<SettingsT>;
+  const XF_CURVES = [
+    { value: 'equal_power', label: 'Equal power' },
+    { value: 'linear', label: 'Linear' },
+    { value: 's_curve', label: 'S-curve' },
+    { value: 'logarithmic', label: 'Logarithmic' },
+    { value: 'exponential', label: 'Exponential' },
+  ];
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, autoplay: true, cache_max_mb: 1024, crossfade: true, ...XF_DEFAULTS });
+  function resetCrossfade() {
+    Object.assign(settings, XF_DEFAULTS);
+    api.setSettings(settings);
+  }
   let player = $state<PlayerState>({
     track: null, playing: false, loading: false, buffering: false, buffered: 0,
     position: 0, duration: 0,
@@ -1271,6 +1297,7 @@
             <span class="lb"><Hi icon={MusicNote01Icon} size={20} /> Crossfade</span>
             <Toggle bind:checked={settings.crossfade} label="Crossfade" onchange={() => api.setSettings(settings)} />
           </div>
+          {#if settings.crossfade}
           <div class="set-row">
             <span class="lb">Crossfade duration
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{settings.crossfade_seconds.toFixed(1)}s</span>
@@ -1278,7 +1305,7 @@
             <div style="width:200px">
               <Slider
                 value={settings.crossfade_seconds}
-                max={12}
+                max={20}
                 live={true}
                 showTip={true}
                 format={(v) => `${v.toFixed(1)}s`}
@@ -1288,11 +1315,131 @@
             </div>
           </div>
           <div class="set-row">
+            <span class="lb">Fade-out curve
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">How the ending track fades away</span>
+            </span>
+            <Dropdown bind:value={settings.crossfade_curve_out} options={XF_CURVES} onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
+            <span class="lb">Fade-in curve
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">How the next track comes in</span>
+            </span>
+            <Dropdown bind:value={settings.crossfade_curve_in} options={XF_CURVES} onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
+            <span class="lb">Fade-out length
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{Math.round(settings.crossfade_out_len)}% of the crossfade, at the end</span>
+            </span>
+            <div style="width:200px">
+              <Slider
+                value={settings.crossfade_out_len - 10}
+                max={90}
+                live={true}
+                showTip={true}
+                format={(v) => `${Math.round(v + 10)}%`}
+                oninput={(v) => { settings.crossfade_out_len = Math.round(v + 10); }}
+                onchange={(v) => { settings.crossfade_out_len = Math.round(v + 10); api.setSettings(settings); }}
+              />
+            </div>
+          </div>
+          <div class="set-row">
+            <span class="lb">Fade-in length
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{Math.round(settings.crossfade_in_len)}% of the crossfade, from the start</span>
+            </span>
+            <div style="width:200px">
+              <Slider
+                value={settings.crossfade_in_len - 10}
+                max={90}
+                live={true}
+                showTip={true}
+                format={(v) => `${Math.round(v + 10)}%`}
+                oninput={(v) => { settings.crossfade_in_len = Math.round(v + 10); }}
+                onchange={(v) => { settings.crossfade_in_len = Math.round(v + 10); api.setSettings(settings); }}
+              />
+            </div>
+          </div>
+          <div class="set-row">
+            <span class="lb">Filter sweep
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">DJ-style EQ movement during the blend</span>
+            </span>
+            <Dropdown bind:value={settings.crossfade_filter} options={[
+              { value: 'off', label: 'Off' },
+              { value: 'lowpass', label: 'Low-pass out' },
+              { value: 'highpass', label: 'High-pass in' },
+              { value: 'sweep', label: 'Bass swap (both)' },
+            ]} onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
+            <span class="lb">Smart start
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Skip silence at the end and start of tracks</span>
+            </span>
+            <Toggle bind:checked={settings.crossfade_smart} label="Smart start" onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
+            <span class="lb">Crossfade on skip
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Blend when you press next, instead of a quick cut</span>
+            </span>
+            <Toggle bind:checked={settings.crossfade_on_skip} label="Crossfade on skip" onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
             <span class="lb">Album continuity
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">No crossfade between tracks on the same album</span>
             </span>
             <Toggle bind:checked={settings.album_continuity} label="Album continuity" onchange={() => api.setSettings(settings)} />
           </div>
+          <div class="set-row">
+            <span class="lb">BPM matching
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Detect tempo and match the next track to the current one</span>
+            </span>
+            <Toggle bind:checked={settings.bpm_match} label="BPM matching" onchange={() => api.setSettings(settings)} />
+          </div>
+          {#if settings.bpm_match}
+            <div class="set-row">
+              <span class="lb">Max tempo change
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">±{settings.bpm_max_change.toFixed(1)}% — larger gaps blend without matching</span>
+              </span>
+              <div style="width:200px">
+                <Slider
+                  value={settings.bpm_max_change}
+                  max={16}
+                  live={true}
+                  showTip={true}
+                  format={(v) => `±${Math.max(0.5, v).toFixed(1)}%`}
+                  oninput={(v) => { settings.bpm_max_change = Math.max(0.5, Math.round(v * 2) / 2); }}
+                  onchange={(v) => { settings.bpm_max_change = Math.max(0.5, Math.round(v * 2) / 2); api.setSettings(settings); }}
+                />
+              </div>
+            </div>
+            <div class="set-row">
+              <span class="lb">Beat-aligned start
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Start the blend on a beat so kicks line up</span>
+              </span>
+              <Toggle bind:checked={settings.bpm_beat_align} label="Beat-aligned start" onchange={() => api.setSettings(settings)} />
+            </div>
+            <div class="set-row">
+              <span class="lb">Tempo return
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Glide back to the track's own tempo over {settings.bpm_return_seconds.toFixed(0)}s</span>
+              </span>
+              <div style="width:200px">
+                <Slider
+                  value={settings.bpm_return_seconds}
+                  max={30}
+                  live={true}
+                  showTip={true}
+                  format={(v) => `${Math.max(1, Math.round(v))}s`}
+                  oninput={(v) => { settings.bpm_return_seconds = Math.max(1, Math.round(v)); }}
+                  onchange={(v) => { settings.bpm_return_seconds = Math.max(1, Math.round(v)); api.setSettings(settings); }}
+                />
+              </div>
+            </div>
+          {/if}
+          <div class="set-row">
+            <span class="lb">Crossfade defaults
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Restore every crossfade option above</span>
+            </span>
+            <button class="btn ghost" type="button" onclick={resetCrossfade}>Reset</button>
+          </div>
+          {/if}
           <div class="set-row">
             <span class="lb"><Hi icon={Bookmark02Icon} size={20} /> Offline cache
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{fmtCache(cacheUsed)} of {fmtCache(cacheMax)}</span>

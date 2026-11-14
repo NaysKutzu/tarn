@@ -1,7 +1,12 @@
-//! Clickless envelopes, equal-power crossfades, and gapless handoff.
+//! Clickless envelopes, shaped crossfades, and gapless handoff.
 //!
 //! A single long-lived rodio `Source` sits on the sink. Commands on the
 //! audio thread swap or overlap decoders; the callback only mixes samples.
+//!
+//! Crossfades can use per-side curves and lengths, an optional filter
+//! sweep, a beat-aligned start, and varispeed tempo matching of the
+//! incoming track (see `transition.rs`). With the default settings all of
+//! that is inert and the output matches the classic equal-power blend.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -11,6 +16,43 @@ use parking_lot::Mutex;
 use rodio::Source;
 
 use crate::decode::{AudioSource, Pull};
+use crate::transition::{
+    frames_to_next_beat, sweep_hz, Beat, Biquad, EnvBuilder, FrameRes, Vari, XfShape, SILENCE,
+};
+
+/// Seconds of the outgoing track kept for live tempo analysis.
+const TAP_SECS: f32 = 12.0;
+
+/// Everything a single crossfade needs beyond the incoming decoder.
+#[derive(Clone, Debug)]
+pub struct XfPlan {
+    pub shape: XfShape,
+    /// Playback rate of the incoming track during the overlap (1 = native).
+    pub in_rate: f64,
+    /// Outgoing beat grid (period, phase) in the live tap's frame clock;
+    /// the overlap waits for the next beat when set.
+    pub out_grid: Option<(f64, f64)>,
+    /// Seconds for the new track to glide back to rate 1 after the overlap.
+    pub return_secs: f32,
+    /// Frames already skipped at the head of the incoming decoder
+    /// (silence trim / beat alignment) so the position clock stays right.
+    pub skipped_frames: u64,
+    /// Shorten the overlap when the outgoing track has already gone quiet.
+    pub smart: bool,
+}
+
+impl XfPlan {
+    pub fn simple(secs: f32) -> Self {
+        Self {
+            shape: XfShape::equal_power(secs),
+            in_rate: 1.0,
+            out_grid: None,
+            return_secs: 8.0,
+            skipped_frames: 0,
+            smart: false,
+        }
+    }
+}
 
 /// Fade used for play / pause / resume / seek / skip (~150–300 ms).
 pub const CLICK_FADE: f32 = 0.22;
@@ -25,6 +67,44 @@ pub struct Mixer {
     buffering: Arc<AtomicBool>,
     recover: Arc<AtomicBool>,
     has_src: Arc<AtomicBool>,
+    /// Milliseconds the current track has been continuously silent.
+    quiet_ms: Arc<AtomicU32>,
+}
+
+/// Cheap handle used off the audio callback (analysis threads).
+#[derive(Clone)]
+pub struct MixTap {
+    inner: Arc<Mutex<Inner>>,
+}
+
+impl MixTap {
+    /// Tempo/phase of what the outgoing track has played recently, with the
+    /// phase expressed in the tap's absolute frame clock.
+    pub fn outgoing_beat(&self) -> Option<Beat> {
+        let (full, low, start, sr) = {
+            let g = self.inner.lock();
+            let t = g.tap.as_ref()?;
+            (
+                t.full.iter().copied().collect::<Vec<_>>(),
+                t.low.iter().copied().collect::<Vec<_>>(),
+                t.window_start(),
+                g.sr,
+            )
+        };
+        let mut b = crate::transition::analyze(&full, &low, sr)?;
+        b.phase += start as f64;
+        Some(b)
+    }
+
+    pub fn set_analysis(&self, on: bool) {
+        let mut g = self.inner.lock();
+        if on && g.tap.is_none() {
+            let sr = g.sr;
+            g.tap = Some(EnvBuilder::new(sr, TAP_SECS));
+        } else if !on {
+            g.tap = None;
+        }
+    }
 }
 
 struct Inner {
@@ -45,6 +125,20 @@ struct Inner {
     /// Held frame so every channel shares the same envelope/xf value.
     frame: Vec<i16>,
     frame_i: usize,
+    /// Crossfade shape (curves, lengths, filter).
+    shape: XfShape,
+    /// Output frames to keep playing the outgoing track alone before the
+    /// overlap starts (beat alignment).
+    xf_wait: u32,
+    cur_vari: Vari,
+    inc_vari: Vari,
+    return_secs: f32,
+    lp_out: Vec<Biquad>,
+    hp_in: Vec<Biquad>,
+    /// Live envelope of the current track for tempo analysis (None = off).
+    tap: Option<EnvBuilder>,
+    quiet_run: u32,
+    clock_acc: f64,
 }
 
 impl Mixer {
@@ -58,6 +152,7 @@ impl Mixer {
         buffering: Arc<AtomicBool>,
         recover: Arc<AtomicBool>,
         has_src: Arc<AtomicBool>,
+        quiet_ms: Arc<AtomicU32>,
     ) -> Self {
         let sr = 44100;
         let ch = 2u16;
@@ -78,6 +173,16 @@ impl Mixer {
                 finished: false,
                 frame: Vec::new(),
                 frame_i: 0,
+                shape: XfShape::equal_power(0.0),
+                xf_wait: 0,
+                cur_vari: Vari::default(),
+                inc_vari: Vari::default(),
+                return_secs: 8.0,
+                lp_out: Vec::new(),
+                hp_in: Vec::new(),
+                tap: None,
+                quiet_run: 0,
+                clock_acc: 0.0,
             })),
             samples,
             sample_rate,
@@ -87,6 +192,13 @@ impl Mixer {
             buffering,
             recover,
             has_src,
+            quiet_ms,
+        }
+    }
+
+    pub fn tap(&self) -> MixTap {
+        MixTap {
+            inner: self.inner.clone(),
         }
     }
 
@@ -98,6 +210,7 @@ impl Mixer {
             phase: self.phase.clone(),
             buffering: self.buffering.clone(),
             recover: self.recover.clone(),
+            quiet_ms: self.quiet_ms.clone(),
         }
     }
 
@@ -117,6 +230,7 @@ impl Mixer {
         g.incoming = None;
         g.xf_len = 0;
         g.xf_pos = 0;
+        g.new_current();
         g.finished = false;
         g.paused = true;
         g.env = 0.0;
@@ -142,6 +256,7 @@ impl Mixer {
         g.incoming = None;
         g.xf_len = 0;
         g.xf_pos = 0;
+        g.new_current();
         g.finished = false;
         g.paused = false;
         g.env = 0.0;
@@ -154,6 +269,11 @@ impl Mixer {
 
     /// Equal-power overlap of the current decoder with `src`.
     pub fn crossfade(&self, src: AudioSource, secs: f32) {
+        self.crossfade_plan(src, XfPlan::simple(secs));
+    }
+
+    /// Shaped overlap of the current decoder with `src`.
+    pub fn crossfade_plan(&self, src: AudioSource, plan: XfPlan) {
         let sr = src.sample_rate().max(1);
         let ch = src.channels().max(1);
         let mut g = self.inner.lock();
@@ -164,18 +284,41 @@ impl Mixer {
             self.play(src, CLICK_FADE);
             return;
         }
-        let secs = secs.clamp(0.05, 12.0);
+        let mut secs = plan.shape.secs.clamp(0.05, 20.0);
+        // Smart start: the outgoing track already went quiet — don't make
+        // the listener sit through a long fade-in from silence.
+        if plan.smart && g.quiet_run as f32 > 0.5 * g.sr as f32 {
+            secs = secs.min(1.0);
+        }
         g.incoming = Some(src);
         g.xf_len = (secs * g.sr as f32).round().max(1.0) as u32;
         g.xf_pos = 0;
+        g.shape = plan.shape.clone();
+        g.shape.secs = secs;
+        g.return_secs = plan.return_secs;
+        g.inc_vari = Vari::with_rate(plan.in_rate);
+        g.lp_out = vec![Biquad::default(); ch as usize];
+        g.hp_in = vec![Biquad::default(); ch as usize];
+        g.xf_wait = 0;
+        if let (Some((period, phase)), Some(tap)) = (plan.out_grid, g.tap.as_ref()) {
+            let now = tap.frames as f64;
+            let wait = frames_to_next_beat(now, phase, period);
+            // Never hold the overlap back by more than a beat (or 1 s).
+            if wait <= period && wait <= g.sr as f64 {
+                let rate = g.cur_vari.rate.max(0.5);
+                g.xf_wait = (wait / rate).round() as u32;
+            }
+        }
         g.finished = false;
         g.paused = false;
         if g.env < 0.5 {
             g.set_fade(1.0, CLICK_FADE);
         }
+        g.clock_acc = 0.0;
         self.ended.store(false, Ordering::Relaxed);
         self.phase.store(1, Ordering::Relaxed);
-        self.samples.store(0, Ordering::SeqCst);
+        self.samples
+            .store(plan.skipped_frames.saturating_mul(ch as u64), Ordering::SeqCst);
         self.has_src.store(true, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
     }
@@ -221,6 +364,7 @@ impl Mixer {
         g.xf_len = 0;
         g.paused = true;
         g.current = None;
+        g.new_current();
         g.env = 0.0;
         self.phase.store(0, Ordering::Relaxed);
         self.has_src.store(false, Ordering::Relaxed);
@@ -238,6 +382,7 @@ impl Mixer {
         g.current = Some(src);
         g.incoming = None;
         g.xf_len = 0;
+        g.new_current();
         g.finished = false;
         g.paused = false;
         g.env = 0.0;
@@ -246,6 +391,10 @@ impl Mixer {
         self.has_src.store(true, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
         self.recover.store(false, Ordering::Relaxed);
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.inner.lock().paused
     }
 
     pub fn env_quiet(&self) -> bool {
@@ -271,6 +420,8 @@ impl Mixer {
         g.incoming = Some(src);
         g.xf_len = 0;
         g.xf_pos = 0;
+        g.xf_wait = 0;
+        g.inc_vari = Vari::default();
         g.finished = false;
         g.paused = false;
         self.ended.store(false, Ordering::Relaxed);
@@ -280,6 +431,34 @@ impl Mixer {
 }
 
 impl Inner {
+    /// Reset per-track state when `current` is replaced outright.
+    fn new_current(&mut self) {
+        self.xf_wait = 0;
+        self.cur_vari = Vari::default();
+        self.inc_vari = Vari::default();
+        self.quiet_run = 0;
+        self.clock_acc = 0.0;
+        if let Some(t) = self.tap.as_mut() {
+            t.reset();
+        }
+    }
+
+    /// The incoming decoder becomes current (end of overlap or gapless).
+    fn promote_incoming(&mut self) {
+        self.current = self.incoming.take();
+        self.cur_vari = std::mem::take(&mut self.inc_vari);
+        if self.cur_vari.active() {
+            let (secs, sr) = (self.return_secs as f64, self.sr);
+            self.cur_vari.ramp_to(1.0, secs, sr);
+        }
+        self.xf_wait = 0;
+        self.quiet_run = 0;
+        self.clock_acc = 0.0;
+        if let Some(t) = self.tap.as_mut() {
+            t.reset();
+        }
+    }
+
     fn set_fade(&mut self, tgt: f32, secs: f32) {
         self.env_tgt = tgt.clamp(0.0, 1.0);
         let frames = (secs.max(0.04) * self.sr as f32).max(1.0);
@@ -305,11 +484,26 @@ pub struct MixerSource {
     phase: Arc<AtomicU8>,
     buffering: Arc<AtomicBool>,
     recover: Arc<AtomicBool>,
+    quiet_ms: Arc<AtomicU32>,
+}
+
+/// Read one interleaved frame straight from a decoder.
+pub fn pull_raw(src: &mut AudioSource, out: &mut [i16]) -> FrameRes {
+    for s in out.iter_mut() {
+        match src.pull() {
+            Pull::Sample(v) => *s = v,
+            Pull::Buffering => return FrameRes::Buffering,
+            Pull::Ended => return FrameRes::Ended,
+            Pull::Stall(e) => return FrameRes::Stall(e),
+        }
+    }
+    FrameRes::Ok
 }
 
 impl MixerSource {
     fn pull_frame(&mut self) -> Option<i16> {
-        let mut g = self.inner.lock();
+        let mut guard = self.inner.lock();
+        let g = &mut *guard;
         if g.frame_i < g.frame.len() {
             let v = g.frame[g.frame_i];
             g.frame_i += 1;
@@ -325,69 +519,110 @@ impl MixerSource {
         let mut a_buf = false;
         let mut a_stall: Option<String> = None;
         let mut b_buf = false;
+        // Beat alignment: the outgoing track plays alone until its next beat.
+        let waiting = g.xf_len > 0 && g.xf_wait > 0 && g.incoming.is_some();
         if !frozen {
             if let Some(src) = g.current.as_mut() {
                 a_alive = true;
-                for s in a.iter_mut() {
-                    match src.pull() {
-                        Pull::Sample(v) => *s = v,
-                        Pull::Buffering => {
-                            a_buf = true;
-                            break;
-                        }
-                        Pull::Ended => {
-                            a_alive = false;
-                            break;
-                        }
-                        Pull::Stall(e) => {
-                            a_stall = Some(e);
-                            a_alive = false;
-                            break;
-                        }
+                match g.cur_vari.pull(&mut a, |f| pull_raw(src, f)) {
+                    FrameRes::Ok => {}
+                    FrameRes::Buffering => a_buf = true,
+                    FrameRes::Ended => a_alive = false,
+                    FrameRes::Stall(e) => {
+                        a_stall = Some(e);
+                        a_alive = false;
+                    }
+                }
+                if a_alive && !a_buf {
+                    if let Some(t) = g.tap.as_mut() {
+                        t.push_frame(&a);
+                    }
+                    let peak = a.iter().map(|&v| (v as i32).abs()).max().unwrap_or(0);
+                    if peak < SILENCE {
+                        g.quiet_run = g.quiet_run.saturating_add(1);
+                    } else {
+                        g.quiet_run = 0;
+                    }
+                    if g.quiet_run.is_multiple_of(512) {
+                        let ms = (g.quiet_run as u64 * 1000 / g.sr.max(1) as u64) as u32;
+                        self.quiet_ms.store(ms, Ordering::Relaxed);
                     }
                 }
             }
             // Only consume the incoming decoder during a crossfade. For
             // gapless, it stays queued and starts the instant current ends.
-            if g.xf_len > 0 {
+            if g.xf_len > 0 && (!waiting || !a_alive) {
                 if let Some(src) = g.incoming.as_mut() {
                     b_alive = true;
-                    for s in b.iter_mut() {
-                        match src.pull() {
-                            Pull::Sample(v) => *s = v,
-                            Pull::Buffering => {
-                                b_buf = true;
-                                break;
-                            }
-                            Pull::Ended => {
-                                b_alive = false;
-                                break;
-                            }
-                            Pull::Stall(_) => {
-                                b_alive = false;
-                                break;
-                            }
-                        }
+                    match g.inc_vari.pull(&mut b, |f| pull_raw(src, f)) {
+                        FrameRes::Ok => {}
+                        FrameRes::Buffering => b_buf = true,
+                        FrameRes::Ended | FrameRes::Stall(_) => b_alive = false,
                     }
                 }
             }
         }
+        if waiting {
+            if a_alive {
+                g.xf_wait -= 1;
+            } else {
+                g.xf_wait = 0;
+            }
+        }
+        // Which deck drives the position clock this frame, and how fast.
+        let mut clock_rate = g.cur_vari.rate;
 
         // Crossfade handoff.
         let mut mixed = a.clone();
-        if g.xf_len > 0 && (b_alive || g.incoming.is_some()) {
+        if g.xf_len > 0 && waiting && a_alive {
+            // Still lined up for the beat: outgoing alone, clock held.
+            clock_rate = 0.0;
+        } else if g.xf_len > 0 && (b_alive || g.incoming.is_some()) {
             let t = (g.xf_pos as f32 / g.xf_len as f32).clamp(0.0, 1.0);
-            // Equal-power: cos/sin of π/2 keeps perceived loudness constant.
-            let go = (t * std::f32::consts::FRAC_PI_2).cos();
-            let gi = (t * std::f32::consts::FRAC_PI_2).sin();
+            // Default shape is equal-power: cos/sin of π/2 keeps perceived
+            // loudness constant.
+            let (go, gi) = g.shape.gains(t);
+            let filter = g.shape.filter;
+            if filter.lowpass_out() || filter.highpass_in() {
+                let sr = g.sr as f32;
+                if g.xf_pos.is_multiple_of(32) {
+                    let to = g.shape.out_progress(t);
+                    let ti = g.shape.in_progress(t);
+                    let lp = sweep_hz(18_000.0, 280.0, to);
+                    let hp = sweep_hz(900.0, 20.0, ti);
+                    for f in g.lp_out.iter_mut() {
+                        f.set_lowpass(lp, sr);
+                    }
+                    for f in g.hp_in.iter_mut() {
+                        f.set_highpass(hp, sr);
+                    }
+                }
+                for i in 0..ch.min(g.lp_out.len()) {
+                    if filter.lowpass_out() {
+                        a[i] = g.lp_out[i]
+                            .process(a[i] as f32)
+                            .round()
+                            .clamp(i16::MIN as f32, i16::MAX as f32)
+                            as i16;
+                    }
+                    if filter.highpass_in() {
+                        b[i] = g.hp_in[i]
+                            .process(b[i] as f32)
+                            .round()
+                            .clamp(i16::MIN as f32, i16::MAX as f32)
+                            as i16;
+                    }
+                }
+            }
             for i in 0..ch {
                 let va = a[i] as f32 * go;
                 let vb = b[i] as f32 * gi;
                 mixed[i] = (va + vb).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
             }
+            clock_rate = g.inc_vari.rate;
             g.xf_pos = g.xf_pos.saturating_add(1);
             if g.xf_pos >= g.xf_len || !a_alive {
-                g.current = g.incoming.take();
+                g.promote_incoming();
                 g.xf_len = 0;
                 g.xf_pos = 0;
                 a_alive = b_alive || g.current.is_some();
@@ -395,7 +630,7 @@ impl MixerSource {
         } else if !a_alive {
             if g.incoming.is_some() {
                 // Gapless: incoming takes over with no overlap and no silence.
-                g.current = g.incoming.take();
+                g.promote_incoming();
                 mixed = b;
                 a_alive = b_alive;
             } else if a_stall.is_some() {
@@ -453,9 +688,16 @@ impl MixerSource {
         // buffering or paused — that was a source of "time runs, silence".
         // AudioSource used to also increment, doubling the clock (and
         // firing blend/end ~2× early, which skipped ahead).
+        // Varispeed advances the clock by the source frames consumed, so
+        // at the normal rate of 1 this adds exactly one frame per frame.
         if a_alive && !frozen && !a_buf {
-            self.samples
-                .fetch_add(ch as u64, Ordering::Relaxed);
+            g.clock_acc += clock_rate;
+            let whole = g.clock_acc.floor();
+            if whole >= 1.0 {
+                g.clock_acc -= whole;
+                self.samples
+                    .fetch_add(ch as u64 * whole as u64, Ordering::Relaxed);
+            }
         }
         g.frame = mixed;
         g.frame_i = 1;

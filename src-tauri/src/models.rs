@@ -257,6 +257,41 @@ pub struct Settings {
     pub crossfade_seconds: f64,
     #[serde(default = "default_true")]
     pub album_continuity: bool,
+    /// Fade-out shape of the outgoing track: "equal_power" | "linear" |
+    /// "logarithmic" | "exponential" | "s_curve".
+    #[serde(default = "default_curve")]
+    pub crossfade_curve_out: String,
+    /// Fade-in shape of the incoming track (same values).
+    #[serde(default = "default_curve")]
+    pub crossfade_curve_in: String,
+    /// Percent (10–100) of the crossfade the outgoing track spends fading.
+    #[serde(default = "default_pct")]
+    pub crossfade_out_len: f64,
+    /// Percent (10–100) of the crossfade the incoming track spends rising.
+    #[serde(default = "default_pct")]
+    pub crossfade_in_len: f64,
+    /// Crossfade when skipping manually (otherwise a short clickless cut).
+    #[serde(default = "default_true")]
+    pub crossfade_on_skip: bool,
+    /// Skip trailing silence of the outgoing and leading silence of the
+    /// incoming track.
+    #[serde(default)]
+    pub crossfade_smart: bool,
+    /// "off" | "lowpass" | "highpass" | "sweep"
+    #[serde(default = "default_filter")]
+    pub crossfade_filter: String,
+    /// Detect tempo and match the incoming track to the outgoing one.
+    #[serde(default)]
+    pub bpm_match: bool,
+    /// Largest tempo change BPM matching may apply, in percent.
+    #[serde(default = "default_bpm_max")]
+    pub bpm_max_change: f64,
+    /// Start the overlap on a beat and the incoming track on its first beat.
+    #[serde(default = "default_true")]
+    pub bpm_beat_align: bool,
+    /// Seconds the new track takes to glide back to its own tempo.
+    #[serde(default = "default_bpm_return")]
+    pub bpm_return_seconds: f64,
 }
 
 impl Default for Settings {
@@ -272,6 +307,39 @@ impl Default for Settings {
             crossfade: true,
             crossfade_seconds: default_xf_secs(),
             album_continuity: true,
+            crossfade_curve_out: default_curve(),
+            crossfade_curve_in: default_curve(),
+            crossfade_out_len: default_pct(),
+            crossfade_in_len: default_pct(),
+            crossfade_on_skip: true,
+            crossfade_smart: false,
+            crossfade_filter: default_filter(),
+            bpm_match: false,
+            bpm_max_change: default_bpm_max(),
+            bpm_beat_align: true,
+            bpm_return_seconds: default_bpm_return(),
+        }
+    }
+}
+
+impl Settings {
+    /// The crossfade configuration the player uses, clamped to sane ranges.
+    pub fn transition(&self) -> crate::transition::XfConfig {
+        use crate::transition::{Curve, FilterSweep, XfConfig, XfShape};
+        XfConfig {
+            shape: XfShape {
+                secs: self.crossfade_seconds.clamp(0.0, 20.0) as f32,
+                curve_out: Curve::parse(&self.crossfade_curve_out),
+                curve_in: Curve::parse(&self.crossfade_curve_in),
+                out_len: (self.crossfade_out_len.clamp(10.0, 100.0) / 100.0) as f32,
+                in_len: (self.crossfade_in_len.clamp(10.0, 100.0) / 100.0) as f32,
+                filter: FilterSweep::parse(&self.crossfade_filter),
+            },
+            smart: self.crossfade_smart,
+            bpm_match: self.bpm_match,
+            bpm_max_pct: self.bpm_max_change.clamp(0.5, 16.0) as f32,
+            beat_align: self.bpm_beat_align,
+            bpm_return_secs: self.bpm_return_seconds.clamp(1.0, 60.0) as f32,
         }
     }
 }
@@ -284,6 +352,21 @@ fn default_true() -> bool {
 }
 fn default_xf_secs() -> f64 {
     4.0
+}
+fn default_curve() -> String {
+    "equal_power".into()
+}
+fn default_pct() -> f64 {
+    100.0
+}
+fn default_filter() -> String {
+    "off".into()
+}
+fn default_bpm_max() -> f64 {
+    6.0
+}
+fn default_bpm_return() -> f64 {
+    8.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
