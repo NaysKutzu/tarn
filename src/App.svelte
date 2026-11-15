@@ -33,7 +33,7 @@
     PlayIcon, PauseIcon, PreviousIcon, NextIcon, ShuffleIcon, RepeatIcon, RepeatOne01Icon,
     VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, FavouriteFilledIcon, ThumbsDownIcon, Queue02Icon,
     Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon,
-    Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, Globe02Icon,
+    Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon,
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
   } from './lib/icons';
 
@@ -92,7 +92,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, autoplay: true, resume_on_start: false, cache_max_mb: 1024, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -1615,6 +1615,12 @@
           <div class="set-row">
             <span class="lb"><Hi icon={Notification01Icon} size={20} /> Notifications</span>
             <Toggle bind:checked={settings.notifications} label="Notifications" onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
+            <span class="lb"><Hi icon={DiscordIcon} size={20} /> Discord presence
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Show the track and cover on your Discord profile</span>
+            </span>
+            <Toggle bind:checked={settings.discord_presence} label="Discord presence" onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
             <span class="lb"><Hi icon={Radio02Icon} size={20} /> Autoplay

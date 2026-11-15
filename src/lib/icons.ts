@@ -43,6 +43,7 @@ export { Album02Icon } from '@hugeicons/core-free-icons';
 export { MusicNote01Icon } from '@hugeicons/core-free-icons';
 export { MicVocalIcon } from '@hugeicons/core-free-icons';
 export { Notification01Icon } from '@hugeicons/core-free-icons';
+export { DiscordIcon } from '@hugeicons/core-free-icons';
 export { Globe02Icon } from '@hugeicons/core-free-icons';
 export { LanguageCircleIcon } from '@hugeicons/core-free-icons';
 export { Tick02Icon } from '@hugeicons/core-free-icons';

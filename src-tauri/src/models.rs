@@ -270,6 +270,9 @@ pub struct Settings {
     /// Desktop track-change notifications. Off by default.
     #[serde(default)]
     pub notifications: bool,
+    /// Show what you're listening to on Discord. On by default.
+    #[serde(default = "default_true")]
+    pub discord_presence: bool,
     /// Set after the one-shot migration that turns the old default (on)
     /// into off. Missing from older settings.json files.
     #[serde(default = "default_true")]
@@ -339,6 +342,7 @@ impl Default for Settings {
             language: "en".into(),
             region: "US".into(),
             notifications: false,
+            discord_presence: true,
             notifications_migrated: true,
             autoplay: true,
             resume_on_start: false,

@@ -48,6 +48,7 @@ url = "2"
 souvlaki = "0.7"
 global-hotkey = "0.7"
 notify-rust = "4"
+discord-rich-presence = "1.1"
 sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "reqwest", "rustls"] }
 
 

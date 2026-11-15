@@ -182,6 +182,8 @@ export interface Settings {
   language: string;
   region: string;
   notifications: boolean;
+  /** Show the current track on Discord Rich Presence. */
+  discord_presence: boolean;
   autoplay: boolean;
   /** Resume and play the last session when the app starts. */
   resume_on_start: boolean;

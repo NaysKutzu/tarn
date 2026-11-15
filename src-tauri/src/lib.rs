@@ -10,6 +10,7 @@ mod login;
 mod mix;
 mod transition;
 mod mpris;
+mod discord;
 mod models;
 mod persist;
 mod win;
@@ -38,6 +39,7 @@ pub struct App {
     settings: Mutex<Settings>,
     auth: Mutex<AuthStatus>,
     notify: Mutex<bool>,
+    discord: Mutex<bool>,
     pub ui: Mutex<persist::UiMem>,
     pub pending_toast: Mutex<Option<String>>,
     skip_fails: std::sync::atomic::AtomicU32,
@@ -93,6 +95,7 @@ impl App {
                 .build()?,
             store,
             notify: Mutex::new(settings.notifications),
+            discord: Mutex::new(settings.discord_presence),
             settings: Mutex::new(settings),
             auth: Mutex::new(auth),
             ui: Mutex::new(persist::UiMem::default()),
@@ -105,6 +108,10 @@ impl App {
 
     pub fn notifications_enabled(&self) -> bool {
         *self.notify.lock()
+    }
+
+    pub fn discord_enabled(&self) -> bool {
+        *self.discord.lock()
     }
 
     pub fn remember_liked(&self, ids: impl IntoIterator<Item = String>) {
@@ -1082,6 +1089,7 @@ fn set_settings(app: State<Arc<App>>, settings: Settings) {
     settings.notifications_migrated = true;
     app.ytm.apply_settings(&settings);
     *app.notify.lock() = settings.notifications;
+    *app.discord.lock() = settings.discord_presence;
     app.player.set_autoplay(settings.autoplay);
     app.player.set_crossfade(
         settings.crossfade,
@@ -1344,6 +1352,7 @@ pub fn run() {
             emit_loop(handle.clone(), app.clone());
             let hwnd = main_hwnd(tauri_app);
             mpris::start(app.clone(), handle.clone(), hwnd);
+            discord::start(app.clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
