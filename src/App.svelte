@@ -881,11 +881,24 @@
     }
     return idx;
   });
+  /** True when fullscreen should show the synced lyrics stage. */
+  let npLyricsOn = $derived(
+    expanded && panel === 'lyrics' && lyricsOk && !!lyrics?.synced && (lyrics?.lines.length ?? 0) > 0,
+  );
+  let npLyricsEl: HTMLDivElement | null = $state(null);
 
   $effect(() => {
-    if (lyrics?.synced && activeLyric >= 0) {
-      const root = expanded ? '.np-lyrics' : '.panel .lyrics';
-      const el = document.querySelector(`${root} .ly[data-i="${activeLyric}"]`);
+    if (!lyrics?.synced || activeLyric < 0) return;
+    const i = activeLyric;
+    if (npLyricsOn && npLyricsEl) {
+      const line = npLyricsEl.querySelector(`.ly[data-i="${i}"]`) as HTMLElement | null;
+      if (!line) return;
+      const top = line.offsetTop - npLyricsEl.clientHeight / 2 + line.offsetHeight / 2;
+      npLyricsEl.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+      return;
+    }
+    if (!expanded) {
+      const el = document.querySelector(`.panel .lyrics .ly[data-i="${i}"]`);
       el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
   });
@@ -1890,7 +1903,7 @@
     </div>
   </main>
 
-  {#if panel}
+  {#if panel && !expanded}
     <aside class="panel">
       <div class="panel-h">
         <h2>{{ queue: 'Up next', lyrics: 'Lyrics', related: 'Related' }[panel]}</h2>
@@ -1958,7 +1971,7 @@
   {/if}
 
   {#if expanded && player.track}
-    <div class="np" class:has-lyrics={lyricsOk && !!lyrics?.synced} onwheel={nudgeVolume}>
+    <div class="np" class:has-lyrics={npLyricsOn} onwheel={nudgeVolume}>
       <button
         class="ibtn lg np-close"
         type="button"
@@ -1995,18 +2008,24 @@
                 </div>
               </div>
             </div>
-            {#if lyricsOk && lyrics?.synced && lyrics.lines.length}
-              <div class="np-lyrics" aria-label="Lyrics">
+            {#if npLyricsOn && lyrics}
+              <div
+                class="np-lyrics"
+                aria-label="Lyrics"
+                bind:this={npLyricsEl}
+                onwheel={(e) => e.stopPropagation()}
+              >
                 {#each lyrics.lines as ln, i}
                   <button
                     type="button"
-                    class="ly {i === activeLyric ? 'on' : ''}"
+                    class="ly"
+                    class:on={i === activeLyric}
+                    class:past={activeLyric >= 0 && i < activeLyric}
                     class:static={ln.start_ms == null}
                     data-i={i}
                     onclick={() => ln.start_ms != null && api.seek(ln.start_ms / 1000)}
-                  >{ln.text}</button>
+                  >{ln.text || ' '}</button>
                 {/each}
-                {#if lyrics.source}<div class="ly-src">{lyrics.source}</div>{/if}
               </div>
             {/if}
           </div>
