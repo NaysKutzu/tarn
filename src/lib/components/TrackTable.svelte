@@ -40,6 +40,27 @@
       if (t.id) api.prefetch(t.id);
     }
   });
+
+  // Render in chunks; load more as the user scrolls.
+  const CHUNK = 60;
+  let limit = $state(CHUNK);
+  let visible = $derived(tracks.slice(0, limit));
+  let sentinel = $state<HTMLElement | undefined>();
+
+  $effect(() => {
+    limit;
+    if (!sentinel) return;
+    const io = new IntersectionObserver(
+      (es) => {
+        if (es.some((e) => e.isIntersecting) && limit < tracks.length) {
+          limit = Math.min(limit + CHUNK, tracks.length);
+        }
+      },
+      { rootMargin: '800px' },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  });
 </script>
 
 <table class="tbl">
@@ -53,7 +74,7 @@
     </tr>
   </thead>
   <tbody>
-    {#each tracks as t, i}
+    {#each visible as t, i}
       <tr
         class="trow {t.id === currentId ? 'on' : ''}"
         ondblclick={() => onPlay(t, i)}
@@ -117,5 +138,8 @@
         </td>
       </tr>
     {/each}
+    {#if limit < tracks.length}
+      <tr bind:this={sentinel}><td colspan="5" style="height:1px;padding:0"></td></tr>
+    {/if}
   </tbody>
 </table>
