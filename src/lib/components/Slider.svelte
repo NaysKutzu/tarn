@@ -36,18 +36,33 @@
   let hovering = $state(false);
   let preview = $state<number | null>(null);
   let hoverPct = $state(0);
+  let tipHold = $state(false);
+  let tipHoldTimer: ReturnType<typeof setTimeout> | undefined;
 
   let shown = $derived(preview ?? value);
   let fillPct = $derived.by(() => {
     if (!max || max <= 0 || !isFinite(max)) return 0;
     return Math.max(0, Math.min(100, (shown / max) * 100));
   });
-  let tipPct = $derived(dragging || preview != null ? fillPct : hoverPct);
-  let tipVal = $derived(preview ?? (hovering && max > 0 ? (hoverPct / 100) * max : shown));
+  // While dragging/wheeling, pin the tip to the thumb (real value), not the cursor.
+  let tipPct = $derived(dragging || preview != null || tipHold ? fillPct : hoverPct);
+  let tipVal = $derived(
+    preview ?? (tipHold ? shown : hovering && max > 0 ? (hoverPct / 100) * max : shown),
+  );
+  let tipVisible = $derived(showTip && max > 0 && (hovering || dragging || tipHold));
   let bufPct = $derived.by(() => {
     if (!max || max <= 0 || !isFinite(max) || !buffered) return 0;
     return Math.max(0, Math.min(100, (buffered / max) * 100));
   });
+
+  function armTipHold() {
+    tipHold = true;
+    clearTimeout(tipHoldTimer);
+    tipHoldTimer = setTimeout(() => {
+      tipHold = false;
+      if (!dragging && !hovering) preview = null;
+    }, 900);
+  }
 
   function atX(clientX: number): number {
     const r = root!.getBoundingClientRect();
@@ -114,8 +129,13 @@
   function onWheel(e: WheelEvent) {
     if (!wheel || disabled) return;
     e.preventDefault();
+    e.stopPropagation();
     const s = step > 0 ? step : (max || 1) * 0.05;
-    const next = Math.max(0, Math.min(max || 1, value + (e.deltaY > 0 ? -s : s)));
+    const base = preview ?? value;
+    const next = Math.max(0, Math.min(max || 1, base + (e.deltaY > 0 ? -s : s)));
+    preview = next;
+    hoverPct = max > 0 ? (next / max) * 100 : 0;
+    armTipHold();
     oninput?.(next);
     onchange?.(next);
   }
@@ -161,7 +181,7 @@
     <div class="sbar-fill" style="width:{fillPct}%"></div>
   </div>
   <div class="sbar-thumb" style="left:{fillPct}%"></div>
-  {#if showTip && (hovering || dragging) && max > 0}
-    <div class="sbar-tip" style="left:{tipPct}%">{format(tipVal)}</div>
+  {#if tipVisible}
+    <div class="sbar-tip" style="left:{Math.max(8, Math.min(92, tipPct))}%">{format(tipVal)}</div>
   {/if}
 </div>

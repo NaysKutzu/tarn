@@ -45,9 +45,9 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- Drag only on title/spacer - whole-header drag-region breaks opacity fades on Windows. -->
 <header
   class="titlebar {isMac ? 'mac' : 'win'}"
-  data-tauri-drag-region
   ondblclick={() => !isMac && toggleMax()}
 >
   {#if isMac}
@@ -76,26 +76,27 @@
     </button>
   </div>
   <div class="tb-title" data-tauri-drag-region>Tarn</div>
+  <div class="tb-drag" data-tauri-drag-region></div>
   {#if !isMac}
     <div class="tb-btns">
       <button class="tb-btn min" type="button" title="Minimize" onclick={minimize} aria-label="Minimize">
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5h8" stroke="currentColor" stroke-width="1.15" fill="none"/></svg>
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1.5 6h9" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" fill="none"/></svg>
       </button>
       <button class="tb-btn max" type="button" title={maximized ? 'Restore' : 'Maximize'} onclick={toggleMax} aria-label={maximized ? 'Restore' : 'Maximize'}>
         {#if maximized}
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-            <path d="M3 2.5h5.5V8H8" stroke="currentColor" stroke-width="1.15" fill="none"/>
-            <rect x="1.2" y="3.2" width="5.5" height="5.5" stroke="currentColor" stroke-width="1.15" fill="none"/>
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M3.5 3h6v6H8.5" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" fill="none"/>
+            <rect x="1.5" y="4" width="6.5" height="6.5" stroke="currentColor" stroke-width="1.35" fill="none"/>
           </svg>
         {:else}
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-            <rect x="1.5" y="1.5" width="7" height="7" stroke="currentColor" stroke-width="1.15" fill="none"/>
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <rect x="2" y="2" width="8" height="8" stroke="currentColor" stroke-width="1.35" fill="none"/>
           </svg>
         {/if}
       </button>
       <button class="tb-btn close" type="button" title="Close" onclick={close} aria-label="Close">
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.15" fill="none"/>
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" fill="none"/>
         </svg>
       </button>
     </div>

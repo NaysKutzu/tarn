@@ -884,7 +884,8 @@
 
   $effect(() => {
     if (lyrics?.synced && activeLyric >= 0) {
-      const el = document.querySelector(`.ly[data-i="${activeLyric}"]`);
+      const root = expanded ? '.np-lyrics' : '.panel .lyrics';
+      const el = document.querySelector(`${root} .ly[data-i="${activeLyric}"]`);
       el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
   });
@@ -1951,7 +1952,7 @@
   {/if}
 
   {#if expanded && player.track}
-    <div class="np" onwheel={nudgeVolume}>
+    <div class="np" class:has-lyrics={lyricsOk} onwheel={nudgeVolume}>
       <button
         class="ibtn lg np-close"
         type="button"
@@ -1971,21 +1972,40 @@
           <Cover src={nowCover} videoId={player.track?.id} width={1400} height={900} class="np-bg" alt="" />
           <div class="np-shade"></div>
           <div class="np-in">
-            <div class="np-art">
-              <Cover src={nowCover} videoId={player.track?.id} size={560} alt="" />
-              {#if volHud != null}
-                <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
-              {/if}
-            </div>
-            <div class="np-meta">
-              <h1>{player.track.title}</h1>
-              <div class="ar">
-                {#each player.track.artists as a, k}
-                  {#if k > 0}<span>, </span>{/if}
-                  <button class="linkish" type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
-                {/each}
+            <div class="np-main">
+              <div class="np-art">
+                <Cover src={nowCover} videoId={player.track?.id} size={560} alt="" />
+                {#if volHud != null}
+                  <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
+                {/if}
+              </div>
+              <div class="np-meta">
+                <h1>{player.track.title}</h1>
+                <div class="ar">
+                  {#each player.track.artists as a, k}
+                    {#if k > 0}<span>, </span>{/if}
+                    <button class="linkish" type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
+                  {/each}
+                </div>
               </div>
             </div>
+            {#if lyricsOk && lyrics?.lines?.length}
+              <div class="np-lyrics" aria-label="Lyrics">
+                {#if !lyrics.synced}
+                  <div class="ly-note">Lyrics for this aren't synced yet</div>
+                {/if}
+                {#each lyrics.lines as ln, i}
+                  <button
+                    type="button"
+                    class="ly {i === activeLyric ? 'on' : ''}"
+                    class:static={!lyrics.synced || ln.start_ms == null}
+                    data-i={i}
+                    onclick={() => lyrics.synced && ln.start_ms != null && api.seek(ln.start_ms / 1000)}
+                  >{ln.text}</button>
+                {/each}
+                {#if lyrics.source}<div class="ly-src">{lyrics.source}</div>{/if}
+              </div>
+            {/if}
           </div>
         </div>
       {/key}
