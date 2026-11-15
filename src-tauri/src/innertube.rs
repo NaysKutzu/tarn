@@ -1204,8 +1204,18 @@ fn video_id_of(v: &Value) -> Option<String> {
     if let Some(s) = v.pointer("/playlistItemData/videoId").and_then(|x| x.as_str()) {
         return Some(s.to_string());
     }
+    // Greyed-out / unavailable rows often only expose removedVideoId in the
+    // menu (ytmusicapi does the same). YTM still counts them in Liked Music.
+    if let Some(s) = v
+        .pointer("/playlistItemData/removedVideoId")
+        .and_then(|x| x.as_str())
+    {
+        if s.len() == 11 {
+            return Some(s.to_string());
+        }
+    }
     walk(v, &mut |key, val| {
-        if found.is_none() && key == "videoId" {
+        if found.is_none() && (key == "videoId" || key == "removedVideoId") {
             if let Some(s) = val.as_str() {
                 if s.len() == 11 {
                     found = Some(s.to_string());
@@ -1393,17 +1403,27 @@ fn response_has_account(v: &Value) -> bool {
 }
 
 fn find_page_continuation(v: &Value) -> Option<String> {
+    // Prefer the trailing continuationItemRenderer in list contents
+    // (YTM 2025+ puts the token as the last row, not under sectionList alone).
+    let mut from_list = None;
+    walk(v, &mut |key, val| {
+        if key == "continuationItems" || key == "contents" || key == "items" {
+            if let Some(arr) = val.as_array() {
+                if let Some(t) = continuation_token_from_list(arr) {
+                    from_list = Some(t);
+                }
+            }
+        }
+    });
+    if from_list.is_some() {
+        return from_list;
+    }
     let mut tok = None;
     walk(v, &mut |key, val| {
         if tok.is_none() && key == "sectionListRenderer" {
             if let Some(arr) = val["contents"].as_array() {
-                for c in arr.iter().rev() {
-                    if c.get("continuationItemRenderer").is_some() {
-                        if let Some(t) = find_continuation(c) {
-                            tok = Some(t);
-                            break;
-                        }
-                    }
+                if let Some(t) = continuation_token_from_list(arr) {
+                    tok = Some(t);
                 }
             }
             if tok.is_none() {
@@ -1411,14 +1431,66 @@ fn find_page_continuation(v: &Value) -> Option<String> {
             }
         }
     });
-    tok
+    tok.or_else(|| find_continuation(v))
+}
+
+/// Token from the last `continuationItemRenderer` in a shelf/list (ytmusicapi 2025 shape).
+fn continuation_token_from_list(arr: &[Value]) -> Option<String> {
+    for c in arr.iter().rev() {
+        if let Some(r) = c.get("continuationItemRenderer") {
+            if let Some(t) = token_from_continuation_item(r) {
+                return Some(t);
+            }
+        }
+    }
+    None
+}
+
+fn token_from_continuation_item(r: &Value) -> Option<String> {
+    if let Some(t) = r
+        .pointer("/continuationEndpoint/continuationCommand/token")
+        .and_then(|x| x.as_str())
+    {
+        if t.len() > 20 {
+            return Some(t.to_string());
+        }
+    }
+    // Nested under commandExecutorCommand (alongside voting refresh, etc.).
+    if let Some(cmds) = r
+        .pointer("/continuationEndpoint/commandExecutorCommand/commands")
+        .and_then(|x| x.as_array())
+    {
+        for cmd in cmds {
+            let req = cmd
+                .pointer("/continuationCommand/request")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            if req == "CONTINUATION_REQUEST_TYPE_BROWSE"
+                || cmd.get("continuationCommand").is_some()
+            {
+                if let Some(t) = cmd
+                    .pointer("/continuationCommand/token")
+                    .and_then(|x| x.as_str())
+                {
+                    if t.len() > 20 {
+                        return Some(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+    find_continuation(r)
 }
 
 fn parse_continuation_items(v: &Value) -> (Vec<ShelfItem>, Option<String>) {
     let mut items = Vec::new();
+    let mut list_tok = None;
     walk(v, &mut |key, val| {
         if key == "continuationItems" || key == "contents" || key == "items" {
             if let Some(arr) = val.as_array() {
+                if let Some(t) = continuation_token_from_list(arr) {
+                    list_tok = Some(t);
+                }
                 for c in arr {
                     if let Some(it) = parse_item(c) {
                         items.push(it);
@@ -1441,7 +1513,12 @@ fn parse_continuation_items(v: &Value) -> (Vec<ShelfItem>, Option<String>) {
         }
         seen.insert(it.id.clone())
     });
-    (items, find_continuation(v))
+    (
+        items,
+        list_tok
+            .or_else(|| find_page_continuation(v))
+            .or_else(|| find_continuation(v)),
+    )
 }
 
 fn find_continuation(v: &Value) -> Option<String> {
@@ -1462,7 +1539,9 @@ fn find_continuation(v: &Value) -> Option<String> {
             }
             if key == "continuationCommand" {
                 if let Some(s) = val["token"].as_str() {
-                    tok = Some(s.to_string());
+                    if s.len() > 20 {
+                        tok = Some(s.to_string());
+                    }
                 }
             }
         }
@@ -1514,12 +1593,23 @@ impl InnerTube {
     /// Follows continuation tokens so Liked Music is not capped at the first page (~100).
     pub async fn library_browse(&self, browse_id: &str) -> Result<(Vec<Track>, Vec<PlaylistCard>, Vec<ArtistCard>)> {
         let v = self.browse(browse_id, None).await?;
+        let header_count = library_header_track_count(&v);
         let (mut tracks, mut cards, mut artists) = parse_library_page(&v);
-        let mut tok = find_page_continuation(&v).or_else(|| find_continuation(&v));
-        for n in 0..50 {
+        let mut tok = find_page_continuation(&v);
+        let mut prev_tok: Option<String> = None;
+        let mut stagnant = 0u32;
+        for n in 0..80 {
             let Some(token) = tok.take() else {
                 break;
             };
+            if prev_tok.as_deref() == Some(token.as_str()) {
+                crate::diag::log(format!(
+                    "library_browse {browse_id}: same continuation token twice; stopping at {}",
+                    tracks.len()
+                ));
+                break;
+            }
+            prev_tok = Some(token.clone());
             match self.browse_continuation(&token).await {
                 Ok(more) => {
                     let before = tracks.len() + cards.len() + artists.len();
@@ -1576,15 +1666,16 @@ impl InnerTube {
                         after.saturating_sub(before),
                         tracks.len()
                     ));
-                    tok = find_page_continuation(&more)
-                        .or(next)
-                        .or_else(|| find_continuation(&more));
-                    if after == before && tok.is_none() {
-                        break;
-                    }
-                    // Same page echo with a token that doesn't grow - stop.
+                    tok = next.or_else(|| find_page_continuation(&more));
                     if after == before {
-                        break;
+                        stagnant += 1;
+                        // One empty/dup page with a fresh token can happen;
+                        // two in a row means we're looping.
+                        if stagnant >= 2 || tok.is_none() {
+                            break;
+                        }
+                    } else {
+                        stagnant = 0;
                     }
                 }
                 Err(e) => {
@@ -1594,6 +1685,14 @@ impl InnerTube {
                     ));
                     break;
                 }
+            }
+        }
+        if let Some(claimed) = header_count {
+            if tracks.len() < claimed {
+                crate::diag::log(format!(
+                    "library_browse {browse_id}: got {} tracks but header says {claimed}",
+                    tracks.len()
+                ));
             }
         }
         crate::diag::debug(format!(
@@ -1611,6 +1710,37 @@ impl InnerTube {
         }
         Ok((tracks, cards, artists))
     }
+}
+
+/// Digits from "1,657 songs" / "1.657 de melodii" in playlist/library headers.
+fn library_header_track_count(v: &Value) -> Option<usize> {
+    let mut best = None;
+    walk(v, &mut |key, val| {
+        if key != "secondSubtitle" && key != "subtitle" && key != "description" {
+            return;
+        }
+        let text = yt_text(val).unwrap_or_default();
+        if text.is_empty() {
+            return;
+        }
+        let low = text.to_ascii_lowercase();
+        if !(low.contains("song")
+            || low.contains("track")
+            || low.contains("melod")
+            || low.contains("șanson")
+            || low.contains("chanson")
+            || low.contains("lied"))
+        {
+            return;
+        }
+        let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
+        if let Ok(n) = digits.parse::<usize>() {
+            if n > 0 {
+                best = Some(n);
+            }
+        }
+    });
+    best
 }
 
 pub fn parse_library_page(v: &Value) -> (Vec<Track>, Vec<PlaylistCard>, Vec<ArtistCard>) {

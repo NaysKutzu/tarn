@@ -438,7 +438,7 @@ pub(crate) async fn start_playback(
     queue: Vec<Track>,
     index: usize,
 ) -> Result<(), String> {
-    start_playback_at(app, track, queue, index, 0.0, false, true).await
+    start_playback_at(app, track, queue, index, 0.0, false, true, true).await
 }
 
 pub(crate) async fn start_playback_at(
@@ -450,6 +450,9 @@ pub(crate) async fn start_playback_at(
     paused: bool,
     // True for Next/Prev/clicking a track; false for natural end advance.
     manual: bool,
+    // Auto-advance on failure (queue play / next). Never for mid-track
+    // recover or session restore - that was skipping while listening.
+    skip_on_fail: bool,
 ) -> Result<(), String> {
     let id = track.id.clone();
     let mut track = track;
@@ -530,7 +533,7 @@ pub(crate) async fn start_playback_at(
                         return Ok(());
                     }
                     let msg = short_err(&e.to_string());
-                    playback_failed(app, &track, msg, paused, start).await
+                    playback_failed(app, &track, msg, skip_on_fail).await
                 }
             }
         }
@@ -539,31 +542,32 @@ pub(crate) async fn start_playback_at(
                 return Ok(());
             }
             let msg = short_err(&e.to_string());
-            playback_failed(app, &track, msg, paused, start).await
+            playback_failed(app, &track, msg, skip_on_fail).await
         }
     }
 }
 
-/// After every client and yt-dlp path has failed, skip to the next track
-/// with a subtle toast instead of leaving "Can't play this track" stuck
-/// on the current song. Stop after three consecutive skips.
+/// After every client and yt-dlp path has failed, optionally skip to the
+/// next track. Mid-track recover / session restore must not auto-advance
+/// (a 403→re-resolve miss used to skip while the user was still listening).
+/// Stop after three consecutive skips when advancing through the queue.
 async fn playback_failed(
     app: &App,
     track: &Track,
     msg: String,
-    paused: bool,
-    start: f64,
+    skip_on_fail: bool,
 ) -> Result<(), String> {
-    // Don't walk the queue on a paused restore / mid-track recover.
-    if paused && start > 0.05 {
+    let title = track.title.clone();
+    if !skip_on_fail {
+        eprintln!("playback failed (hold): {msg} - {title}");
         app.player.set_error(msg.clone());
+        *app.pending_toast.lock() = Some(format!("Couldn't play {title}"));
         return Err(msg);
     }
     let n = app
         .skip_fails
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         + 1;
-    let title = track.title.clone();
     let failed_id = track.id.clone();
     eprintln!("playback failed ({n}): {msg} - {title}");
     if n > 3 {
@@ -621,7 +625,7 @@ async fn restore_playback(app: &App) {
     };
     let resume = app.settings.lock().resume_on_start;
     // paused=true arms silently; paused=false starts playback immediately.
-    if let Err(e) = start_playback_at(app, track, queue, idx, pos, !resume, false).await {
+    if let Err(e) = start_playback_at(app, track, queue, idx, pos, !resume, false, false).await {
         eprintln!("restore playback: {e}");
     }
 }
@@ -853,7 +857,7 @@ pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
         NextChoice::Play(i) => {
             let (queue, _) = app.player.queue_and_index();
             if let Some(t) = queue.get(i).cloned() {
-                start_playback_at(app, t, queue, i, 0.0, false, user).await
+                start_playback_at(app, t, queue, i, 0.0, false, user, true).await
             } else {
                 Ok(())
             }
@@ -875,7 +879,7 @@ pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
             let i = index + 1;
             if let Some(t) = queue.get(i).cloned() {
                 // Autoplay continuation is a natural advance, not a user skip.
-                start_playback_at(app, t, queue, i, 0.0, false, user).await
+                start_playback_at(app, t, queue, i, 0.0, false, user, true).await
             } else {
                 eprintln!("autoplay: appended tracks but none after index {index}");
                 Ok(())
@@ -1333,10 +1337,14 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
                         track.id, pos
                     );
                     app2.ytm.invalidate(&track.id);
-                    let r = start_playback_at(&app2, track, queue, index, pos, !play, false).await;
+                    // Never auto-skip on recover failure - stay on this track.
+                    let r = start_playback_at(
+                        &app2, track, queue, index, pos, !play, false, false,
+                    )
+                    .await;
                     app2.player.recover_finished();
                     if let Err(e) = r {
-                        eprintln!("recover failed: {e}; not advancing");
+                        eprintln!("recover failed: {e}; holding track (no skip)");
                     }
                     let _ = handle2.emit("player", app2.player.snapshot());
                 });

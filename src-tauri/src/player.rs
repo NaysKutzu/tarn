@@ -336,6 +336,8 @@ impl Player {
 
     pub fn set_error(&self, msg: String) {
         self.phase.store(0, Ordering::Relaxed);
+        self.buffering.store(false, Ordering::Relaxed);
+        self.recover.store(false, Ordering::Relaxed);
         let mut s = self.state.lock();
         s.loading = false;
         s.playing = false;
@@ -1107,6 +1109,10 @@ fn audio_thread(
                         eprintln!("decode: {e}");
                         state.lock().error = Some("Can't play this track".into());
                         phase.store(0, Ordering::Relaxed);
+                        buffering.store(false, Ordering::Relaxed);
+                        // Don't auto-advance from the audio thread - the
+                        // emit loop / user decides. Mid-play reopen misses
+                        // used to leave the UI spinning on buffering.
                     }
                 }
             }

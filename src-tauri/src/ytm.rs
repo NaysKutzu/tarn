@@ -1449,10 +1449,19 @@ impl Ytm {
     /// Drop a cached stream URL and any partial audio so the next play
     /// re-resolves (used after a mid-play 403 or stall).
     pub fn invalidate(&self, id: &str) {
+        let url = self
+            .streams
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|c| c.stream.url.clone());
         self.evict_stream(id);
         self.cache.forget(id);
-        // Drop unfinished bodies so a stale 403'd download isn't reused.
-        self.bodies.lock().unwrap().retain(|_, b| b.is_complete());
+        // Only drop this track's body - wiping every incomplete download
+        // killed prefetch/blend of the next songs and raced the current play.
+        if let Some(url) = url {
+            self.bodies.lock().unwrap().remove(&url);
+        }
         eprintln!("stream cache: invalidated {id}");
     }
 
