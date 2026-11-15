@@ -1358,29 +1358,31 @@ html { color-scheme: dark; }
 }
 .np-meta .ar { font-size: 18px; line-height: 24px; color: var(--text-2); margin-top: 8px; }
 
-/* Fullscreen lyrics: art + title left, lines right (scroll with active line). */
+/* Fullscreen synced lyrics: centered art column + scrolling lines. */
 .np.has-lyrics .np-in {
-  justify-content: flex-start;
-  align-items: stretch;
-  gap: clamp(32px, 5vw, 72px);
-  padding-left: clamp(32px, 5vw, 72px);
-  padding-right: clamp(28px, 4vw, 56px);
+  justify-content: center;
+  align-items: center;
+  gap: clamp(36px, 5vw, 80px);
+  padding-left: clamp(28px, 4vw, 64px);
+  padding-right: clamp(28px, 4vw, 64px);
 }
 .np.has-lyrics .np-main {
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
+  text-align: center;
   flex: 0 0 auto;
-  gap: 20px;
-  max-width: min(340px, 36vw);
+  gap: 18px;
+  max-width: min(320px, 34vw);
 }
 .np.has-lyrics .np-art {
-  width: min(280px, 32vmin);
-  height: min(280px, 32vmin);
-  flex-basis: min(280px, 32vmin);
+  width: min(260px, 30vmin);
+  height: min(260px, 30vmin);
+  flex-basis: min(260px, 30vmin);
 }
 .np.has-lyrics .np-meta {
   max-width: 100%;
+  text-align: center;
 }
 .np.has-lyrics .np-meta h1 {
   font-size: clamp(22px, 2.6vw, 28px);

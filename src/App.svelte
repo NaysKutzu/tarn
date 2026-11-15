@@ -1958,7 +1958,7 @@
   {/if}
 
   {#if expanded && player.track}
-    <div class="np" class:has-lyrics={lyricsOk} onwheel={nudgeVolume}>
+    <div class="np" class:has-lyrics={lyricsOk && !!lyrics?.synced} onwheel={nudgeVolume}>
       <button
         class="ibtn lg np-close"
         type="button"
@@ -1995,18 +1995,15 @@
                 </div>
               </div>
             </div>
-            {#if lyricsOk && lyrics?.lines?.length}
+            {#if lyricsOk && lyrics?.synced && lyrics.lines.length}
               <div class="np-lyrics" aria-label="Lyrics">
-                {#if !lyrics.synced}
-                  <div class="ly-note">Lyrics for this aren't synced yet</div>
-                {/if}
                 {#each lyrics.lines as ln, i}
                   <button
                     type="button"
                     class="ly {i === activeLyric ? 'on' : ''}"
-                    class:static={!lyrics.synced || ln.start_ms == null}
+                    class:static={ln.start_ms == null}
                     data-i={i}
-                    onclick={() => lyrics.synced && ln.start_ms != null && api.seek(ln.start_ms / 1000)}
+                    onclick={() => ln.start_ms != null && api.seek(ln.start_ms / 1000)}
                   >{ln.text}</button>
                 {/each}
                 {#if lyrics.source}<div class="ly-src">{lyrics.source}</div>{/if}

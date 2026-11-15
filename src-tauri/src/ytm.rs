@@ -1128,16 +1128,6 @@ impl Ytm {
             Ok(a) => lib.artists = a.items.iter().map(artist_from).collect(),
             Err(e) => crate::diag::log(format!("library rustypipe artists: {e}")),
         }
-        match self.rp.query().music_liked_tracks().await {
-            Ok(liked) => lib.liked = liked.tracks.items.iter().map(track_from).collect(),
-            Err(e) => {
-                crate::diag::log(format!("library rustypipe liked: {e}"));
-                match self.rp.query().music_saved_tracks().await {
-                    Ok(t) => lib.liked = t.items.iter().map(track_from).collect(),
-                    Err(e2) => crate::diag::log(format!("library rustypipe saved tracks: {e2}")),
-                }
-            }
-        }
         match self.rp.query().music_history().await {
             Ok(h) => {
                 lib.recents = h.items.iter().map(|hi| track_from(&hi.item)).collect();
@@ -1146,14 +1136,34 @@ impl Ytm {
         }
 
         let it = self.it();
-        // Liked songs
-        if lib.liked.is_empty() {
-            match it.library_browse("FEmusic_liked_videos").await {
-                Ok((tracks, _, _)) => {
-                    crate::diag::log(format!("library innertube liked_videos: {} tracks", tracks.len()));
-                    lib.liked = tracks;
+        // Liked songs: InnerTube with continuations (rustypipe stops at ~100).
+        match it.library_browse("FEmusic_liked_videos").await {
+            Ok((tracks, _, _)) if !tracks.is_empty() => {
+                crate::diag::log(format!("library innertube liked_videos: {} tracks", tracks.len()));
+                lib.liked = tracks;
+            }
+            other => {
+                if let Err(e) = &other {
+                    crate::diag::log(format!("library innertube liked_videos: {e}"));
                 }
-                Err(e) => crate::diag::log(format!("library innertube liked_videos: {e}")),
+                match self.rp.query().music_liked_tracks().await {
+                    Ok(liked) => {
+                        lib.liked = liked.tracks.items.iter().map(track_from).collect();
+                        crate::diag::log(format!(
+                            "library rustypipe liked fallback: {} tracks",
+                            lib.liked.len()
+                        ));
+                    }
+                    Err(e) => {
+                        crate::diag::log(format!("library rustypipe liked: {e}"));
+                        match self.rp.query().music_saved_tracks().await {
+                            Ok(t) => lib.liked = t.items.iter().map(track_from).collect(),
+                            Err(e2) => {
+                                crate::diag::log(format!("library rustypipe saved tracks: {e2}"))
+                            }
+                        }
+                    }
+                }
             }
         }
         // Liked / saved playlists

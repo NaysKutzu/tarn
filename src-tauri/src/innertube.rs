@@ -1511,9 +1511,91 @@ pub fn albums_from_browse(v: &Value) -> std::collections::HashMap<String, (Strin
 
 impl InnerTube {
     /// Browse a library / likes page and collect tracks, playlists, albums, artists.
+    /// Follows continuation tokens so Liked Music is not capped at the first page (~100).
     pub async fn library_browse(&self, browse_id: &str) -> Result<(Vec<Track>, Vec<PlaylistCard>, Vec<ArtistCard>)> {
         let v = self.browse(browse_id, None).await?;
-        let (tracks, cards, artists) = parse_library_page(&v);
+        let (mut tracks, mut cards, mut artists) = parse_library_page(&v);
+        let mut tok = find_page_continuation(&v).or_else(|| find_continuation(&v));
+        for n in 0..50 {
+            let Some(token) = tok.take() else {
+                break;
+            };
+            match self.browse_continuation(&token).await {
+                Ok(more) => {
+                    let before = tracks.len() + cards.len() + artists.len();
+                    let (tr, pl, ar) = parse_library_page(&more);
+                    tracks.extend(tr);
+                    cards.extend(pl);
+                    artists.extend(ar);
+                    let (items, next) = parse_continuation_items(&more);
+                    for i in items {
+                        match i.kind.as_str() {
+                            "track" | "video" => {
+                                if let Some(t) = i.as_track() {
+                                    tracks.push(t);
+                                }
+                            }
+                            "playlist" | "album" => {
+                                cards.push(crate::models::PlaylistCard {
+                                    id: i.id.clone(),
+                                    name: i.title.clone(),
+                                    cover: i.cover.clone().filter(|u| {
+                                        !u.contains("music.youtube.com/image/")
+                                            && !u.contains("/mixart")
+                                    }),
+                                    subtitle: i.subtitle.clone(),
+                                    browse_id: i.browse_id.clone(),
+                                    year: i.year,
+                                    album_type: i.album_type.clone(),
+                                    track_count: i.track_count,
+                                    author: i.artists.first().cloned(),
+                                    from_ytm: Some(true),
+                                    color: i.color.clone(),
+                                    params: i.params.clone(),
+                                    ..Default::default()
+                                });
+                            }
+                            "artist" => {
+                                artists.push(crate::models::ArtistCard {
+                                    id: i.id.clone(),
+                                    name: i.title.clone(),
+                                    cover: i.cover.clone(),
+                                    subscribers: None,
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    tracks = dedup_tracks(tracks);
+                    cards = dedup_playlists(cards);
+                    artists = dedup_artists(artists);
+                    let after = tracks.len() + cards.len() + artists.len();
+                    crate::diag::log(format!(
+                        "library_browse {browse_id} continuation {}: +{} items (tracks={})",
+                        n + 1,
+                        after.saturating_sub(before),
+                        tracks.len()
+                    ));
+                    tok = find_page_continuation(&more)
+                        .or(next)
+                        .or_else(|| find_continuation(&more));
+                    if after == before && tok.is_none() {
+                        break;
+                    }
+                    // Same page echo with a token that doesn't grow - stop.
+                    if after == before {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    crate::diag::log(format!(
+                        "library_browse {browse_id} continuation {}: {e}",
+                        n + 1
+                    ));
+                    break;
+                }
+            }
+        }
         crate::diag::debug(format!(
             "library_browse {browse_id}: tracks={} cards={} artists={} body≈{}b",
             tracks.len(),

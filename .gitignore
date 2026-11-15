@@ -56,3 +56,5 @@ src-tauri/binaries/yt-dlp*
 AGENTS.md
 CLAUDE.md
 package-lock.json
+skills-lock.json
+.agents/
