@@ -45,13 +45,14 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- Drag only on title/spacer - whole-header drag-region breaks opacity fades on Windows. -->
+<!-- No drag-region here: opacity fades + drag composite badly on WebView2.
+     App.svelte owns a sibling drag hit outside the fading layer. -->
 <header
   class="titlebar {isMac ? 'mac' : 'win'}"
   ondblclick={() => !isMac && toggleMax()}
 >
   {#if isMac}
-    <div class="traffic-space" data-tauri-drag-region></div>
+    <div class="traffic-space"></div>
   {/if}
   <div class="tb-nav">
     <button
@@ -75,8 +76,8 @@
       <Hi icon={ArrowRight01Icon} size={16} />
     </button>
   </div>
-  <div class="tb-title" data-tauri-drag-region>Tarn</div>
-  <div class="tb-drag" data-tauri-drag-region></div>
+  <div class="tb-title">Tarn</div>
+  <div class="tb-drag"></div>
   {#if !isMac}
     <div class="tb-btns">
       <button class="tb-btn min" type="button" title="Minimize" onclick={minimize} aria-label="Minimize">

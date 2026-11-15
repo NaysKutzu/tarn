@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { api } from './lib/api';
   import type {
     ArtistPage, AuthStatus, Collection, Explore, GenrePage, Home, Library,
@@ -37,6 +38,9 @@
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
   } from './lib/icons';
 
+  const isMac =
+    typeof navigator !== 'undefined' &&
+    (/Mac/i.test(navigator.platform) || /macOS|Macintosh/i.test(navigator.userAgent));
   const EQ_LABELS = ['60', '230', '910', '3.6k', '14k'] as const;
   type EqBands = SettingsT['eq_bands'];
   const EQ_PRESETS: { id: string; label: string; bands: EqBands }[] = [
@@ -116,7 +120,22 @@
   let backStack = $state<HistEntry[]>([]);
   let fwdStack = $state<HistEntry[]>([]);
   let navLock = false;
-  let panel = $state<null | 'queue' | 'lyrics' | 'related'>(null);
+  type PanelId = 'queue' | 'lyrics' | 'related';
+  let queueOn = $state(false);
+  let lyricsOn = $state(false);
+  let relatedOn = $state(false);
+  /** Which side-panel body to show when not fullscreen. */
+  let panelFocus = $state<PanelId | null>(null);
+  let sidePanelOn = $derived(queueOn || lyricsOn || relatedOn);
+  let sidePanelView = $derived.by((): PanelId | null => {
+    if (panelFocus === 'queue' && queueOn) return 'queue';
+    if (panelFocus === 'lyrics' && lyricsOn) return 'lyrics';
+    if (panelFocus === 'related' && relatedOn) return 'related';
+    if (relatedOn) return 'related';
+    if (lyricsOn) return 'lyrics';
+    if (queueOn) return 'queue';
+    return null;
+  });
   let expanded = $state(false);
   let npShow = $state(true);
   let npHoverChrome = $state(false);
@@ -319,7 +338,7 @@
         api.prev();
       } else if (e.key === 'Escape') {
         if (expanded) expanded = false;
-        else if (panel) panel = null;
+        else if (sidePanelOn) closePanels();
         else if (ctx) ctx = null;
       }
     };
@@ -741,9 +760,57 @@
     await like(player.disliked ? 'removelike' : 'dislike');
   }
 
-  async function openPanel(tab: 'queue' | 'lyrics' | 'related') {
-    if (tab === 'lyrics' && lyricsReady && !lyricsOk) return;
-    panel = panel === tab ? null : tab;
+  function closePanels() {
+    queueOn = false;
+    lyricsOn = false;
+    relatedOn = false;
+    panelFocus = null;
+  }
+
+  async function openPanel(tab: PanelId) {
+    if (tab === 'lyrics' && lyricsReady && !lyricsOk && !lyricsOn) return;
+    if (expanded) {
+      // Fullscreen: queue + lyrics can both stay open.
+      if (tab === 'queue') {
+        queueOn = !queueOn;
+        if (queueOn) panelFocus = 'queue';
+        return;
+      }
+      if (tab === 'lyrics') {
+        lyricsOn = !lyricsOn;
+        if (lyricsOn) panelFocus = 'lyrics';
+        return;
+      }
+      relatedOn = !relatedOn;
+      if (relatedOn) {
+        queueOn = false;
+        lyricsOn = false;
+        panelFocus = 'related';
+      } else {
+        panelFocus = queueOn ? 'queue' : lyricsOn ? 'lyrics' : null;
+      }
+      return;
+    }
+    // Side panel: exclusive tabs.
+    if (tab === 'queue') {
+      const on = !queueOn;
+      queueOn = on;
+      lyricsOn = false;
+      relatedOn = false;
+      panelFocus = on ? 'queue' : null;
+    } else if (tab === 'lyrics') {
+      const on = !lyricsOn;
+      lyricsOn = on;
+      queueOn = false;
+      relatedOn = false;
+      panelFocus = on ? 'lyrics' : null;
+    } else {
+      const on = !relatedOn;
+      relatedOn = on;
+      queueOn = false;
+      lyricsOn = false;
+      panelFocus = on ? 'related' : null;
+    }
   }
 
   // Fetch lyrics/related once per track. A plain (non-reactive) last-id
@@ -756,11 +823,11 @@
   $effect(() => {
     const id = player.track?.id ?? '';
     if (!id) {
+      // Keep lyrics/queue panel mode across brief track gaps (next/crossfade).
       lyrics = null;
       lyricsFor = '';
       lyricsOk = false;
       lyricsReady = false;
-      if (panel === 'lyrics') panel = null;
       return;
     }
     if (lyricsFor !== id) {
@@ -774,17 +841,15 @@
         lyrics = l;
         lyricsOk = !!(l?.lines?.length);
         lyricsReady = true;
-        if (!lyricsOk && panel === 'lyrics') panel = null;
+        // Stay on Lyrics mode even if this track has none / isn't synced.
       }).catch(() => {
         if (lyricsFor !== req) return;
         lyrics = { source: null, lines: [], synced: false };
         lyricsOk = false;
         lyricsReady = true;
-        if (panel === 'lyrics') panel = null;
       });
     }
-    const p = panel;
-    if (p === 'related' && relatedFor !== id) {
+    if (relatedOn && relatedFor !== id) {
       relatedFor = id;
       const req = id;
       api.related(id).then((r) => {
@@ -881,9 +946,19 @@
     }
     return idx;
   });
-  /** True when fullscreen should show the synced lyrics stage. */
+  /** Lyrics panel is active on fullscreen (kept across track changes). */
+  let npLyricsMode = $derived(expanded && lyricsOn);
+  /** Synced karaoke column is ready to show. */
   let npLyricsOn = $derived(
-    expanded && panel === 'lyrics' && lyricsOk && !!lyrics?.synced && (lyrics?.lines.length ?? 0) > 0,
+    npLyricsMode && lyricsOk && !!lyrics?.synced && (lyrics?.lines.length ?? 0) > 0,
+  );
+  let npQueueOn = $derived(expanded && queueOn);
+  let npQueueTracks = $derived(
+    npQueueOn
+      ? player.queue
+          .map((t, i) => ({ t, i }))
+          .filter(({ i }) => i >= player.index)
+      : [],
   );
   let npLyricsEl: HTMLDivElement | null = $state(null);
 
@@ -1006,18 +1081,25 @@
 
   let navOn = (id: string) => view.id === id;
 
+  let winFocused = $state(true);
+
   function armNpHide() {
-    npShow = true;
     if (npHideTimer) clearTimeout(npHideTimer);
+    // Unfocused window: keep fullscreen chrome hidden (same as idle fade).
+    if (!winFocused) {
+      npShow = false;
+      return;
+    }
+    npShow = true;
     if (expanded && !npHoverChrome) {
       npHideTimer = setTimeout(() => {
-        if (expanded && !npHoverChrome) npShow = false;
+        if (expanded && !npHoverChrome && winFocused) npShow = false;
       }, 2500);
     }
   }
 
   function onAppMove() {
-    if (expanded) armNpHide();
+    if (expanded && winFocused) armNpHide();
   }
 
   $effect(() => {
@@ -1026,6 +1108,28 @@
       npShow = true;
       if (npHideTimer) clearTimeout(npHideTimer);
     }
+  });
+
+  onMount(() => {
+    const win = getCurrentWindow();
+    const unsubs: Array<() => void> = [];
+    win
+      .onFocusChanged(({ payload: focused }) => {
+        winFocused = focused;
+        if (!expanded) return;
+        if (focused) armNpHide();
+        else {
+          npShow = false;
+          if (npHideTimer) clearTimeout(npHideTimer);
+        }
+      })
+      .then((u) => unsubs.push(u))
+      .catch(() => {});
+    win.isFocused().then((f) => {
+      winFocused = f;
+      if (expanded && !f) npShow = false;
+    }).catch(() => {});
+    return () => unsubs.forEach((u) => u());
   });
 
   $effect(() => {
@@ -1059,7 +1163,16 @@
     onpointerenter={() => { if (expanded) { npHoverChrome = true; armNpHide(); } }}
     onpointerleave={() => { if (expanded) { npHoverChrome = false; armNpHide(); } }}
   >
-    <TitleBar canBack={backStack.length > 0} canFwd={fwdStack.length > 0} onBack={goBack} onFwd={goFwd} />
+    <!-- Drag strip stays outside the opacity layer (WebView2). -->
+    <div
+      class="tb-drag-hit"
+      class:mac={isMac}
+      class:off={expanded && !npShow}
+      data-tauri-drag-region
+    ></div>
+    <div class="tb-fade">
+      <TitleBar canBack={backStack.length > 0} canFwd={fwdStack.length > 0} onBack={goBack} onFwd={goFwd} />
+    </div>
   </div>
   <aside class="sidebar" class:is-hidden={expanded}>
     <div class="brand">
@@ -1119,7 +1232,7 @@
     </div>
   </aside>
 
-  <main class="main {panel ? 'with-panel' : ''}" class:is-hidden={expanded} bind:this={mainEl}>
+  <main class="main {sidePanelOn && !expanded ? 'with-panel' : ''}" class:is-hidden={expanded} bind:this={mainEl}>
     <div class="page">
 
       {#if view.id === 'home'}
@@ -1903,19 +2016,19 @@
     </div>
   </main>
 
-  {#if panel && !expanded}
+  {#if sidePanelOn && !expanded && sidePanelView}
     <aside class="panel">
       <div class="panel-h">
-        <h2>{{ queue: 'Up next', lyrics: 'Lyrics', related: 'Related' }[panel]}</h2>
-        <IconBtn icon={Cancel01Icon} size={24} btnSize="lg" onclick={() => (panel = null)} title="Close" />
+        <h2>{{ queue: 'Up next', lyrics: 'Lyrics', related: 'Related' }[sidePanelView]}</h2>
+        <IconBtn icon={Cancel01Icon} size={24} btnSize="lg" onclick={closePanels} title="Close" />
       </div>
       <div class="ptabs">
-        <button class="ptab {panel === 'queue' ? 'on' : ''}" type="button" onclick={() => openPanel('queue')}>Queue</button>
-        <button class="ptab {panel === 'lyrics' ? 'on' : ''}" type="button" disabled={lyricsReady && !lyricsOk} onclick={() => openPanel('lyrics')}>Lyrics</button>
-        <button class="ptab {panel === 'related' ? 'on' : ''}" type="button" onclick={() => openPanel('related')}>Related</button>
+        <button class="ptab {sidePanelView === 'queue' ? 'on' : ''}" type="button" onclick={() => openPanel('queue')}>Queue</button>
+        <button class="ptab {sidePanelView === 'lyrics' ? 'on' : ''}" type="button" disabled={lyricsReady && !lyricsOk} onclick={() => openPanel('lyrics')}>Lyrics</button>
+        <button class="ptab {sidePanelView === 'related' ? 'on' : ''}" type="button" onclick={() => openPanel('related')}>Related</button>
       </div>
       <div class="panel-b">
-        {#if panel === 'queue'}
+        {#if sidePanelView === 'queue'}
           {#each player.queue as t, i (`${i}:${t.id}`)}
             <button class="q-item {i === player.index ? 'on' : ''}" type="button" onclick={() => playTracks(player.queue, i)} oncontextmenu={(e) => contextTrack(e, t)} onmouseenter={() => t.id && api.prefetch(t.id)}>
               <Cover src={t.cover} size={40} alt="" />
@@ -1925,7 +2038,7 @@
               </div>
             </button>
           {/each}
-        {:else if panel === 'lyrics'}
+        {:else if sidePanelView === 'lyrics'}
           <div class="lyrics">
             {#if lyrics && lyrics.lines.length}
               {#if !lyrics.synced}
@@ -1945,7 +2058,7 @@
               <div class="empty"></div>
             {/if}
           </div>
-        {:else if panel === 'related' && related}
+        {:else if sidePanelView === 'related' && related}
           {#if related.tracks.length}
             {#each related.tracks as t, i (t.id || i)}
               <button class="q-item" type="button" onclick={() => playTracks(related!.tracks, i)} oncontextmenu={(e) => contextTrack(e, t)}>
@@ -1970,8 +2083,13 @@
     </aside>
   {/if}
 
-  {#if expanded && player.track}
-    <div class="np" class:has-lyrics={npLyricsOn} onwheel={nudgeVolume}>
+  {#if expanded}
+    <div
+      class="np"
+      class:has-lyrics={npLyricsOn || (npLyricsMode && lyricsReady)}
+      class:has-queue={npQueueOn}
+      onwheel={nudgeVolume}
+    >
       <button
         class="ibtn lg np-close"
         type="button"
@@ -1982,55 +2100,96 @@
       >
         <Hi icon={Cancel01Icon} size={26} />
       </button>
-      {#key player.track.id}
-        <div
-          class="np-stage"
-          class:slide-next={npSlide === 'next'}
-          class:slide-prev={npSlide === 'prev'}
-        >
-          <Cover src={nowCover} videoId={player.track?.id} width={1400} height={900} class="np-bg" alt="" />
-          <div class="np-shade"></div>
-          <div class="np-in">
-            <div class="np-main">
-              <div class="np-art">
-                <Cover src={nowCover} videoId={player.track?.id} size={560} alt="" />
-                {#if volHud != null}
-                  <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
-                {/if}
-              </div>
-              <div class="np-meta">
-                <h1>{player.track.title}</h1>
-                <div class="ar">
-                  {#each player.track.artists as a, k}
-                    {#if k > 0}<span>, </span>{/if}
-                    <button class="linkish" type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
-                  {/each}
+      {#if player.track}
+        {#key player.track.id}
+          <div
+            class="np-stage"
+            class:slide-next={npSlide === 'next'}
+            class:slide-prev={npSlide === 'prev'}
+          >
+            <Cover src={nowCover} videoId={player.track?.id} width={1400} height={900} class="np-bg" alt="" />
+            <div class="np-shade"></div>
+            <div class="np-in">
+              <div class="np-main">
+                <div class="np-art">
+                  <Cover src={nowCover} videoId={player.track?.id} size={560} alt="" />
+                  {#if volHud != null}
+                    <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
+                  {/if}
+                </div>
+                <div class="np-meta">
+                  <h1>{player.track.title}</h1>
+                  <div class="ar">
+                    {#each player.track.artists as a, k}
+                      {#if k > 0}<span>, </span>{/if}
+                      <button class="linkish" type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
+                    {/each}
+                  </div>
                 </div>
               </div>
+              {#if npLyricsOn && lyrics}
+                <div
+                  class="np-lyrics"
+                  aria-label="Lyrics"
+                  bind:this={npLyricsEl}
+                  onwheel={(e) => e.stopPropagation()}
+                >
+                  {#each lyrics.lines as ln, i}
+                    <button
+                      type="button"
+                      class="ly"
+                      class:on={i === activeLyric}
+                      class:past={activeLyric >= 0 && i < activeLyric}
+                      class:static={ln.start_ms == null}
+                      data-i={i}
+                      onclick={() => ln.start_ms != null && api.seek(ln.start_ms / 1000)}
+                    >{ln.text || ' '}</button>
+                  {/each}
+                </div>
+              {:else if npLyricsMode && lyricsReady && !npLyricsOn}
+                <div class="np-lyrics np-lyrics-empty" aria-label="Lyrics">
+                  <div class="ly-note">No synced lyrics for this track</div>
+                </div>
+              {/if}
             </div>
-            {#if npLyricsOn && lyrics}
-              <div
-                class="np-lyrics"
-                aria-label="Lyrics"
-                bind:this={npLyricsEl}
-                onwheel={(e) => e.stopPropagation()}
-              >
-                {#each lyrics.lines as ln, i}
-                  <button
-                    type="button"
-                    class="ly"
-                    class:on={i === activeLyric}
-                    class:past={activeLyric >= 0 && i < activeLyric}
-                    class:static={ln.start_ms == null}
-                    data-i={i}
-                    onclick={() => ln.start_ms != null && api.seek(ln.start_ms / 1000)}
-                  >{ln.text || ' '}</button>
-                {/each}
-              </div>
-            {/if}
           </div>
-        </div>
-      {/key}
+        {/key}
+      {/if}
+      {#if npQueueOn}
+        <aside
+          class="np-queue"
+          class:dim={!npShow}
+          aria-label="Up next"
+          onwheel={(e) => e.stopPropagation()}
+          onpointerenter={() => { npHoverChrome = true; armNpHide(); }}
+          onpointerleave={() => { npHoverChrome = false; armNpHide(); }}
+        >
+          <div class="np-queue-h">Up next</div>
+          <div class="np-queue-list">
+            {#each npQueueTracks as { t, i } (`${i}:${t.id}`)}
+              <button
+                class="np-qi"
+                class:now={i === player.index}
+                type="button"
+                onclick={() => playTracks(player.queue, i)}
+                oncontextmenu={(e) => contextTrack(e, t)}
+                onmouseenter={() => t.id && api.prefetch(t.id)}
+              >
+                <Cover src={t.cover} videoId={t.id} size={44} alt="" />
+                <div class="tx">
+                  <div class="tn">{t.title}</div>
+                  <div class="ta">{artistsLine(t.artists)}</div>
+                </div>
+                {#if i === player.index}
+                  <span class="np-qi-now">Now</span>
+                {/if}
+              </button>
+            {:else}
+              <div class="np-queue-empty">Nothing else in the queue</div>
+            {/each}
+          </div>
+        </aside>
+      {/if}
     </div>
   {/if}
 
@@ -2119,13 +2278,13 @@
         <IconBtn
           icon={MicVocalIcon}
           size={22}
-          on={panel === 'lyrics'}
+          on={lyricsOn}
           disabled={!player.track || (lyricsReady && !lyricsOk)}
           onclick={() => openPanel('lyrics')}
           title={lyricsReady && !lyricsOk ? 'No lyrics' : 'Lyrics'}
           btnSize="lg"
         />
-        <IconBtn icon={Queue02Icon} size={22} on={panel === 'queue'} onclick={() => openPanel('queue')} title="Queue" btnSize="lg" />
+        <IconBtn icon={Queue02Icon} size={22} on={queueOn} onclick={() => openPanel('queue')} title="Queue" btnSize="lg" />
         <IconBtn icon={Radio02Icon} size={22} onclick={() => startRadio()} title="Radio" btnSize="lg" />
         <div class="vol">
           <Hi icon={player.volume < 0.01 ? VolumeMute01Icon : VolumeHighIcon} size={20} />

@@ -43,6 +43,8 @@ pub struct App {
     pub ui: Mutex<persist::UiMem>,
     pub pending_toast: Mutex<Option<String>>,
     skip_fails: std::sync::atomic::AtomicU32,
+    /// Seed id currently being fetched for autoplay queue growth.
+    autoplay_fetching: Mutex<Option<String>>,
     /// Video ids known to be in Liked Music (from library + like toggles).
     liked_ids: Mutex<std::collections::HashSet<String>>,
     /// Last library liked track list - used to open LM without rustypipe.
@@ -101,6 +103,7 @@ impl App {
             ui: Mutex::new(persist::UiMem::default()),
             pending_toast: Mutex::new(None),
             skip_fails: std::sync::atomic::AtomicU32::new(0),
+            autoplay_fetching: Mutex::new(None),
             liked_ids: Mutex::new(std::collections::HashSet::new()),
             liked_tracks: Mutex::new(Vec::new()),
         })
@@ -623,6 +626,31 @@ async fn restore_playback(app: &App) {
     }
 }
 
+/// Similar tracks for when the queue runs out (autoplay).
+async fn fetch_autoplay_more(ytm: &crate::ytm::Ytm, seed_id: &str) -> Vec<Track> {
+    if seed_id.is_empty() {
+        return Vec::new();
+    }
+    match ytm.radio_continue().await {
+        Ok(m) if !m.is_empty() => return m,
+        Ok(_) => {}
+        Err(e) => eprintln!("autoplay radio_continue: {e}"),
+    }
+    match ytm.radio(seed_id).await {
+        Ok(m) if !m.is_empty() => return m,
+        Ok(_) => {}
+        Err(e) => eprintln!("autoplay radio: {e}"),
+    }
+    match ytm.related(seed_id).await {
+        Ok(r) if !r.tracks.is_empty() => r.tracks,
+        Ok(_) => Vec::new(),
+        Err(e) => {
+            eprintln!("autoplay related: {e}");
+            Vec::new()
+        }
+    }
+}
+
 fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
     let ids: Vec<String> = queue
         .iter()
@@ -632,6 +660,10 @@ fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
         .filter(|id| !id.is_empty())
         .collect();
     let remaining = queue.len().saturating_sub(index + 1);
+    let seed = queue
+        .get(index)
+        .map(|t| t.id.clone())
+        .unwrap_or_default();
     let ytm = app.ytm.clone();
     let player = app.player.clone();
     tauri::async_runtime::spawn(async move {
@@ -654,15 +686,13 @@ fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
             }
             ytm.prefetch(id).await;
         }
-        // Only grow the queue with radio when autoplay is on - otherwise
-        // leftover "similar" tracks stick around after the playlist ends.
+        // Grow the queue before the last song ends so Up next / blend see it.
         if remaining < 3 && player.snapshot().autoplay {
-            if let Ok(more) = ytm.radio_continue().await {
-                if !more.is_empty() && player.snapshot().autoplay {
-                    player.append_unique(more.clone());
-                    for t in more.iter().take(3) {
-                        ytm.prefetch(&t.id).await;
-                    }
+            let more = fetch_autoplay_more(&ytm, &seed).await;
+            if !more.is_empty() && player.snapshot().autoplay {
+                player.append_unique(more.clone());
+                for t in more.iter().take(3) {
+                    ytm.prefetch(&t.id).await;
                 }
             }
         }
@@ -829,34 +859,25 @@ pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
             }
         }
         NextChoice::Autoplay => {
-            let (mut queue, index) = app.player.queue_and_index();
+            let (queue, index) = app.player.queue_and_index();
             let id = queue.get(index).map(|t| t.id.clone());
             let Some(id) = id else {
                 return Ok(());
             };
-            let more = match app.ytm.radio_continue().await {
-                Ok(m) if !m.is_empty() => m,
-                _ => match app.ytm.radio(&id).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        eprintln!("autoplay radio: {e}");
-                        Vec::new()
-                    }
-                },
-            };
-            let existing: std::collections::HashSet<_> =
-                queue.iter().map(|t| t.id.clone()).collect();
-            for t in more {
-                if !t.id.is_empty() && !existing.contains(&t.id) {
-                    queue.push(t);
-                }
+            let more = fetch_autoplay_more(&app.ytm, &id).await;
+            if more.is_empty() {
+                eprintln!("autoplay: no similar tracks for {id}");
+                *app.pending_toast.lock() = Some("Couldn't find more to play".into());
+                return Ok(());
             }
+            app.player.append_unique(more);
+            let (queue, index) = app.player.queue_and_index();
             let i = index + 1;
-            if i < queue.len() {
-                let t = queue[i].clone();
+            if let Some(t) = queue.get(i).cloned() {
                 // Autoplay continuation is a natural advance, not a user skip.
                 start_playback_at(app, t, queue, i, 0.0, false, user).await
             } else {
+                eprintln!("autoplay: appended tracks but none after index {index}");
                 Ok(())
             }
         }
@@ -1237,6 +1258,46 @@ fn maybe_blend(app: &Arc<App>) {
     });
 }
 
+fn ensure_autoplay_buffer(app: &Arc<App>) {
+    let snap = app.player.snapshot();
+    if !snap.autoplay || !snap.playing {
+        return;
+    }
+    let remaining = snap.queue.len().saturating_sub(snap.index + 1);
+    if remaining > 0 {
+        return;
+    }
+    if snap.duration <= 1.0 || snap.position < (snap.duration - 30.0).max(0.0) {
+        return;
+    }
+    let Some(seed) = snap.track.as_ref().map(|t| t.id.clone()) else {
+        return;
+    };
+    {
+        let mut slot = app.autoplay_fetching.lock();
+        if slot.as_deref() == Some(seed.as_str()) {
+            return;
+        }
+        *slot = Some(seed.clone());
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let more = fetch_autoplay_more(&app.ytm, &seed).await;
+        if !more.is_empty() && app.player.snapshot().autoplay {
+            let n = more.len();
+            app.player.append_unique(more.clone());
+            eprintln!("autoplay: prefilled +{n} before end of {seed}");
+            for t in more.iter().take(3) {
+                app.ytm.prefetch(&t.id).await;
+            }
+        }
+        let mut slot = app.autoplay_fetching.lock();
+        if slot.as_deref() == Some(seed.as_str()) {
+            *slot = None;
+        }
+    });
+}
+
 fn emit_loop(handle: AppHandle, app: Arc<App>) {
     std::thread::spawn(move || {
         let mut last_save = std::time::Instant::now();
@@ -1248,6 +1309,7 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
                 }
             }
             maybe_blend(&app);
+            ensure_autoplay_buffer(&app);
             if let Some((track, queue, index, pos, play)) = app.player.take_recover() {
                 let app2 = app.clone();
                 let handle2 = handle.clone();

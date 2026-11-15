@@ -604,6 +604,20 @@ impl Player {
         if !self.recover.swap(false, Ordering::SeqCst) {
             return None;
         }
+        // Near the natural end, prefer auto-advance / autoplay over a
+        // mid-track re-resolve - otherwise the last song sticks forever.
+        {
+            let s = self.snapshot();
+            if s.duration > 1.0 && s.position >= (s.duration - 1.5).max(0.0) {
+                eprintln!(
+                    "recover: at end ({:.2}/{:.2}); treating as track-end",
+                    s.position, s.duration
+                );
+                self.ended.store(true, Ordering::Relaxed);
+                self.buffering.store(false, Ordering::Relaxed);
+                return None;
+            }
+        }
         {
             let mut last = self.last_recover.lock();
             if let Some(t) = *last {
@@ -689,8 +703,14 @@ impl Player {
             return false;
         }
         if self.recovering.load(Ordering::Relaxed) || self.recover.load(Ordering::Relaxed) {
-            self.ended.store(false, Ordering::Relaxed);
-            return false;
+            let s = self.snapshot();
+            if s.duration > 1.0 && s.position >= (s.duration - 1.5).max(0.0) {
+                // Let track-end win so autoplay can extend the queue.
+                self.recover.store(false, Ordering::SeqCst);
+            } else {
+                self.ended.store(false, Ordering::Relaxed);
+                return false;
+            }
         }
         if !self.ended.swap(false, Ordering::Relaxed) {
             return false;
