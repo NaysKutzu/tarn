@@ -89,6 +89,10 @@ impl Kind {
 pub struct PlayerHub {
     http: reqwest::Client,
     visitor: Mutex<Option<(String, Instant)>>,
+    /// Signed-in YouTube Music cookie header, if the user has logged in.
+    /// Sent with /player so the request is made as the account instead of
+    /// an anonymous visitor (the usual cause of LOGIN_REQUIRED / bot checks).
+    account: Mutex<Option<String>>,
 }
 
 impl PlayerHub {
@@ -101,7 +105,24 @@ impl PlayerHub {
         Ok(Self {
             http,
             visitor: Mutex::new(None),
+            account: Mutex::new(None),
         })
+    }
+
+    /// Set (or clear) the account cookie header. Drops the cached visitor id
+    /// so the next request is made with the new identity.
+    pub fn set_account_cookie(&self, header: Option<String>) {
+        let header = header.filter(|h| !h.is_empty());
+        *self.account.lock().unwrap() = header;
+        *self.visitor.lock().unwrap() = None;
+    }
+
+    /// Consent cookie, plus the account cookies when signed in.
+    fn cookie_value(&self) -> String {
+        match self.account.lock().unwrap().as_deref() {
+            Some(a) => format!("{CONSENT}; {a}"),
+            None => CONSENT.to_string(),
+        }
     }
 
     pub async fn prewarm(&self) {
@@ -177,7 +198,7 @@ impl PlayerHub {
             .header("Origin", "https://www.youtube.com")
             .header("X-Origin", "https://www.youtube.com")
             .header("X-Goog-Visitor-Id", visitor)
-            .header("Cookie", CONSENT)
+            .header("Cookie", self.cookie_value())
             .json(&body)
             .send()
             .await?;
@@ -230,7 +251,7 @@ impl PlayerHub {
             .http
             .get(MUSIC_HOME)
             .header("User-Agent", user_agent())
-            .header("Cookie", CONSENT)
+            .header("Cookie", self.cookie_value())
             .header("Origin", "https://music.youtube.com")
             .header("Referer", "https://music.youtube.com/")
             .send()

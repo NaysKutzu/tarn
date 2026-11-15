@@ -735,7 +735,7 @@
       return;
     }
     try {
-      const st = await api.like(track.id, action);
+      const st = await api.like(track.id, action, track);
       player.liked = st.liked;
       player.disliked = st.disliked;
       if (player.track?.id === track.id) {

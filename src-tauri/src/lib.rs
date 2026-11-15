@@ -890,7 +890,12 @@ pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn like_track(app: State<'_, Arc<App>>, id: String, action: String) -> Result<LikeState, String> {
+async fn like_track(
+    app: State<'_, Arc<App>>,
+    id: String,
+    action: String,
+    track: Option<Track>,
+) -> Result<LikeState, String> {
     if is_mock() {
         let st = match action.as_str() {
             "like" => LikeState {
@@ -914,7 +919,16 @@ async fn like_track(app: State<'_, Arc<App>>, id: String, action: String) -> Res
         .map_err(|e| e.to_string())?;
     app.player.set_rating(st.liked, st.disliked);
     app.set_liked_id(&id, st.liked);
-    if !st.liked {
+    if st.liked {
+        // Show the new like in the Liked Music list right away instead of
+        // waiting for the next library reload (the list is a cached snapshot).
+        if let Some(t) = track {
+            let mut g = app.liked_tracks.lock();
+            if !g.iter().any(|x| x.id == t.id) {
+                g.insert(0, t);
+            }
+        }
+    } else {
         app.liked_tracks.lock().retain(|t| t.id != id);
     }
     Ok(st)
@@ -1351,9 +1365,12 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     crate::win::init();
-    // WebKitGTK compositing often blurs glyphs at fractional DPI.
+    // WebKitGTK compositing often blurs glyphs at fractional DPI on X11, but
+    // on Wayland forcing it off causes black flicker. Keep it off only on X11.
     if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        let on_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let value = if on_wayland { "0" } else { "1" };
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", value);
     }
     let app = match App::new() {
         Ok(a) => Arc::new(a),

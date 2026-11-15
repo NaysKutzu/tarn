@@ -142,12 +142,14 @@ impl Ytm {
                 // Tighten rustypipe cache files if they appeared.
                 tighten_cache(&cache_dir());
                 *self.cookie.lock().unwrap() = Some(h.clone());
+                self.players.set_account_cookie(Some(h.clone()));
             }
             _ => {
                 let _ = self.rp.user_auth_remove_cookie().await;
                 auth::remove_file_quiet(&self.cookies_file);
                 *self.cookie.lock().unwrap() = None;
                 *self.page_id.lock().unwrap() = None;
+                self.players.set_account_cookie(None);
             }
         }
         Ok(())

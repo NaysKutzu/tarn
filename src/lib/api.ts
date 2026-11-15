@@ -36,7 +36,8 @@ export const api = {
   queueAdd: (tracks: Track[], next: boolean) => invoke<void>('queue_add', { tracks, next }),
   queueRemove: (index: number) => invoke<void>('queue_remove', { index }),
   queueMove: (from: number, to: number) => invoke<void>('queue_move', { from, to }),
-  like: (id: string, action: string) => invoke<LikeState>('like_track', { id, action }),
+  like: (id: string, action: string, track?: Track) =>
+    invoke<LikeState>('like_track', { id, action, track }),
   subscribe: (id: string, on: boolean) => invoke<void>('subscribe_artist', { id, on }),
   playlistCreate: (title: string) => invoke<string>('playlist_create', { title }),
   playlistAdd: (playlistId: string, videoId: string) =>
