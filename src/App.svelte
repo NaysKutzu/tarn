@@ -804,23 +804,12 @@
     return coverFor(t);
   });
 
-  // Playing a list (playlist, liked, album...) follows the list's own order, so
-  // shuffle is switched off first. Picking a row inside Up next keeps the mode.
-  async function playTracks(
-    tracks: Track[],
-    index: number,
-    fallbackCover?: string | null,
-    keepShuffle = false,
-  ) {
+  async function playTracks(tracks: Track[], index: number, fallbackCover?: string | null) {
     if (!tracks.length) return;
     const list = withCoverFallback(tracks, fallbackCover ?? null);
     const t = list[index] ?? list[0];
     recents = recordRecent(t);
     try {
-      if (!keepShuffle && player.shuffle) {
-        player.shuffle = false;
-        await api.setShuffle(false);
-      }
       await api.play(t, list, index);
     } catch (e) {
       fail(e, "Can't play this track");
@@ -2662,7 +2651,7 @@
           <QueueList
             tracks={player.queue}
             index={player.index}
-            onPlay={(i) => playTracks(player.queue, i, null, true)}
+            onPlay={(i) => playTracks(player.queue, i)}
             onRemove={(i) => api.queueRemove(i)}
             onMove={(f, t) => api.queueMove(f, t)}
             onContext={(e, t) => contextTrack(e, t)}
@@ -2802,7 +2791,7 @@
               variant="np"
               tracks={player.queue}
               index={player.index}
-              onPlay={(i) => playTracks(player.queue, i, null, true)}
+              onPlay={(i) => playTracks(player.queue, i)}
               onRemove={(i) => api.queueRemove(i)}
               onMove={(f, t) => api.queueMove(f, t)}
               onContext={(e, t) => contextTrack(e, t)}
