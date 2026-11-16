@@ -36,6 +36,7 @@ fn run(app: Arc<crate::App>) -> Result<(), String> {
     let mut last_sig: Option<String> = None;
     let mut enabled_last = true;
     let mut clear_needed = false;
+    let mut last_conn_err: Option<String> = None;
 
     loop {
         let enabled = app.discord_enabled();
@@ -57,10 +58,18 @@ fn run(app: Arc<crate::App>) -> Result<(), String> {
             match connect() {
                 Ok(c) => {
                     eprintln!("discord presence: connected");
+                    crate::diag::log("discord presence: connected");
+                    last_conn_err = None;
                     client = Some(c);
                     last_sig = None;
                 }
                 Err(e) => {
+                    // Log each distinct failure once so the diagnostics show
+                    // why presence is missing (no socket, Discord closed...).
+                    if last_conn_err.as_deref() != Some(e.as_str()) {
+                        crate::diag::log(format!("discord presence: {e}"));
+                        last_conn_err = Some(e.clone());
+                    }
                     // Missing app id / Discord closed — quiet backoff.
                     if e.contains("CLIENT_ID") {
                         std::thread::sleep(Duration::from_secs(30));
@@ -150,6 +159,7 @@ fn run(app: Arc<crate::App>) -> Result<(), String> {
             }
             Err(e) => {
                 eprintln!("discord presence: set_activity: {e}; reconnecting");
+                crate::diag::log(format!("discord presence: set_activity: {e}; reconnecting"));
                 let _ = c.close();
                 client = None;
                 last_sig = None;
