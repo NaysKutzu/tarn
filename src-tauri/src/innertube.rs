@@ -162,6 +162,69 @@ impl InnerTube {
         self.post("browse", json!({ "continuation": token })).await
     }
 
+    /// Tracks of an auto mix / radio playlist (RDTMAK..., RDMM..., RDCLAK...).
+    /// YouTube Music plays these through `next`, not `browse`.
+    pub async fn mix_tracks(&self, playlist_id: &str) -> Result<Vec<Track>> {
+        let v = self
+            .post(
+                "next",
+                json!({
+                    "playlistId": playlist_id,
+                    "enablePersistentPlaylistPanel": true,
+                    "isAudioOnly": true,
+                    "tunerSettingValue": "AUTOMIX_SETTING_NORMAL",
+                }),
+            )
+            .await?;
+        let mut out: Vec<Track> = Vec::new();
+        walk(&v, &mut |key, val| {
+            if key != "playlistPanelVideoRenderer" {
+                return;
+            }
+            let Some(id) = val["videoId"].as_str().filter(|s| s.len() == 11) else {
+                return;
+            };
+            let title = yt_text(&val["title"]).unwrap_or_default();
+            let mut artists = Vec::new();
+            let mut artist_ids = Vec::new();
+            let mut album = None;
+            let mut album_id = None;
+            if let Some(runs) = val.pointer("/longBylineText/runs").and_then(|r| r.as_array()) {
+                for r in runs {
+                    let t = r["text"].as_str().unwrap_or("").trim();
+                    let bid = r
+                        .pointer("/navigationEndpoint/browseEndpoint/browseId")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
+                    if t.is_empty() || t == "•" || t == "&" || t == "," {
+                        continue;
+                    }
+                    if bid.starts_with("UC") {
+                        artists.push(t.to_string());
+                        artist_ids.push(bid.to_string());
+                    } else if bid.starts_with("MPRE") {
+                        album = Some(t.to_string());
+                        album_id = Some(bid.to_string());
+                    }
+                }
+            }
+            out.push(Track {
+                id: id.to_string(),
+                title,
+                artists,
+                artist_ids,
+                album,
+                album_id,
+                duration: duration_of(&val["lengthText"]).or_else(|| {
+                    yt_text(&val["lengthText"]).and_then(|t| parse_mmss(&t))
+                }),
+                cover: thumb_of(&val["thumbnail"]),
+                is_video: false,
+            });
+        });
+        Ok(dedup_tracks(out))
+    }
+
     pub async fn home(&self, params: Option<&str>) -> Result<Home> {
         let v = self.browse("FEmusic_home", params).await?;
         let account_hdr = response_has_account(&v);

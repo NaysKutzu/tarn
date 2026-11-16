@@ -43,6 +43,9 @@ pub struct App {
     pub ui: Mutex<persist::UiMem>,
     pub pending_toast: Mutex<Option<String>>,
     skip_fails: std::sync::atomic::AtomicU32,
+    /// Serialises library loads; callers that waited reuse the fresh result.
+    library_slot: tokio::sync::Mutex<(u64, Option<Library>)>,
+    library_calls: std::sync::atomic::AtomicU64,
     /// Seed id currently being fetched for autoplay queue growth.
     autoplay_fetching: Mutex<Option<String>>,
     /// Video ids known to be in Liked Music (from library + like toggles).
@@ -103,6 +106,8 @@ impl App {
             ui: Mutex::new(persist::UiMem::default()),
             pending_toast: Mutex::new(None),
             skip_fails: std::sync::atomic::AtomicU32::new(0),
+            library_slot: tokio::sync::Mutex::new((0, None)),
+            library_calls: std::sync::atomic::AtomicU64::new(0),
             autoplay_fetching: Mutex::new(None),
             liked_ids: Mutex::new(std::collections::HashSet::new()),
             liked_tracks: Mutex::new(Vec::new()),
@@ -438,7 +443,8 @@ pub(crate) async fn start_playback(
     queue: Vec<Track>,
     index: usize,
 ) -> Result<(), String> {
-    start_playback_at(app, track, queue, index, 0.0, false, true, true).await
+    // Explicit click: never silently substitute another song on failure.
+    start_playback_at(app, track, queue, index, 0.0, false, true, false).await
 }
 
 pub(crate) async fn start_playback_at(
@@ -1012,7 +1018,24 @@ async fn get_library(app: State<'_, Arc<App>>) -> Result<Library, String> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(40)).await;
     }
-    let lib = app.ytm.library().await.map_err(|e| e.to_string())?;
+    // The UI asked twice at startup, which downloaded the 1000+ liked tracks
+    // twice in parallel and starved playback. Join the in-flight load.
+    let ticket = app
+        .library_calls
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let mut slot = app.library_slot.lock().await;
+    let lib = match &slot.1 {
+        Some(l) if slot.0 > ticket => l.clone(),
+        _ => {
+            let l = app.ytm.library().await.map_err(|e| e.to_string())?;
+            slot.0 = app
+                .library_calls
+                .load(std::sync::atomic::Ordering::SeqCst);
+            slot.1 = Some(l.clone());
+            l
+        }
+    };
+    drop(slot);
     app.remember_liked_tracks(lib.liked.clone());
     if let Some(id) = app.player.snapshot().track.as_ref().map(|t| t.id.clone()) {
         app.apply_known_rating(&id);

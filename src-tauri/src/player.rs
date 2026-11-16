@@ -717,6 +717,13 @@ impl Player {
         if !self.ended.swap(false, Ordering::Relaxed) {
             return false;
         }
+        // A new track is still resolving (UI already shows it). The old
+        // decoder ending now is stale: advancing would skip the track the
+        // user just picked.
+        if self.state.lock().loading {
+            eprintln!("track-end ignored (next track still loading)");
+            return false;
+        }
         let id = self
             .state
             .lock()

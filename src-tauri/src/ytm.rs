@@ -124,7 +124,17 @@ impl Ytm {
                 .filter_map(|l| l.split('=').next())
                 .collect();
             crate::diag::log(format!("cookies rotated: {names:?}"));
-            Some(h.clone())
+            let header = h.clone();
+            drop(g);
+            // Keep yt-dlp's Netscape jar and the player hub in sync with
+            // rotated SIDCC / PSIDTS, otherwise age-restricted resolves
+            // keep using a stale session.
+            let netscape = auth::netscape_from_header(&header);
+            if let Err(e) = auth::write_netscape_file(&self.cookies_file, &netscape) {
+                eprintln!("cookies netscape refresh: {e}");
+            }
+            self.players.set_account_cookie(Some(header.clone()));
+            Some(header)
         } else {
             None
         }
@@ -314,6 +324,55 @@ impl Ytm {
         })
     }
 
+    /// Auto mixes ship a `/mixart` cover the webview can't load (needs
+    /// session cookies), so they render as "?". Use the first track's art.
+    async fn fill_mix_covers(&self, home: &mut Home) {
+        let mut ids: Vec<String> = Vec::new();
+        for sh in &home.shelves {
+            for it in &sh.items {
+                let bad = it.cover.as_deref().is_none_or(|u| !usable_cover(u));
+                if it.kind == "playlist" && bad && it.id.starts_with("RD") && !ids.contains(&it.id) {
+                    ids.push(it.id.clone());
+                }
+            }
+        }
+        ids.truncate(12);
+        if ids.is_empty() {
+            return;
+        }
+        let mut found: std::collections::HashMap<String, String> = Default::default();
+        for chunk in ids.chunks(4) {
+            let mut res = Vec::new();
+            for id in chunk {
+                res.push(async move {
+                    let t = self.it().mix_tracks(id).await.ok()?;
+                    let c = t.into_iter().find_map(|t| t.cover.filter(|u| usable_cover(u)))?;
+                    Some((id.clone(), c))
+                });
+            }
+            let mut it = res.into_iter();
+            let (a, b, c, d) = (it.next(), it.next(), it.next(), it.next());
+            let (ra, rb, rc, rd) = tokio::join!(
+                async { match a { Some(f) => f.await, None => None } },
+                async { match b { Some(f) => f.await, None => None } },
+                async { match c { Some(f) => f.await, None => None } },
+                async { match d { Some(f) => f.await, None => None } },
+            );
+            for (k, v) in [ra, rb, rc, rd].into_iter().flatten() {
+                found.insert(k, v);
+            }
+        }
+        for sh in &mut home.shelves {
+            for it in &mut sh.items {
+                if it.kind == "playlist" {
+                    if let Some(c) = found.get(&it.id) {
+                        it.cover = Some(c.clone());
+                    }
+                }
+            }
+        }
+    }
+
     pub async fn home(&self, params: Option<&str>) -> Result<Home> {
         let mut home = match self.it().home(params).await {
             Ok(h) if !h.shelves.is_empty() => h,
@@ -329,6 +388,7 @@ impl Ytm {
         // When signed in, the InnerTube feed IS the product - do not pad
         // it with the logged-out charts/trending filler.
         if signed {
+            self.fill_mix_covers(&mut home).await;
             crate::diag::log(format!(
                 "home feed (signed-in): {} shelves, {} chips",
                 home.shelves.len(),
@@ -800,12 +860,34 @@ impl Ytm {
         if bare == "SE" {
             return self.episodes_collection().await;
         }
-        let p = self
-            .rp
-            .query()
-            .music_playlist(id)
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
+        // Auto mixes (New Release Mix, Replay Mix, ...) are radio playlists.
+        // The playlist endpoint rejects them slowly, so go straight to `next`.
+        if bare.starts_with("RD") {
+            if let Ok(t) = self.it().mix_tracks(bare).await {
+                if !t.is_empty() {
+                    return Ok(mix_collection(bare, t));
+                }
+            }
+        }
+        let p = match self.rp.query().music_playlist(id).await {
+            Ok(p) => p,
+            Err(e) => {
+                // Auto mixes (New Release Mix, Replay Mix, ...) are radio
+                // playlists (RD*): the playlist endpoint rejects them.
+                if bare.starts_with("RD") {
+                    let tracks = match self.it().mix_tracks(bare).await {
+                        Ok(t) if !t.is_empty() => Ok(t),
+                        _ => self.radio_id(bare).await,
+                    };
+                    if let Ok(tracks) = tracks {
+                        if !tracks.is_empty() {
+                            return Ok(mix_collection(bare, tracks));
+                        }
+                    }
+                }
+                return Err(anyhow!("{e}"));
+            }
+        };
         let mut c = Collection {
             kind: "playlist".into(),
             id: p.id,
@@ -838,8 +920,8 @@ impl Ytm {
     async fn liked_music_collection(&self) -> Result<Collection> {
         // Prefer our InnerTube browse - rustypipe music_playlist("LM") and
         // sometimes visitor-data fetches panic on 302.
-        let tracks = match self.it().library_browse("FEmusic_liked_videos").await {
-            Ok((tracks, _, _)) if !tracks.is_empty() => tracks,
+        let tracks = match self.liked_all().await {
+            Ok(tracks) if !tracks.is_empty() => tracks,
             Ok(_) | Err(_) => match self.rp.query().music_liked_tracks().await {
                 Ok(liked) => liked.tracks.items.iter().map(track_from).collect(),
                 Err(e) => return Err(anyhow!("liked music: {e}")),
@@ -1096,6 +1178,39 @@ impl Ytm {
         self.it().library_save(id, save).await
     }
 
+    /// Liked Music as the official app shows it. `FEmusic_liked_videos` alone
+    /// misses ~450 songs; the `VLLM` playlist page has them (and the "N songs"
+    /// count users compare against). Merge both, VLLM order first.
+    async fn liked_all(&self) -> Result<Vec<Track>> {
+        let it = self.it();
+        let (a, b) = tokio::join!(
+            it.library_browse("VLLM"),
+            it.library_browse("FEmusic_liked_videos")
+        );
+        let a = a.map(|(t, _, _)| t).unwrap_or_default();
+        let b = match b {
+            Ok((t, _, _)) => t,
+            Err(e) => {
+                if a.is_empty() {
+                    return Err(e);
+                }
+                Vec::new()
+            }
+        };
+        let mut seen: std::collections::HashSet<String> =
+            a.iter().map(|t| t.id.clone()).collect();
+        let mut out = a;
+        let mut extra = 0;
+        for t in b {
+            if seen.insert(t.id.clone()) {
+                out.push(t);
+                extra += 1;
+            }
+        }
+        crate::diag::log(format!("liked: {} tracks (+{extra} only in liked_videos)", out.len()));
+        Ok(out)
+    }
+
     pub async fn library(&self) -> Result<Library> {
         if self.cookie_header().is_none() {
             crate::diag::log("library: no cookie, returning signed_in=false");
@@ -1139,8 +1254,8 @@ impl Ytm {
 
         let it = self.it();
         // Liked songs: InnerTube with continuations (rustypipe stops at ~100).
-        match it.library_browse("FEmusic_liked_videos").await {
-            Ok((tracks, _, _)) if !tracks.is_empty() => {
+        match self.liked_all().await {
+            Ok(tracks) if !tracks.is_empty() => {
                 crate::diag::log(format!("library innertube liked_videos: {} tracks", tracks.len()));
                 lib.liked = tracks;
             }
@@ -1192,10 +1307,7 @@ impl Ytm {
         }
         if lib.albums.is_empty() {
             // ytmusicapi uses liked_albums; corpus_track_albums often 400s.
-            for id in [
-                "FEmusic_liked_albums",
-                "FEmusic_library_corpus_track_albums",
-            ] {
+            for id in ["FEmusic_liked_albums"] {
                 match it.library_browse(id).await {
                     Ok((_, albs, _)) if !albs.is_empty() => {
                         crate::diag::log(format!("library innertube {id}: {}", albs.len()));
@@ -1353,6 +1465,22 @@ impl Ytm {
     }
 
     async fn playlist_cover_tiles(&self, id: &str) -> Result<Vec<String>> {
+        if id.trim_start_matches("VL").starts_with("RD") {
+            let tracks = self.it().mix_tracks(id.trim_start_matches("VL")).await?;
+            let mut seen = std::collections::HashSet::new();
+            let mut tiles = Vec::new();
+            for t in tracks.iter().take(12) {
+                if let Some(c) = t.cover.clone() {
+                    if seen.insert(thumb_dedupe_key(&c)) {
+                        tiles.push(c);
+                        if tiles.len() == 4 {
+                            break;
+                        }
+                    }
+                }
+            }
+            return Ok(tiles);
+        }
         let p = self
             .rp
             .query()
@@ -1524,13 +1652,19 @@ impl Ytm {
             };
             let q = self.quality();
             let vid = id.clone();
+            // Wake yt-dlp early when innertube hits an age-gate - VISIONOS /
+            // ANDROID cannot unlock those, and waiting out rustypipe only
+            // delays the sidecar that actually can (cookies + JS runtime).
+            let age_kick = std::sync::Arc::new(tokio::sync::Notify::new());
+            let age_kick_yd = age_kick.clone();
             let ytdlp_fut = async move {
                 if !ytdlp_enabled {
                     return Err(anyhow!("yt-dlp skipped"));
                 }
-                // 1.5s head start for in-process clients. Never block a
-                // successful innertube/rustypipe URL on the sidecar.
-                tokio::time::sleep(Duration::from_millis(1500)).await;
+                tokio::select! {
+                    _ = age_kick_yd.notified() => {}
+                    _ = tokio::time::sleep(Duration::from_millis(1500)) => {}
+                }
                 ytdlp_stream(&vid, cookies.as_deref(), &q).await
             };
             tokio::pin!(innertube_fut, rustypipe_fut, ytdlp_fut);
@@ -1548,7 +1682,11 @@ impl Ytm {
                                 return Ok(s);
                             }
                             Err(e) => {
-                                crate::diag::log(format!("resolve {video_id}: innertube {e}"));
+                                let msg = e.to_string();
+                                crate::diag::log(format!("resolve {video_id}: innertube {msg}"));
+                                if age_or_login_err(&msg) {
+                                    age_kick.notify_one();
+                                }
                                 last = Some(e);
                             }
                         }
@@ -1921,6 +2059,30 @@ fn artist_from(a: &ArtistItem) -> ArtistCard {
         cover: best_thumb(&a.avatar),
         subscribers: a.subscriber_count,
     }
+}
+
+fn mix_collection(id: &str, tracks: Vec<Track>) -> Collection {
+    let n = tracks.len() as u64;
+    let mut c = Collection {
+        kind: "playlist".into(),
+        id: id.to_string(),
+        playlist_id: Some(id.to_string()),
+        name: "Mix".into(),
+        cover: tracks.first().and_then(|t| t.cover.clone()),
+        artists: Vec::new(),
+        artist_ids: Vec::new(),
+        author: None,
+        year: None,
+        description: None,
+        track_count: Some(n),
+        album_type: None,
+        tracks,
+        related: Vec::new(),
+        owned: false,
+        saved: false,
+    };
+    stamp_missing_track_covers(&mut c);
+    c
 }
 
 fn playlist_from(p: &MusicPlaylistItem) -> PlaylistCard {
@@ -2912,12 +3074,35 @@ pub fn user_agent() -> String {
 }
 
 fn format_for(quality: &str) -> &'static str {
-    // Always prefer m4a/AAC so the in-process decoder (symphonia) can handle it.
+    // Prefer m4a/AAC for the in-process decoder, but always fall through to
+    // `/best` so age-gated clients that only expose a thin format list do
+    // not die with "Requested format is not available".
     match quality {
-        "low" => "worstaudio[ext=m4a]/worstaudio[acodec=aac]/bestaudio[ext=m4a]/bestaudio",
-        "medium" => "bestaudio[abr<=140][ext=m4a]/bestaudio[ext=m4a]/bestaudio",
-        _ => "bestaudio[ext=m4a]/bestaudio[acodec=aac]/bestaudio",
+        "low" => "worstaudio[ext=m4a]/worstaudio[acodec*=mp4a]/worstaudio/bestaudio/best",
+        "medium" => "bestaudio[abr<=140][ext=m4a]/bestaudio[ext=m4a]/140/bestaudio/best",
+        _ => "bestaudio[ext=m4a]/bestaudio[acodec*=mp4a]/140/bestaudio/best",
     }
+}
+
+fn format_fallback(quality: &str) -> &'static str {
+    match quality {
+        "low" => "worstaudio/bestaudio/best",
+        _ => "140/bestaudio/best",
+    }
+}
+
+fn age_or_login_err(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("age-restrict")
+        || m.contains("confirm your age")
+        || m.contains("login_required")
+        || m.contains("sign in to confirm")
+        || m.contains("inappropriate for some users")
+}
+
+fn format_unavailable_err(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("requested format is not available") || m.contains("only images are available")
 }
 
 async fn ytdlp_stream(
@@ -2929,57 +3114,85 @@ async fn ytdlp_stream(
         .await
         .context("yt-dlp sidecar is not available")?;
     let url = format!("https://www.youtube.com/watch?v={id}");
-    // Try yt-dlp's own default first (it usually picks a working client).
-    // If that fails, walk a list of player_client sets - a stale default
-    // is a common reason songs intermittently won't play.
+    let js = crate::ytdlp::js_runtime_arg();
+    if let Some(ref rt) = js {
+        crate::diag::log(format!("yt-dlp: js runtime {rt}"));
+    } else {
+        crate::diag::log(
+            "yt-dlp: no JS runtime (deno/node/bun); age-restricted and ciphered formats will fail",
+        );
+    }
+    // Default first (with cookies yt-dlp picks age-capable clients). Then
+    // web / web_creator for age-verified accounts, then mobile. Skip the
+    // old tv_embedded bypass - YouTube removed it.
     let sets: &[&str] = &[
         "",
-        "ios",
-        "tv_embedded,tv",
-        "android",
-        "web_music",
+        "web",
         "web_creator",
         "mweb",
-        "ios,tv,android,web_music",
+        "ios",
+        "tv",
+        "android",
+        "web_music",
+        "ios,web,web_creator",
     ];
+    let formats = [format_for(quality), format_fallback(quality)];
     let mut last_err = None;
     let mut out = None;
-    for (i, set) in sets.iter().enumerate() {
-        let mut cmd = Command::new(&bin);
-        crate::ytdlp::silence_tokio(&mut cmd);
-        cmd.arg("--no-warnings")
-            .arg("--no-playlist")
-            .arg("-f")
-            .arg(format_for(quality));
-        if !set.is_empty() {
-            cmd.arg("--extractor-args")
-                .arg(format!("youtube:player_client={set}"));
+    let mut saw_age = false;
+    'clients: for (i, set) in sets.iter().enumerate() {
+        // After an age-gate hit, skip clients that never unlock it.
+        if saw_age && matches!(*set, "android" | "ios" | "web_music") {
+            continue;
         }
-        if let Some(p) = cookies {
-            cmd.arg("--cookies").arg(p);
-        }
-        cmd.arg("-j").arg("--").arg(&url);
-        let o = cmd
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .with_context(|| format!("run yt-dlp at {}", bin.display()))?;
-        if o.status.success() {
-            if !set.is_empty() {
-                eprintln!("yt-dlp: ok with player_client={set}");
+        for (fi, fmt) in formats.iter().enumerate() {
+            let mut cmd = Command::new(&bin);
+            crate::ytdlp::silence_tokio(&mut cmd);
+            cmd.arg("--no-warnings").arg("--no-playlist").arg("-f").arg(fmt);
+            if let Some(ref rt) = js {
+                cmd.arg("--js-runtimes").arg(rt);
             }
-            out = Some(o);
+            if !set.is_empty() {
+                cmd.arg("--extractor-args")
+                    .arg(format!("youtube:player_client={set}"));
+            }
+            if let Some(p) = cookies {
+                cmd.arg("--cookies").arg(p);
+            }
+            cmd.arg("-j").arg("--").arg(&url);
+            let o = cmd
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+                .with_context(|| format!("run yt-dlp at {}", bin.display()))?;
+            if o.status.success() {
+                if !set.is_empty() || fi > 0 {
+                    eprintln!(
+                        "yt-dlp: ok with player_client={} format_pass={fi}",
+                        if set.is_empty() { "(default)" } else { set }
+                    );
+                }
+                out = Some(o);
+                break 'clients;
+            }
+            let err = String::from_utf8_lossy(&o.stderr);
+            let line = err.lines().last().unwrap_or("failed").to_string();
+            eprintln!(
+                "yt-dlp: player_client={} format_pass={fi} failed (exit {:?}): {line}",
+                if set.is_empty() { "(default)" } else { set },
+                o.status.code()
+            );
+            if age_or_login_err(&line) {
+                saw_age = true;
+            }
+            last_err = Some(line.clone());
+            // Strict m4a filter empty → retry same client with looser -f.
+            if fi + 1 < formats.len() && format_unavailable_err(&line) {
+                continue;
+            }
             break;
         }
-        let err = String::from_utf8_lossy(&o.stderr);
-        let line = err.lines().last().unwrap_or("failed").to_string();
-        eprintln!(
-            "yt-dlp: player_client={} failed (exit {:?}): {line}",
-            if set.is_empty() { "(default)" } else { set },
-            o.status.code()
-        );
-        last_err = Some(line);
         if i + 1 < sets.len() {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
@@ -2987,10 +3200,13 @@ async fn ytdlp_stream(
     let out = match out {
         Some(o) => o,
         None => {
-            return Err(anyhow!(
-                "yt-dlp: {}",
-                last_err.unwrap_or_else(|| "failed".into())
-            ));
+            let mut msg = last_err.unwrap_or_else(|| "failed".into());
+            if js.is_none() && (age_or_login_err(&msg) || format_unavailable_err(&msg)) {
+                msg = format!(
+                    "{msg} (install deno or node and restart — yt-dlp needs a JS runtime for age-restricted / ciphered streams)"
+                );
+            }
+            return Err(anyhow!("yt-dlp: {msg}"));
         }
     };
     let v: Value = serde_json::from_slice(&out.stdout).context("yt-dlp json")?;

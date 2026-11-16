@@ -179,6 +179,86 @@ fn which(name: &str) -> Option<PathBuf> {
     None
 }
 
+fn is_exec(p: &Path) -> bool {
+    if !p.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        return p
+            .metadata()
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false);
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn which_exec(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let p = dir.join(name);
+        if is_exec(&p) {
+            return Some(p);
+        }
+        #[cfg(windows)]
+        {
+            let e = dir.join(format!("{name}.exe"));
+            if is_exec(&e) {
+                return Some(e);
+            }
+        }
+    }
+    None
+}
+
+/// yt-dlp 2025+ only enables deno by default. Node/bun need an explicit
+/// `--js-runtimes` flag, and GUI apps often lack nvm on PATH. Return
+/// `name:path` suitable for that flag (signature / n-challenge solving).
+pub fn js_runtime_arg() -> Option<String> {
+    // Prefer deno (yt-dlp default), then node, then bun.
+    for name in ["deno", "node", "bun"] {
+        if let Some(p) = which_exec(name) {
+            return Some(format!("{name}:{}", p.display()));
+        }
+    }
+    // Common install locations when PATH is stripped (desktop launchers).
+    if let Some(home) = dirs::home_dir() {
+        let mut candidates: Vec<( &str, PathBuf)> = vec![
+            ("deno", home.join(".deno/bin/deno")),
+            ("bun", home.join(".bun/bin/bun")),
+            ("node", home.join(".local/bin/node")),
+        ];
+        // Newest nvm node, if any.
+        let nvm = home.join(".nvm/versions/node");
+        if let Ok(rd) = std::fs::read_dir(&nvm) {
+            let mut vers: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+            vers.sort_by_key(|e| e.file_name());
+            if let Some(e) = vers.last() {
+                candidates.push(("node", e.path().join("bin/node")));
+            }
+        }
+        // fnm / volta
+        let fnm = home.join(".local/share/fnm/node-versions");
+        if let Ok(rd) = std::fs::read_dir(&fnm) {
+            let mut vers: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+            vers.sort_by_key(|e| e.file_name());
+            if let Some(e) = vers.last() {
+                candidates.push(("node", e.path().join("installation/bin/node")));
+            }
+        }
+        for (name, p) in candidates {
+            if is_exec(&p) {
+                return Some(format!("{name}:{}", p.display()));
+            }
+        }
+    }
+    None
+}
+
 /// Resolve a yt-dlp binary without downloading. `None` if nothing is available yet.
 pub fn resolve() -> Option<PathBuf> {
     let updated = data_bin_dir().join(binary_name());

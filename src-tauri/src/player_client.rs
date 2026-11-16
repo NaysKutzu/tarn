@@ -172,7 +172,17 @@ impl PlayerHub {
         let mut visitor = self.visitor_data().await?;
         match self.player_once(video_id, kind, &visitor).await {
             Err(e) if e.to_string().contains("LOGIN_REQUIRED") => {
-                // Visitor id went stale; fetch a fresh one and retry once.
+                let msg = e.to_string();
+                // Age-gate LOGIN_REQUIRED is not a stale visitor - refreshing
+                // the id just burns a round-trip. Signed-in cookies still
+                // cannot unlock age content on VISIONOS/ANDROID; yt-dlp with
+                // a JS runtime is the fallback.
+                let age = msg.to_ascii_lowercase().contains("age")
+                    || msg.to_ascii_lowercase().contains("inappropriate")
+                    || msg.to_ascii_lowercase().contains("confirm your age");
+                if age {
+                    return Err(e);
+                }
                 *self.visitor.lock().unwrap() = None;
                 visitor = self.visitor_data().await?;
                 self.player_once(video_id, kind, &visitor).await

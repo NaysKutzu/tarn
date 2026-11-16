@@ -2531,7 +2531,6 @@ html { color-scheme: dark; }
   pointer-events: none;
   transition: opacity 0.55s var(--ease);
 }
-.tb-fade .titlebar,
 .tb-fade .tb-nav,
 .tb-fade .tb-btns,
 .tb-fade .tb-nav-btn,
@@ -2539,6 +2538,9 @@ html { color-scheme: dark; }
   pointer-events: auto;
 }
 .tb-wrap .titlebar {
+  /* Transparent to the pointer so the sibling drag strip gets the drag;
+     only the nav / window buttons opt back in above. */
+  pointer-events: none;
   grid-area: auto;
   flex: 1;
   width: 100%;
