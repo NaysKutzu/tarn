@@ -48,6 +48,8 @@ export const api = {
     invoke<void>('playlist_rename', { playlistId, title }),
   librarySave: (id: string, save: boolean) => invoke<void>('library_save', { id, save }),
   library: () => invoke<Library>('get_library'),
+  libraryLite: () => invoke<Library>('get_library_lite'),
+  libraryCached: () => invoke<Library | null>('get_library_cached'),
   history: () => invoke<Track[]>('get_history'),
   auth: () => invoke<AuthStatus>('auth_status'),
   openLogin: () => invoke<void>('open_login'),

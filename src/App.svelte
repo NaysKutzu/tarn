@@ -112,6 +112,8 @@
   });
   let loading = $state(false);
   let libLoading = $state(false);
+  // True while `library` holds only the cached / sidebar-fast subset.
+  let libPartial = $state(false);
   let chip = $state<string | null>(null);
   let mainEl: HTMLElement | undefined = $state();
   let likes = $state<Track[]>(localLikes());
@@ -526,7 +528,24 @@
       libLoading = false;
       return;
     }
-    if (!library) libLoading = true;
+    if (!library) {
+      libLoading = true;
+      // Paint something immediately: last session's library from disk, else
+      // the sidebar-fast subset, while the full (1500+ tracks) load runs.
+      try {
+        const cached = await api.libraryCached();
+        if (cached && !library) { library = cached; libPartial = true; }
+      } catch {}
+      if (!library) {
+        try {
+          const lite = await api.libraryLite();
+          if (!library && lite.signed_in && (lite.playlists?.length || lite.artists?.length || lite.albums?.length)) {
+            library = lite;
+            libPartial = true;
+          }
+        } catch {}
+      }
+    }
     const retries = opts?.retries ?? 3;
     try {
       let last = await api.library();
@@ -551,6 +570,7 @@
       }
     } finally {
       libLoading = false;
+      libPartial = false;
     }
   }
   async function loadHistory() {
@@ -725,6 +745,21 @@
     }
   }
 
+  // Reflect a like/unlike in the lists on screen right away (Library > Liked
+  // and the Liked Music playlist page) instead of waiting for a reload.
+  function syncLikedViews(track: Track, liked: boolean) {
+    if (library) {
+      const rest = (library.liked ?? []).filter((t) => t.id !== track.id);
+      library = { ...library, liked: liked ? [track, ...rest] : rest };
+    }
+    const c = collection;
+    if (c && (c.id === 'LM' || c.playlist_id === 'LM' || c.id === 'VLLM')) {
+      const rest = c.tracks.filter((t) => t.id !== track.id);
+      const tracks = liked ? [track, ...rest] : rest;
+      collection = { ...c, tracks, track_count: tracks.length };
+    }
+  }
+
   async function likeTrack(track: Track | undefined, action: string) {
     if (!track?.id) return;
     if (!auth.signed_in) {
@@ -743,6 +778,7 @@
       }
       if (st.liked) likes = setLocalLiked(track, true);
       else if (action !== 'dislike') likes = setLocalLiked(track, false);
+      syncLikedViews(track, st.liked);
     } catch (e) {
       fail(e, "Couldn't update this", action === 'dislike' ? 'dislike' : 'like');
     }
@@ -1194,10 +1230,18 @@
       </button>
     </nav>
     <div class="side-scroll">
-      {#if auth.signed_in && library?.playlists?.length}
+      {#if auth.signed_in && !library?.playlists?.length && (libLoading || libPartial || !library)}
         <div class="side-label">Playlists</div>
-        {#each library.playlists as p}
-          <button class="side-pl" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
+        {#each { length: 7 } as _, i (i)}
+          <div class="side-pl-sk" aria-hidden="true">
+            <div class="shimmer sk-sq"></div>
+            <div class="shimmer sk-ln" style="width:{[70, 55, 80, 62, 48, 74, 58][i]}%"></div>
+          </div>
+        {/each}
+      {:else if auth.signed_in && library?.playlists?.length}
+        <div class="side-label">Playlists</div>
+        {#each library.playlists as p, i (p.id)}
+          <button class="side-pl pl-in" style="--i:{Math.min(i, 12)}" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
             <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={36} alt="" />
             <span class="clamp one">{p.name}</span>
           </button>
@@ -1472,7 +1516,7 @@
             />
           {/if}
         {:else}
-          {#if libLoading && !library}
+          {#if (libLoading && !library) || (libPartial && !library?.liked?.length)}
             <Skeleton kind="page" />
           {/if}
           <div class="tabs" style="padding-top:0">
@@ -2050,7 +2094,7 @@
                   class="ly {i === activeLyric ? 'on' : ''}"
                   class:static={!lyrics.synced || ln.start_ms == null}
                   data-i={i}
-                  onclick={() => lyrics.synced && ln.start_ms != null && api.seek(ln.start_ms / 1000)}
+                  onclick={() => lyrics?.synced && ln.start_ms != null && api.seek(ln.start_ms / 1000)}
                 >{ln.text}</button>
               {/each}
               {#if lyrics.source}<div class="ly-src">{lyrics.source}</div>{/if}

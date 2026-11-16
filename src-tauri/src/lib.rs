@@ -1003,6 +1003,46 @@ async fn library_save(
     app.ytm.library_save(&id, save).await.map_err(|e| e.to_string())
 }
 
+fn library_cache_path(app: &App) -> std::path::PathBuf {
+    app.store.data_dir().join("library-cache.json")
+}
+
+fn save_library_cache(app: &App, lib: &Library) {
+    if !lib.signed_in || (lib.liked.is_empty() && lib.playlists.is_empty()) {
+        return;
+    }
+    let path = library_cache_path(app);
+    if let Ok(json) = serde_json::to_vec(lib) {
+        std::thread::spawn(move || {
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        });
+    }
+}
+
+/// Last full library from disk, for an instant sidebar / Liked list while
+/// the fresh one loads. Only returned for the account that saved it.
+#[tauri::command]
+fn get_library_cached(app: State<'_, Arc<App>>) -> Option<Library> {
+    let name = app.auth.lock().account.as_ref().map(|a| a.name.clone())?;
+    let bytes = std::fs::read(library_cache_path(&app)).ok()?;
+    let lib: Library = serde_json::from_slice(&bytes).ok()?;
+    if lib.account.as_ref().map(|a| a.name.as_str()) != Some(name.as_str()) {
+        return None;
+    }
+    Some(lib)
+}
+
+#[tauri::command]
+async fn get_library_lite(app: State<'_, Arc<App>>) -> Result<Library, String> {
+    if is_mock() {
+        return Ok(mock_library());
+    }
+    app.ytm.library_lite().await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn get_library(app: State<'_, Arc<App>>) -> Result<Library, String> {
     if is_mock() {
@@ -1036,6 +1076,7 @@ async fn get_library(app: State<'_, Arc<App>>) -> Result<Library, String> {
         }
     };
     drop(slot);
+    save_library_cache(&app, &lib);
     app.remember_liked_tracks(lib.liked.clone());
     if let Some(id) = app.player.snapshot().track.as_ref().map(|t| t.id.clone()) {
         app.apply_known_rating(&id);
@@ -1504,6 +1545,8 @@ pub fn run() {
             playlist_rename,
             library_save,
             get_library,
+            get_library_lite,
+            get_library_cached,
             get_history,
             auth_status,
             open_login,

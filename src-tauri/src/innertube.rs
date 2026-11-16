@@ -255,8 +255,25 @@ impl InnerTube {
             }
         }
         // Per-shelf "show more" tokens - fill Listen again / Quick picks / etc.
-        for s in &mut home.shelves {
-            self.expand_shelf(s).await;
+        // Run them in parallel - sequentially this was one round-trip per shelf.
+        let mut set = tokio::task::JoinSet::new();
+        for (i, s) in home.shelves.iter().enumerate() {
+            if s.continuation.is_none() {
+                continue;
+            }
+            let it = self.clone();
+            let mut shelf = s.clone();
+            set.spawn(async move {
+                it.expand_shelf(&mut shelf).await;
+                (i, shelf)
+            });
+        }
+        while let Some(done) = set.join_next().await {
+            if let Ok((i, shelf)) = done {
+                if let Some(slot) = home.shelves.get_mut(i) {
+                    *slot = shelf;
+                }
+            }
         }
         home.signed_in = self.cookie.is_some();
         crate::diag::log(format!(

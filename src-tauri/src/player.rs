@@ -74,6 +74,8 @@ pub struct Player {
     recovering: Arc<AtomicBool>,
     last_ended: Arc<Mutex<Option<String>>>,
     last_recover: Arc<Mutex<Option<Instant>>>,
+    /// (track id, count) of premature track-ends turned into re-resolves.
+    early_ends: Arc<Mutex<(String, u32)>>,
     /// Set by adopt_track after a successful blend; take_ended must not
     /// also advance (that restarted the same song or skipped ahead).
     blend_adopted: Arc<AtomicBool>,
@@ -111,6 +113,7 @@ impl Player {
         let recovering = Arc::new(AtomicBool::new(false));
         let last_ended = Arc::new(Mutex::new(None));
         let last_recover = Arc::new(Mutex::new(None));
+        let early_ends = Arc::new(Mutex::new((String::new(), 0u32)));
         let blend_adopted = Arc::new(AtomicBool::new(false));
         let play_gen = Arc::new(AtomicU64::new(0));
         let pending_adopt = Arc::new(Mutex::new(None));
@@ -189,6 +192,7 @@ impl Player {
             recovering,
             last_ended,
             last_recover,
+            early_ends,
             blend_adopted,
             play_gen,
             pending_adopt,
@@ -716,6 +720,33 @@ impl Player {
         }
         if !self.ended.swap(false, Ordering::Relaxed) {
             return false;
+        }
+        // The decoder said "finished" far from the real end: a truncated
+        // download or a dropped connection, not a finished song. Advancing
+        // here is what made songs change by themselves mid-listen. Re-resolve
+        // the same track instead (twice at most, then give up and advance).
+        {
+            let s = self.snapshot();
+            if s.duration > 30.0 && s.position < s.duration - 8.0 {
+                if let Some(t) = s.track.as_ref() {
+                    let mut e = self.early_ends.lock();
+                    if e.0 != t.id {
+                        *e = (t.id.clone(), 0);
+                    }
+                    if e.1 < 2 {
+                        e.1 += 1;
+                        eprintln!(
+                            "track-end at {:.1}/{:.1}s is premature ({}); re-resolving instead of advancing",
+                            s.position, s.duration, t.id
+                        );
+                        drop(e);
+                        // Keep playing after the re-resolve (phase is 0 now).
+                        self.want_play.store(true, Ordering::Relaxed);
+                        self.recover.store(true, Ordering::SeqCst);
+                        return false;
+                    }
+                }
+            }
         }
         // A new track is still resolving (UI already shows it). The old
         // decoder ending now is stale: advancing would skip the track the

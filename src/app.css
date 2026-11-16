@@ -330,6 +330,27 @@ html { color-scheme: dark; }
   line-height: 18px;
   font-weight: 500;
 }
+.side-pl-sk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  min-height: 44px;
+}
+.side-pl-sk .sk-ln { flex: 0 1 auto; }
+.side-pl-sk .sk-sq { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 6px; }
+.side-pl-sk .sk-ln { height: 12px; border-radius: 6px; }
+@keyframes pl-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.side-pl.pl-in {
+  animation: pl-in 0.32s var(--ease, ease) both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  .side-pl.pl-in { animation: none; }
+}
 .side-pl:hover { background: var(--bg-hover); color: var(--text); }
 /* Size only the cover root - not mosaic child imgs (those fill 1/4 of the grid). */
 .side-pl > :is(img, .ph, .mosaic, .special) {

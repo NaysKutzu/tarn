@@ -44,6 +44,8 @@ pub struct Ytm {
     radio: Mutex<Option<rustypipe::model::paginator::Paginator<TrackItem>>>,
     players: std::sync::Arc<PlayerHub>,
     resolve_disk: ResolveCache,
+    /// Titles of auto mixes seen on Home, so opening one keeps its name.
+    mix_titles: Mutex<std::collections::HashMap<String, String>>,
 }
 
 impl Ytm {
@@ -79,6 +81,7 @@ impl Ytm {
             radio: Mutex::new(None),
             players: std::sync::Arc::new(PlayerHub::new()?),
             resolve_disk: ResolveCache::open(),
+            mix_titles: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -327,6 +330,16 @@ impl Ytm {
     /// Auto mixes ship a `/mixart` cover the webview can't load (needs
     /// session cookies), so they render as "?". Use the first track's art.
     async fn fill_mix_covers(&self, home: &mut Home) {
+        {
+            let mut g = self.mix_titles.lock().unwrap();
+            for sh in &home.shelves {
+                for it in &sh.items {
+                    if it.kind == "playlist" && it.id.starts_with("RD") && !it.title.is_empty() {
+                        g.insert(it.id.clone(), it.title.clone());
+                    }
+                }
+            }
+        }
         let mut ids: Vec<String> = Vec::new();
         for sh in &home.shelves {
             for it in &sh.items {
@@ -340,26 +353,19 @@ impl Ytm {
         if ids.is_empty() {
             return;
         }
+        let mut set = tokio::task::JoinSet::new();
+        for id in ids {
+            let it = self.it();
+            set.spawn(async move {
+                let t = it.mix_tracks(&id).await.ok()?;
+                let c = t.into_iter().find_map(|t| t.cover.filter(|u| usable_cover(u)))?;
+                Some((id, c))
+            });
+        }
         let mut found: std::collections::HashMap<String, String> = Default::default();
-        for chunk in ids.chunks(4) {
-            let mut res = Vec::new();
-            for id in chunk {
-                res.push(async move {
-                    let t = self.it().mix_tracks(id).await.ok()?;
-                    let c = t.into_iter().find_map(|t| t.cover.filter(|u| usable_cover(u)))?;
-                    Some((id.clone(), c))
-                });
-            }
-            let mut it = res.into_iter();
-            let (a, b, c, d) = (it.next(), it.next(), it.next(), it.next());
-            let (ra, rb, rc, rd) = tokio::join!(
-                async { match a { Some(f) => f.await, None => None } },
-                async { match b { Some(f) => f.await, None => None } },
-                async { match c { Some(f) => f.await, None => None } },
-                async { match d { Some(f) => f.await, None => None } },
-            );
-            for (k, v) in [ra, rb, rc, rd].into_iter().flatten() {
-                found.insert(k, v);
+        while let Some(done) = set.join_next().await {
+            if let Ok(Some((id, c))) = done {
+                found.insert(id, c);
             }
         }
         for sh in &mut home.shelves {
@@ -850,6 +856,10 @@ impl Ytm {
         Ok(c)
     }
 
+    fn mix_title(&self, id: &str) -> Option<String> {
+        self.mix_titles.lock().unwrap().get(id).cloned()
+    }
+
     pub async fn playlist(&self, id: &str) -> Result<Collection> {
         let bare = id.strip_prefix("VL").unwrap_or(id);
         // Liked Music / Episodes: rustypipe's music_playlist("LM") can panic
@@ -865,7 +875,7 @@ impl Ytm {
         if bare.starts_with("RD") {
             if let Ok(t) = self.it().mix_tracks(bare).await {
                 if !t.is_empty() {
-                    return Ok(mix_collection(bare, t));
+                    return Ok(mix_collection(bare, self.mix_title(bare), t));
                 }
             }
         }
@@ -881,7 +891,7 @@ impl Ytm {
                     };
                     if let Ok(tracks) = tracks {
                         if !tracks.is_empty() {
-                            return Ok(mix_collection(bare, tracks));
+                            return Ok(mix_collection(bare, self.mix_title(bare), tracks));
                         }
                     }
                 }
@@ -1209,6 +1219,46 @@ impl Ytm {
         }
         crate::diag::log(format!("liked: {} tracks (+{extra} only in liked_videos)", out.len()));
         Ok(out)
+    }
+
+    /// Sidebar-fast subset of the library: playlists / albums / artists only.
+    /// The full load (1500+ liked tracks, history) follows in the background.
+    pub async fn library_lite(&self) -> Result<Library> {
+        if self.cookie_header().is_none() {
+            return Ok(Library {
+                signed_in: false,
+                ..Default::default()
+            });
+        }
+        let account = self.account().await.ok().flatten();
+        let mut lib = Library {
+            signed_in: true,
+            mock: false,
+            account,
+            ..Default::default()
+        };
+        let q = self.rp.query();
+        let (pl, al, ar) = tokio::join!(
+            q.music_saved_playlists(),
+            q.music_saved_albums(),
+            q.music_saved_artists()
+        );
+        if let Ok(p) = pl {
+            lib.playlists = p.items.iter().map(playlist_from).collect();
+        }
+        if let Ok(a) = al {
+            lib.albums = a.items.iter().map(album_from).collect();
+        }
+        if let Ok(a) = ar {
+            lib.artists = a.items.iter().map(artist_from).collect();
+        }
+        if lib.playlists.is_empty() {
+            if let Ok((_, pls, _)) = self.it().library_browse("FEmusic_liked_playlists").await {
+                lib.playlists = pls;
+            }
+        }
+        self.enrich_playlist_covers(&mut lib.playlists, 10).await;
+        Ok(lib)
     }
 
     pub async fn library(&self) -> Result<Library> {
@@ -2061,13 +2111,13 @@ fn artist_from(a: &ArtistItem) -> ArtistCard {
     }
 }
 
-fn mix_collection(id: &str, tracks: Vec<Track>) -> Collection {
+fn mix_collection(id: &str, name: Option<String>, tracks: Vec<Track>) -> Collection {
     let n = tracks.len() as u64;
     let mut c = Collection {
         kind: "playlist".into(),
         id: id.to_string(),
         playlist_id: Some(id.to_string()),
-        name: "Mix".into(),
+        name: name.unwrap_or_else(|| "Mix".into()),
         cover: tracks.first().and_then(|t| t.cover.clone()),
         artists: Vec::new(),
         artist_ids: Vec::new(),
