@@ -37,7 +37,9 @@ jobs:
 
       - name: Reinstall platform-native bindings
         run: |
-          npm install --no-save --force rollup esbuild
+          R=$(node -p "require('./node_modules/rollup/package.json').version")
+          E=$(node -p "require('./node_modules/esbuild/package.json').version")
+          npm install --no-save --force "rollup@$R" "esbuild@$E"
           node -e "require('rollup'); console.log('native bindings ok')"
 
       - name: Build frontend
