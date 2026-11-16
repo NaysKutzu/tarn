@@ -2784,7 +2784,8 @@ img, svg { -webkit-user-drag: none; }
     flex-direction: row;
     border-right: 0;
     border-top: 1px solid var(--line);
-    padding-bottom: var(--sab);
+    /* The home indicator only needs ~14px; the full inset made a big gap. */
+    padding-bottom: calc(var(--sab) * 0.45);
     background: var(--bg-side);
   }
   .sidebar.is-hidden { display: none; }
@@ -2903,7 +2904,8 @@ img, svg { -webkit-user-drag: none; }
   .np-meta h1 { font-size: 22px; }
   .np-close { top: calc(var(--sat) + 8px); right: 12px; }
   .np.has-queue .np-close { right: 12px; top: calc(var(--sat) + 8px); }
-  .np-queue { bottom: calc(var(--sab) + 240px); max-height: 32vh; }
+  /* The desktop glass card is cramped here; the Queue button opens a full sheet. */
+  .np-queue { display: none !important; }
   .np.has-queue .np-in, .app.np-idle .np.has-queue .np-in {
     padding: calc(var(--sat) + 64px) 20px calc(var(--sab) + 230px);
   }
