@@ -1365,6 +1365,13 @@ html { color-scheme: dark; }
   border-radius: inherit;
   object-fit: cover;
 }
+.np-art img { position: relative; }
+.np-art img.np-art-lo {
+  position: absolute;
+  inset: 0;
+  filter: blur(3px);
+  transform: scale(1.04);
+}
 .np-meta {
   max-width: min(480px, 42vw);
   min-width: 0;

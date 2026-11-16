@@ -2712,11 +2712,13 @@
             class:slide-next={npSlide === 'next'}
             class:slide-prev={npSlide === 'prev'}
           >
-            <Cover src={nowCover} videoId={player.track?.id} width={1400} height={900} class="np-bg" alt="" />
+            <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" alt="" />
             <div class="np-shade"></div>
             <div class="np-in">
               <div class="np-main">
                 <div class="np-art">
+                  <!-- Same size the player bar already loaded: shows instantly while the big art streams in. -->
+                  <Cover src={nowCover} videoId={player.track?.id} size={64} class="np-art-lo" alt="" />
                   <Cover src={nowCover} videoId={player.track?.id} size={560} alt="" />
                   {#if volHud != null}
                     <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
