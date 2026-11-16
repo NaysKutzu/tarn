@@ -10,6 +10,7 @@ mod player_client;
 mod login;
 mod mix;
 mod transition;
+mod analysis;
 #[cfg(desktop)]
 mod mpris;
 #[cfg(desktop)]
@@ -98,6 +99,8 @@ pub struct App {
     net_down: std::sync::atomic::AtomicBool,
     /// Earliest time a failed blend may be retried while offline.
     blend_retry: Mutex<Option<std::time::Instant>>,
+    /// Per-track loudness / beat-grid cache.
+    pub analysis: std::sync::Arc<analysis::Analyzer>,
 }
 
 impl App {
@@ -134,6 +137,13 @@ impl App {
         );
         player.set_eq(settings.eq_bands, settings.eq_enabled);
         player.set_transition(settings.transition());
+        let analysis = analysis::Analyzer::open(store.data_dir());
+        player.set_analyzer(analysis.clone());
+        {
+            let p = player.clone();
+            analysis.on_done(Box::new(move |id, _| p.analysis_ready(id)));
+        }
+        player.set_normalize(settings.normalize, settings.normalize_target);
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata - audio is armed later.
             player.set_volume(sess.volume);
@@ -162,6 +172,7 @@ impl App {
             offline,
             net_down: std::sync::atomic::AtomicBool::new(false),
             blend_retry: Mutex::new(None),
+            analysis,
         })
     }
 
@@ -799,6 +810,7 @@ fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
                 break;
             }
             ytm.prefetch(id).await;
+            analyze_prefetched(&ytm, &player, id);
         }
         // Grow the queue before the last song ends so Up next / blend see it.
         if remaining < 3 && player.snapshot().autoplay {
@@ -811,6 +823,30 @@ fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
             }
         }
     });
+}
+
+/// Measure a fully cached track in the background (loudness / beat grid)
+/// so it is ready before it plays. No-op unless a feature needs it.
+fn analyze_prefetched(ytm: &std::sync::Arc<Ytm>, player: &Player, id: &str) {
+    if !player.wants_analysis() || !ytm.cache.has_complete(id) {
+        return;
+    }
+    let (ytm, player, id) = (ytm.clone(), player.clone(), id.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(bytes) = ytm.cache.read_complete(&id) {
+            player.analyze(&id, crate::decode::GrowingBody::from_complete(bytes));
+        }
+    });
+}
+
+#[tauri::command]
+fn analysis_count(app: State<Arc<App>>) -> usize {
+    app.analysis.len()
+}
+
+#[tauri::command]
+fn clear_analysis(app: State<Arc<App>>) {
+    app.analysis.clear();
 }
 
 #[tauri::command]
@@ -1335,6 +1371,8 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     settings.eq_bands = bands;
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
     app.player.set_transition(settings.transition());
+    app.player
+        .set_normalize(settings.normalize, settings.normalize_target);
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
     if app.refresh_offline() {
@@ -1942,6 +1980,8 @@ pub fn run() {
             set_settings,
             extract_cookie_names,
             prefetch,
+            analysis_count,
+            clear_analysis,
             cache_stats,
             remember_ui,
             saved_session,
