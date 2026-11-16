@@ -26,15 +26,37 @@
     onHover?: (t: Track) => void;
   } = $props();
 
-  // The fullscreen rail only shows what is left; the side panel shows all.
-  let first = $derived(variant === 'np' ? Math.max(0, index) : 0);
+  // Only a window of the queue is in the DOM: a few hundred rows (each with a
+  // cover) froze the panel. More rows are added as the list is scrolled.
+  const PAGE = 40;
+  let limit = $state(PAGE);
+  let back = $state(0); // extra already-played rows revealed above the current one
+
+  // The fullscreen rail only shows what is left; the side panel starts just
+  // above the current track and can reveal earlier ones.
+  let first = $derived(
+    variant === 'np' ? Math.max(0, index) : Math.max(0, index - 3 - back),
+  );
 
   // Optimistic order while a drop is in flight, so rows don't snap back.
   let local = $state<Track[] | null>(null);
   let shown = $derived(local ?? tracks);
-  let rows = $derived(
-    shown.map((t, i) => ({ t, i })).filter(({ i }) => i >= first),
-  );
+  let end = $derived(Math.min(shown.length, first + limit));
+  let rows = $derived(shown.slice(first, end).map((t, k) => ({ t, i: first + k })));
+
+  let sentinel = $state<HTMLDivElement | undefined>();
+  $effect(() => {
+    if (!sentinel || typeof IntersectionObserver === 'undefined') return;
+    const root = sentinel.closest<HTMLElement>('.panel-b, .np-queue-list');
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) limit += PAGE;
+      },
+      { root, rootMargin: '400px 0px' },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  });
 
   let listEl = $state<HTMLDivElement | undefined>();
   let drag = $state<{ from: number; over: number } | null>(null);
@@ -49,7 +71,7 @@
       const r = el.getBoundingClientRect();
       if (y < r.top + r.height / 2) return Number(el.dataset.qi);
     }
-    return shown.length;
+    return end;
   }
 
   function startDrag(e: PointerEvent, i: number) {
@@ -134,6 +156,11 @@
 <svelte:window onblur={cancelDrag} />
 
 <div class="ql" class:np={variant === 'np'} class:dragging={!!drag} bind:this={listEl}>
+  {#if first > 0 && variant === 'panel'}
+    <button class="more" type="button" onclick={() => (back += PAGE)}>
+      Show earlier ({first})
+    </button>
+  {/if}
   {#each rows as { t, i } (`${i}:${t.id}`)}
     {@const gone = off.offline && !off.playable.has(t.id)}
     <div
@@ -182,13 +209,27 @@
       {/if}
     </div>
   {/each}
-  {#if drag && drag.over >= shown.length && drag.from !== shown.length - 1}
+  {#if end < shown.length}
+    <div class="more-sentinel" bind:this={sentinel}></div>
+  {/if}
+  {#if drag && end === shown.length && drag.over >= shown.length && drag.from !== shown.length - 1}
     <div class="drop-end"></div>
   {/if}
 </div>
 
 <style>
   .ql { position: relative; }
+  .more {
+    display: block;
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: var(--text-2);
+    border-radius: 8px;
+  }
+  .more:hover { background: var(--bg-hover); color: var(--text); }
+  .more-sentinel { height: 1px; }
   .ql.dragging { user-select: none; cursor: grabbing; }
   .qr {
     position: relative;
