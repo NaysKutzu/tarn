@@ -1686,18 +1686,83 @@ html { color-scheme: dark; }
 
 /* ---------- settings ---------- */
 .set {
-  max-width: 880px;
+  max-width: 820px;
   width: 100%;
+  padding-bottom: 48px;
 }
-@media (min-width: 1280px) {
-  .set {
-    max-width: none;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px 48px;
-    align-items: start;
-  }
+.set-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 14px;
+  margin-bottom: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  color: var(--text-3);
 }
+.set-search:focus-within { border-color: var(--accent); color: var(--text-2); }
+.set-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font-size: 15px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.set-search input::-webkit-search-cancel-button { display: none; }
+.set-clear { font-size: 20px; line-height: 1; color: var(--text-3); padding: 0 4px; }
+.set-clear:hover { color: var(--text); }
+.set-none { padding: 24px 4px; color: var(--text-3); font-size: 14px; }
+.set-nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 8px;
+  margin: 0 0 20px;
+  padding: 10px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: linear-gradient(var(--bg) 78%, transparent);
+}
+.set-nav::-webkit-scrollbar { display: none; }
+.set-chip {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  color: var(--text-2);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  transition: background 0.2s var(--ease), color 0.2s var(--ease);
+}
+.set-chip:hover { background: var(--bg-active); color: var(--text); }
+.set-sec { scroll-margin-top: 64px; margin-bottom: 28px; }
+.set-h { padding: 0 4px 10px; }
+.set-h h2 {
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.set-h p { font-size: 13px; line-height: 18px; color: var(--text-3); margin-top: 2px; }
+.set-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 0 18px;
+}
+.set-card > .set-row:last-child { border-bottom: 0; }
 .set-row {
   display: flex;
   align-items: center;
@@ -1780,9 +1845,6 @@ html { color-scheme: dark; }
   align-items: stretch;
   gap: 14px;
   padding: 14px 0 18px;
-}
-@media (min-width: 1280px) {
-  .set-eq { grid-column: 1 / -1; }
 }
 .set-eq-head {
   display: flex;

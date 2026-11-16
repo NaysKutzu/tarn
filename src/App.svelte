@@ -604,6 +604,37 @@
 
   // iOS webviews often refuse clipboard writes; then show the text so it can be selected by hand.
   let diagText = $state<string | null>(null);
+
+  let setQuery = $state('');
+  let setEl = $state<HTMLElement | null>(null);
+  let setEmpty = $state(false);
+  function applySetFilter() {
+    if (!setEl) return;
+    const q = setQuery.trim().toLowerCase();
+    let any = false;
+    setEl.querySelectorAll<HTMLElement>('.set-sec').forEach((sec) => {
+      const titleHit = !!q && (sec.querySelector('.set-h')?.textContent ?? '').toLowerCase().includes(q);
+      let shown = 0;
+      sec.querySelectorAll<HTMLElement>('.set-card > *').forEach((row) => {
+        const hit = !q || titleHit || (row.textContent ?? '').toLowerCase().includes(q);
+        row.style.display = hit ? '' : 'none';
+        if (hit) shown++;
+      });
+      sec.style.display = shown ? '' : 'none';
+      if (shown) any = true;
+    });
+    const nav = setEl.querySelector<HTMLElement>('.set-nav');
+    if (nav) nav.style.display = q ? 'none' : '';
+    setEmpty = !!q && !any;
+  }
+  $effect(() => {
+    void setQuery;
+    if (!setEl) return;
+    applySetFilter();
+    const mo = new MutationObserver(() => applySetFilter());
+    mo.observe(setEl, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  });
   async function copyDiagnostics() {
     let text = '';
     try {
@@ -2428,15 +2459,25 @@
 
       {:else if view.id === 'settings'}
         <h1 class="page-title">Settings</h1>
-        <div class="set">
-          <div class="set-row">
-            <span class="lb"><Hi icon={MusicNote01Icon} size={20} /> Audio quality</span>
-            <Dropdown bind:value={settings.quality} options={[
-              { value: 'high', label: 'High' },
-              { value: 'medium', label: 'Medium' },
-              { value: 'low', label: 'Low' },
-            ]} onchange={() => api.setSettings(settings)} />
+        <div class="set" bind:this={setEl}>
+          <div class="set-search">
+            <Hi icon={Search01Icon} size={18} />
+            <input type="search" placeholder="Search settings" aria-label="Search settings" bind:value={setQuery} />
+            {#if setQuery}
+              <button type="button" class="set-clear" aria-label="Clear search" onclick={() => (setQuery = '')}>×</button>
+            {/if}
           </div>
+          {#if setEmpty}
+            <p class="set-none">No settings match “{setQuery}”.</p>
+          {/if}
+          <nav class="set-nav" aria-label="Settings sections">
+            {#each [['general','General'],['playback','Playback'],['transitions','Transitions'],['sound','Sound'],['storage','Storage'],['connect','Connections'],['system','System'],['about','About']] as [sid, sl]}
+              <button type="button" class="set-chip" onclick={() => document.getElementById('set-' + sid)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>{sl}</button>
+            {/each}
+          </nav>
+          <section class="set-sec" id="set-general">
+            <div class="set-h"><h2>General</h2><p>Language, region and sound quality</p></div>
+            <div class="set-card">
           <div class="set-row">
             <span class="lb"><Hi icon={LanguageCircleIcon} size={20} /> Language</span>
             <Dropdown bind:value={settings.language} options={[
@@ -2457,45 +2498,22 @@
             <Dropdown bind:value={settings.region} options={['US','RO','GB','DE','FR','ES','IT','CA','AU','BR','JP','KR','IN','MX','NL','SE','PL'].map((r) => ({ value: r, label: r }))} onchange={() => { api.setSettings(settings); home = null; if (view.id === 'home') loadHome(); }} />
           </div>
           <div class="set-row">
+            <span class="lb"><Hi icon={MusicNote01Icon} size={20} /> Audio quality</span>
+            <Dropdown bind:value={settings.quality} options={[
+              { value: 'high', label: 'High' },
+              { value: 'medium', label: 'Medium' },
+              { value: 'low', label: 'Low' },
+            ]} onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
             <span class="lb"><Hi icon={Notification01Icon} size={20} /> Notifications</span>
             <Toggle bind:checked={settings.notifications} label="Notifications" onchange={() => api.setSettings(settings)} />
           </div>
-          <div class="set-row">
-            <span class="lb"><Hi icon={DiscordIcon} size={20} /> Discord presence
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Show the track and cover on your Discord profile</span>
-            </span>
-            <Toggle bind:checked={settings.discord_presence} label="Discord presence" onchange={() => api.setSettings(settings)} />
-          </div>
-          {#if !isPhone}
-            <div class="set-row">
-              <span class="lb">Tray icon
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Play/pause, next, previous and like from the {isMac ? 'menu bar' : 'system tray'}</span>
-              </span>
-              <Toggle bind:checked={settings.tray_icon} label="Tray icon" onchange={() => { if (!settings.tray_icon) settings.close_to_tray = false; api.setSettings(settings); }} />
             </div>
-            {#if settings.tray_icon}
-              <div class="set-row">
-                <span class="lb">Close to tray
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Closing the window keeps the music playing; quit from the tray menu</span>
-                </span>
-                <Toggle bind:checked={settings.close_to_tray} label="Close to tray" onchange={() => api.setSettings(settings)} />
-              </div>
-            {/if}
-          {/if}
-          <Scrobbling onChange={() => scrobbler.reload()} />
-          <Shortcuts
-            shortcuts={settings.shortcuts}
-            globalHotkeys={settings.global_hotkeys}
-            desktop={!/Android|iPhone|iPad/i.test(navigator.userAgent)}
-            mac={isMac}
-            onChange={(sc, gh) => { void saveShortcuts(sc, gh); }}
-          />
-          <div class="set-row">
-            <span class="lb">Listening stats
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Keep a private history on this device for the Stats page</span>
-            </span>
-            <Toggle bind:checked={settings.listening_stats} label="Listening stats" onchange={() => api.setSettings(settings)} />
-          </div>
+          </section>
+          <section class="set-sec" id="set-playback">
+            <div class="set-h"><h2>Playback</h2><p>What happens when songs start and end</p></div>
+            <div class="set-card">
           <div class="set-row">
             <span class="lb"><Hi icon={Radio02Icon} size={20} /> Autoplay
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Continue with similar music when the queue ends</span>
@@ -2503,28 +2521,16 @@
             <Toggle bind:checked={settings.autoplay} label="Autoplay" onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
-            <span class="lb"><Hi icon={WifiOff01Icon} size={20} /> Offline mode
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Play only downloaded songs and never touch the network{off.netDown && !off.mode ? ' (no connection detected right now)' : ''}</span>
-            </span>
-            <Toggle checked={off.mode} label="Offline mode" onchange={(v) => api.setOfflineMode(v)} />
-          </div>
-          <div class="set-row">
-            <span class="lb"><Hi icon={Download04Icon} size={20} /> Downloads
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{off.status?.sources.length ?? 0} collections · {fmtBytes(off.status?.bytes ?? 0)} on this device</span>
-            </span>
-            <span style="display:flex;gap:8px">
-              <button class="btn ghost sm" type="button" onclick={() => go({ id: 'downloads' })}>Manage</button>
-              {#if off.status?.sources.length}
-                <button class="btn ghost sm" type="button" class:on={confirmRm === 'all'} onclick={() => { if (confirmRm === 'all') { api.offlineRemoveAll(); confirmRm = null; } else { confirmRm = 'all'; setTimeout(() => { if (confirmRm === 'all') confirmRm = null; }, 3000); } }}>{confirmRm === 'all' ? 'Really remove all?' : 'Remove all'}</button>
-              {/if}
-            </span>
-          </div>
-          <div class="set-row">
             <span class="lb"><Hi icon={PlayIcon} size={20} /> Resume on start
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Start playing the last session when Tarn opens</span>
             </span>
             <Toggle bind:checked={settings.resume_on_start} label="Resume on start" onchange={() => api.setSettings(settings)} />
           </div>
+            </div>
+          </section>
+          <section class="set-sec" id="set-transitions">
+            <div class="set-h"><h2>Transitions</h2><p>Crossfade, tempo matching and Auto-DJ</p></div>
+            <div class="set-card">
           <div class="set-row">
             <span class="lb"><Hi icon={MusicNote01Icon} size={20} /> Crossfade</span>
             <Toggle bind:checked={settings.crossfade} label="Crossfade" onchange={() => api.setSettings(settings)} />
@@ -2684,6 +2690,25 @@
           </div>
           {/if}
           <div class="set-row">
+            <span class="lb">Auto-DJ
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Reorder upcoming songs by tempo so transitions flow{player.shuffle ? ' (paused while shuffle is on)' : ''}. Works best with BPM matching</span>
+            </span>
+            <Toggle bind:checked={settings.auto_dj} label="Auto-DJ" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
+          </div>
+          {#if settings.normalize || settings.bpm_match || settings.auto_dj}
+            <div class="set-row">
+              <span class="lb">Track analysis
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Loudness and tempo saved for {analysisCount} {analysisCount === 1 ? 'track' : 'tracks'}</span>
+              </span>
+              <button class="btn ghost" type="button" onclick={clearAnalysis} disabled={analysisCount === 0}>Clear</button>
+            </div>
+          {/if}
+            </div>
+          </section>
+          <section class="set-sec" id="set-sound">
+            <div class="set-h"><h2>Sound</h2><p>Loudness and equalizer</p></div>
+            <div class="set-card">
+          <div class="set-row">
             <span class="lb">Volume normalization
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Measure each track and play them all at about the same loudness</span>
             </span>
@@ -2705,20 +2730,6 @@
                   onchange={(v) => { settings.normalize_target = Math.round(v - 23); api.setSettings(settings); }}
                 />
               </div>
-            </div>
-          {/if}
-          <div class="set-row">
-            <span class="lb">Auto-DJ
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Reorder upcoming songs by tempo so transitions flow{player.shuffle ? ' (paused while shuffle is on)' : ''}. Works best with BPM matching</span>
-            </span>
-            <Toggle bind:checked={settings.auto_dj} label="Auto-DJ" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
-          </div>
-          {#if settings.normalize || settings.bpm_match || settings.auto_dj}
-            <div class="set-row">
-              <span class="lb">Track analysis
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Loudness and tempo saved for {analysisCount} {analysisCount === 1 ? 'track' : 'tracks'}</span>
-              </span>
-              <button class="btn ghost" type="button" onclick={clearAnalysis} disabled={analysisCount === 0}>Clear</button>
             </div>
           {/if}
           <div class="set-row set-eq">
@@ -2765,6 +2776,28 @@
               {/each}
             </div>
           </div>
+            </div>
+          </section>
+          <section class="set-sec" id="set-storage">
+            <div class="set-h"><h2>Offline & storage</h2><p>Downloads and cache on this device</p></div>
+            <div class="set-card">
+          <div class="set-row">
+            <span class="lb"><Hi icon={WifiOff01Icon} size={20} /> Offline mode
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Play only downloaded songs and never touch the network{off.netDown && !off.mode ? ' (no connection detected right now)' : ''}</span>
+            </span>
+            <Toggle checked={off.mode} label="Offline mode" onchange={(v) => api.setOfflineMode(v)} />
+          </div>
+          <div class="set-row">
+            <span class="lb"><Hi icon={Download04Icon} size={20} /> Downloads
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{off.status?.sources.length ?? 0} collections · {fmtBytes(off.status?.bytes ?? 0)} on this device</span>
+            </span>
+            <span style="display:flex;gap:8px">
+              <button class="btn ghost sm" type="button" onclick={() => go({ id: 'downloads' })}>Manage</button>
+              {#if off.status?.sources.length}
+                <button class="btn ghost sm" type="button" class:on={confirmRm === 'all'} onclick={() => { if (confirmRm === 'all') { api.offlineRemoveAll(); confirmRm = null; } else { confirmRm = 'all'; setTimeout(() => { if (confirmRm === 'all') confirmRm = null; }, 3000); } }}>{confirmRm === 'all' ? 'Really remove all?' : 'Remove all'}</button>
+              {/if}
+            </span>
+          </div>
           <div class="set-row set-cache">
             <span class="lb"><Hi icon={Bookmark02Icon} size={20} /> Offline cache
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{fmtCache(cacheUsed)} of {fmtCache(cacheMax)}</span>
@@ -2802,6 +2835,57 @@
               {/if}
             </div>
           </div>
+            </div>
+          </section>
+          <section class="set-sec" id="set-connect">
+            <div class="set-h"><h2>Connections & privacy</h2><p>Discord, scrobbling and your history</p></div>
+            <div class="set-card">
+          <div class="set-row">
+            <span class="lb"><Hi icon={DiscordIcon} size={20} /> Discord presence
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Show the track and cover on your Discord profile</span>
+            </span>
+            <Toggle bind:checked={settings.discord_presence} label="Discord presence" onchange={() => api.setSettings(settings)} />
+          </div>
+          <Scrobbling onChange={() => scrobbler.reload()} />
+          <div class="set-row">
+            <span class="lb">Listening stats
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Keep a private history on this device for the Stats page</span>
+            </span>
+            <Toggle bind:checked={settings.listening_stats} label="Listening stats" onchange={() => api.setSettings(settings)} />
+          </div>
+            </div>
+          </section>
+          <section class="set-sec" id="set-system">
+            <div class="set-h"><h2>Shortcuts & system</h2><p>Keyboard and tray</p></div>
+            <div class="set-card">
+          <Shortcuts
+            shortcuts={settings.shortcuts}
+            globalHotkeys={settings.global_hotkeys}
+            desktop={!/Android|iPhone|iPad/i.test(navigator.userAgent)}
+            mac={isMac}
+            onChange={(sc, gh) => { void saveShortcuts(sc, gh); }}
+          />
+          {#if !isPhone}
+            <div class="set-row">
+              <span class="lb">Tray icon
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Play/pause, next, previous and like from the {isMac ? 'menu bar' : 'system tray'}</span>
+              </span>
+              <Toggle bind:checked={settings.tray_icon} label="Tray icon" onchange={() => { if (!settings.tray_icon) settings.close_to_tray = false; api.setSettings(settings); }} />
+            </div>
+            {#if settings.tray_icon}
+              <div class="set-row">
+                <span class="lb">Close to tray
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Closing the window keeps the music playing; quit from the tray menu</span>
+                </span>
+                <Toggle bind:checked={settings.close_to_tray} label="Close to tray" onchange={() => api.setSettings(settings)} />
+              </div>
+            {/if}
+          {/if}
+            </div>
+          </section>
+          <section class="set-sec" id="set-about">
+            <div class="set-h"><h2>About</h2><p>Updates, diagnostics and account</p></div>
+            <div class="set-card">
           <div class="set-row">
             <span class="lb">Updates
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Tarn {appVersion}</span>
@@ -2826,6 +2910,8 @@
               <button class="btn ghost" type="button" onclick={async () => { await api.signOut(); auth = { signed_in: false, mock: false, account: null, store: null }; library = null; clearHomeCaches(); home = null; explore = null; if (view.id === 'home') loadHome(); if (view.id === 'explore') loadExplore(); }}>Sign out</button>
             </div>
           {/if}
+            </div>
+          </section>
         </div>
       {/if}
     </div>
