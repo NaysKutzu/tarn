@@ -78,4 +78,6 @@ strip = true
 # rustypipe's JS engine ships no prebuilt bindings for Android: generate them.
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 rquickjs-sys = { version = "0.9", features = ["bindgen"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
