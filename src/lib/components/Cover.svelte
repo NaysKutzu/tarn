@@ -52,7 +52,7 @@
     useLocal && src ? localCover(src) : fallback || (useOrig && src ? src : srcUrl),
   );
   let shownSet = $derived(useLocal || fallback || useOrig ? '' : srcset);
-  let empty = $derived(!src);
+  let empty = $derived(!src || src.includes('playlist-empty-state'));
 
   function onErr() {
     // The on-disk copy was the last thing to try (or missing while offline).
@@ -94,7 +94,7 @@
   }
 </script>
 
-{#if shown && !broken}
+{#if shown && !broken && !empty}
   <img
     class={cls}
     class:round

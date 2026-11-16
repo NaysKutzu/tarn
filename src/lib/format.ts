@@ -24,7 +24,7 @@ export function artistsLine(a: string[] | undefined): string {
 export function shareUrl(opts: { video?: string; album?: string; playlist?: string; artist?: string }): string {
   if (opts.video) return `https://music.youtube.com/watch?v=${opts.video}`;
   if (opts.album) return `https://music.youtube.com/browse/${opts.album}`;
-  if (opts.playlist) return `https://music.youtube.com/playlist?list=${opts.playlist}`;
+  if (opts.playlist) return `https://music.youtube.com/playlist?list=${opts.playlist.replace(/^VL/, '')}`;
   if (opts.artist) return `https://music.youtube.com/channel/${opts.artist}`;
   return 'https://music.youtube.com/';
 }

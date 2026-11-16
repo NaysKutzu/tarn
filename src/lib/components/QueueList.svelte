@@ -133,7 +133,7 @@
 
 <svelte:window onblur={cancelDrag} />
 
-<div class="ql {variant}" class:dragging={!!drag} bind:this={listEl}>
+<div class="ql" class:np={variant === 'np'} class:dragging={!!drag} bind:this={listEl}>
   {#each rows as { t, i } (`${i}:${t.id}`)}
     {@const gone = off.offline && !off.playable.has(t.id)}
     <div
@@ -194,9 +194,12 @@
     position: relative;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     min-height: 52px;
-    padding: 4px 6px 4px 2px;
+    padding: 4px 8px 4px 22px;
+    box-sizing: border-box;
+    width: 100%;
+    margin-bottom: 2px;
     border-radius: 8px;
     color: inherit;
     cursor: default;
@@ -222,7 +225,11 @@
   }
   .drop-end { position: relative; left: 0; margin: 0 8px; right: 0; top: 0; }
   .grip {
-    flex: 0 0 18px;
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 14px;
     display: grid;
     place-items: center;
     height: 36px;
@@ -244,7 +251,7 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .dur { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
-  .dl { color: rgb(var(--accent-rgb)); display: grid; place-items: center; }
+  .dl { color: var(--text-2); opacity: 0.8; display: grid; place-items: center; flex: 0 0 auto; }
   .now-tag {
     flex: 0 0 auto;
     font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
@@ -261,8 +268,10 @@
   .qr:hover .dur { display: none; }
 
   /* Fullscreen rail: light-on-dark like the rest of the now-playing screen. */
-  .np .qr:hover, .np .qr:focus-visible { background: rgba(255, 255, 255, 0.07); }
-  .np .qr.now { background: rgba(255, 255, 255, 0.1); }
+  .np .qr { padding: 6px 10px 6px 22px; border-radius: 10px; }
+  .np .dl { color: rgba(245, 243, 240, 0.55); }
+  .np .qr:hover, .np .qr:focus-visible { background: rgba(245, 243, 240, 0.08); }
+  .np .qr.now { background: rgba(245, 243, 240, 0.1); }
   .np .tn { font-size: 13px; }
   .np .ta, .np .dur, .np .rm { color: rgba(245, 243, 240, 0.55); }
   .np .now-tag { color: rgba(245, 243, 240, 0.8); }

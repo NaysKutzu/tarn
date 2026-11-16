@@ -1,51 +1,35 @@
 <script lang="ts">
   import Hi from './Hi.svelte';
-  import {
-    PlayIcon, PlayListAddIcon, Queue02Icon, Radio02Icon, FavouriteIcon, ThumbsDownIcon,
-    Share01Icon, Link01Icon, Album02Icon, UserIcon, Add01Icon, Bookmark02Icon,
-  } from '../icons';
-  import type { PlaylistCard, Track } from '../types';
+  import { ArrowRight01Icon } from '../icons';
+  import type { MenuEntry } from '../types';
 
   let {
     x,
     y,
-    track = null,
-    signedIn = false,
-    playlists = [],
-    onPlay,
-    onPlayNext,
-    onQueue,
-    onRadio,
-    onLike,
-    onDislike,
-    onArtist,
-    onAlbum,
-    onShare,
-    onAddTo,
-    onSave,
+    entries,
     onClose,
   }: {
     x: number;
     y: number;
-    track?: Track | null;
-    signedIn?: boolean;
-    playlists?: PlaylistCard[];
-    onPlay?: () => void;
-    onPlayNext?: () => void;
-    onQueue?: () => void;
-    onRadio?: () => void;
-    onLike?: () => void;
-    onDislike?: () => void;
-    onArtist?: () => void;
-    onAlbum?: () => void;
-    onShare?: () => void;
-    onAddTo?: (id: string) => void;
-    onSave?: () => void;
+    entries: MenuEntry[];
     onClose: () => void;
   } = $props();
 
-  let addOpen = $state(false);
+  let open = $state<number | null>(null);
   let el: HTMLDivElement | undefined = $state();
+  let pos = $state({ left: 0, top: 0 });
+
+  // Keep the menu on screen, whatever its height turns out to be.
+  $effect(() => {
+    void entries;
+    void open;
+    const w = el?.offsetWidth ?? 240;
+    const h = el?.offsetHeight ?? 320;
+    pos = {
+      left: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
+      top: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
+    };
+  });
 
   $effect(() => {
     const on = (e: MouseEvent) => {
@@ -56,43 +40,69 @@
     };
     window.addEventListener('mousedown', on);
     window.addEventListener('keydown', esc);
+    window.addEventListener('blur', onClose);
     return () => {
       window.removeEventListener('mousedown', on);
       window.removeEventListener('keydown', esc);
+      window.removeEventListener('blur', onClose);
     };
   });
 
-  let left = $derived(Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : 800) - 248));
-  let top = $derived(Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : 600) - 420));
+  function run(e: MenuEntry) {
+    if ('sep' in e || e.disabled) return;
+    e.onclick?.();
+    onClose();
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="ctx" bind:this={el} style="left:{Math.round(left)}px;top:{Math.round(top)}px" role="menu">
-  {#if onPlay}
-    <button type="button" onclick={() => { onPlay(); onClose(); }}><span class="ic"><Hi icon={PlayIcon} size={18} /></span> Play</button>
-  {/if}
-  <button type="button" onclick={() => { onPlayNext?.(); onClose(); }}><span class="ic"><Hi icon={PlayListAddIcon} size={18} /></span> Play next</button>
-  <button type="button" onclick={() => { onQueue?.(); onClose(); }}><span class="ic"><Hi icon={Queue02Icon} size={18} /></span> Add to queue</button>
-  <button type="button" onclick={() => { onRadio?.(); onClose(); }}><span class="ic"><Hi icon={Radio02Icon} size={18} /></span> Start radio</button>
-  <div class="sep"></div>
-  <button type="button" onclick={() => { onLike?.(); onClose(); }}><span class="ic"><Hi icon={FavouriteIcon} size={18} /></span> Like</button>
-  <button type="button" onclick={() => { onDislike?.(); onClose(); }}><span class="ic"><Hi icon={ThumbsDownIcon} size={18} /></span> Dislike</button>
-  {#if signedIn}
-    <button type="button" onclick={() => (addOpen = !addOpen)}><span class="ic"><Hi icon={Add01Icon} size={18} /></span> Add to playlist</button>
-    {#if addOpen}
-      {#each playlists as p}
-        <button type="button" style="padding-left:40px" onclick={() => { onAddTo?.(p.id); onClose(); }}>{p.name}</button>
-      {/each}
-      <button type="button" style="padding-left:40px" onclick={() => { onAddTo?.(''); onClose(); }}>New playlist</button>
+<div
+  class="ctx"
+  bind:this={el}
+  style="left:{Math.round(pos.left)}px;top:{Math.round(pos.top)}px"
+  role="menu"
+  tabindex="-1"
+  oncontextmenu={(e) => e.preventDefault()}
+>
+  {#each entries as e, i}
+    {#if 'sep' in e}
+      <div class="sep"></div>
+    {:else if e.children}
+      <button type="button" role="menuitem" onclick={() => (open = open === i ? null : i)}>
+        <span class="ic">{#if e.icon}<Hi icon={e.icon} size={18} />{/if}</span>
+        <span class="lbl">{e.label}</span>
+        <span class="chev" class:open={open === i}><Hi icon={ArrowRight01Icon} size={14} /></span>
+      </button>
+      {#if open === i}
+        <div class="sub">
+          {#each e.children as c}
+            {#if 'sep' in c}
+              <div class="sep"></div>
+            {:else}
+              <button type="button" role="menuitem" disabled={c.disabled} onclick={() => run(c)}>{c.label}</button>
+            {/if}
+          {/each}
+        </div>
+      {/if}
+    {:else}
+      <button type="button" role="menuitem" class:danger={e.danger} disabled={e.disabled} onclick={() => run(e)}>
+        <span class="ic">{#if e.icon}<Hi icon={e.icon} size={18} />{/if}</span>
+        <span class="lbl">{e.label}</span>
+      </button>
     {/if}
-    <button type="button" onclick={() => { onSave?.(); onClose(); }}><span class="ic"><Hi icon={Bookmark02Icon} size={18} /></span> Save to library</button>
-  {/if}
-  <div class="sep"></div>
-  {#if track?.artist_ids?.[0] || track?.artists?.[0]}
-    <button type="button" onclick={() => { onArtist?.(); onClose(); }}><span class="ic"><Hi icon={UserIcon} size={18} /></span> Go to artist</button>
-  {/if}
-  {#if track?.album_id || track?.album}
-    <button type="button" onclick={() => { onAlbum?.(); onClose(); }}><span class="ic"><Hi icon={Album02Icon} size={18} /></span> Go to album</button>
-  {/if}
-  <button type="button" onclick={() => { onShare?.(); onClose(); }}><span class="ic"><Hi icon={Share01Icon} size={18} /></span> Share link</button>
+  {/each}
 </div>
+
+<style>
+  .lbl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ic { width: 18px; height: 18px; flex: 0 0 18px; }
+  .chev { color: var(--text-2); display: flex; transition: transform 0.15s; }
+  .chev.open { transform: rotate(90deg); }
+  .sub {
+    max-height: 220px; overflow: auto; margin: 2px 0 4px 10px;
+    padding-left: 8px; border-left: 1px solid var(--line);
+  }
+  .sub button { padding-left: 10px; min-height: 34px; }
+  .danger { color: #ff7a6b; }
+  button:disabled { opacity: 0.4; pointer-events: none; }
+</style>

@@ -52,7 +52,7 @@
     const out: string[] = [];
     const seen = new Set<string>();
     for (const u of covers ?? []) {
-      if (!u || u.includes('/mixart') || u.includes('music.youtube.com/image/')) continue;
+      if (!u || u.includes('/mixart') || u.includes('music.youtube.com/image/') || u.includes('playlist-empty-state')) continue;
       const k = coverKey(u);
       if (seen.has(k)) continue;
       seen.add(k);
@@ -113,7 +113,7 @@
     {/if}
   </div>
 {:else}
-  <Cover src={cover || tiles[0] || null} {size} {alt} class={cls} />
+  <Cover src={cover && !cover.includes('playlist-empty-state') ? cover : tiles[0] || null} {size} {alt} class={cls} />
 {/if}
 
 <style>

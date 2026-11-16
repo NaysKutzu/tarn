@@ -261,7 +261,30 @@ export type View =
   | { id: 'history' }
   | { id: 'downloads' };
 
+import type { IconSvgElement } from '@hugeicons/svelte';
+
+export type MenuEntry =
+  | { sep: true }
+  | {
+      label: string;
+      icon?: IconSvgElement;
+      onclick?: () => void;
+      children?: MenuEntry[];
+      danger?: boolean;
+      disabled?: boolean;
+    };
+
+/** Right-click target that is a whole playlist / album / artist. */
+export interface CollTarget {
+  kind: 'playlist' | 'album' | 'artist';
+  id: string;
+  title: string;
+  cover: string | null;
+  subtitle?: string | null;
+}
+
 export interface CtxTarget {
+  coll?: CollTarget;
   x: number;
   y: number;
   track?: Track;

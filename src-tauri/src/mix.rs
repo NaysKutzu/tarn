@@ -282,6 +282,15 @@ impl Mixer {
         let sr = src.sample_rate().max(1);
         let ch = src.channels().max(1);
         let mut g = self.inner.lock();
+        // A fade is already under way (e.g. Skip pressed near its end): the
+        // incoming track is what the listener hears, so it becomes the outgoing
+        // deck. Restarting from the old outgoing deck brought that song back
+        // at full volume and left the previous crossfade hanging on.
+        if g.xf_len > 0 && g.xf_wait == 0 && g.incoming.is_some() {
+            g.promote_incoming();
+            g.xf_len = 0;
+            g.xf_pos = 0;
+        }
         // If sample rates differ, fall back to a short cut - rodio won't
         // resample a mid-stream rate change cleanly.
         if g.current.is_none() || g.sr != sr || g.ch != ch {

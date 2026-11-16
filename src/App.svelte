@@ -10,6 +10,7 @@
   } from './lib/types';
   import { coverFor, itemToTrack } from './lib/cover';
   import { artistsLine, fmtCount, fmtTime, shareUrl } from './lib/format';
+  import type { MenuEntry, CollTarget } from './lib/types';
   import { paintAccent } from './lib/contrast';
   import Cover from './lib/components/Cover.svelte';
   import PlaylistCover from './lib/components/PlaylistCover.svelte';
@@ -41,6 +42,7 @@
     Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon,
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
     Download04Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
+    PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon,
   } from './lib/icons';
 
   const isMac =
@@ -337,6 +339,11 @@
           next.disliked = false;
         }
       }
+      // A like/dislike still in flight: keep showing what the user just chose.
+      if (pendingRating && next.track?.id === pendingRating.id) {
+        next.liked = pendingRating.liked;
+        next.disliked = pendingRating.disliked;
+      }
       if (next.error) {
         if (isAuthError(next.error)) {
           next.error = null;
@@ -387,6 +394,10 @@
           (el as HTMLInputElement).select();
           return;
         }
+      }
+      if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        return;
       }
       if (typing) return;
       if ((e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) || e.key === 'BrowserBack' || e.key === 'BrowserForward') {
@@ -831,7 +842,7 @@
       } else if (item.kind === 'track' || item.kind === 'video') {
         tracks = [itemToTrack(item)];
       }
-      if (!tracks.length) { openItem(item); return; }
+      if (!tracks.length) { toast('This playlist is empty', 'info', 2600); openItem(item); return; }
       await playTracks(tracks, 0, cover);
       if (shuffle) api.setShuffle(true);
       else api.setShuffle(false);
@@ -896,6 +907,13 @@
 
   function contextItem(e: MouseEvent, item: ShelfItem) {
     e.preventDefault();
+    if (item.kind === 'playlist' || item.kind === 'album' || item.kind === 'artist') {
+      ctxColl(e, {
+        kind: item.kind, id: item.kind === 'artist' ? (item.id || item.browse_id || '') : item.id,
+        title: item.title, cover: item.cover, subtitle: item.subtitle,
+      });
+      return;
+    }
     const track = item.kind === 'track' || item.kind === 'video' ? itemToTrack(item) : undefined;
     ctx = {
       x: e.clientX, y: e.clientY, track, item,
@@ -932,6 +950,10 @@
     }
   }
 
+  // Rating the user just chose that the server hasn't confirmed yet.
+  let pendingRating: { id: string; liked: boolean; disliked: boolean } | null = null;
+  const likeSeq = new Map<string, number>();
+
   async function likeTrack(track: Track | undefined, action: string) {
     if (!track?.id) return;
     if (!auth.signed_in) {
@@ -941,18 +963,51 @@
       authPrompt(action === 'dislike' ? 'dislike' : 'like');
       return;
     }
+    const id = track.id;
+    const want =
+      action === 'like' ? { liked: true, disliked: false }
+      : action === 'dislike' ? { liked: false, disliked: true }
+      : { liked: false, disliked: false };
+    const current = player.track?.id === id;
+    const was = {
+      liked: current ? player.liked : isLocalLiked(id) || !!library?.liked?.some((t) => t.id === id),
+      disliked: current ? player.disliked : false,
+    };
+    const seq = (likeSeq.get(id) ?? 0) + 1;
+    likeSeq.set(id, seq);
+
+    // Instant: heart, local likes, Library > Liked and the Liked Music page.
+    pendingRating = { id, ...want };
+    if (current) { player.liked = want.liked; player.disliked = want.disliked; }
+    likes = setLocalLiked(track, want.liked);
+    syncLikedViews(track, want.liked);
+
+    // Disliked: stop hearing it - skip if it's playing, drop it from Up next.
+    if (action === 'dislike') {
+      const ahead: number[] = [];
+      player.queue.forEach((t, i) => { if (t.id === id && i > player.index) ahead.push(i); });
+      for (const i of ahead.reverse()) api.queueRemove(i).catch(() => {});
+      if (current) api.next().catch(() => {});
+    }
+
     try {
-      const st = await api.like(track.id, action, track);
-      player.liked = st.liked;
-      player.disliked = st.disliked;
-      if (player.track?.id === track.id) {
-        /* already applied */
+      const st = await api.like(id, action, track);
+      if (likeSeq.get(id) !== seq) return; // a newer tap on this song wins
+      if (player.track?.id === id) { player.liked = st.liked; player.disliked = st.disliked; }
+      if (st.liked !== want.liked) {
+        likes = setLocalLiked(track, st.liked);
+        syncLikedViews(track, st.liked);
       }
-      if (st.liked) likes = setLocalLiked(track, true);
-      else if (action !== 'dislike') likes = setLocalLiked(track, false);
-      syncLikedViews(track, st.liked);
     } catch (e) {
+      if (likeSeq.get(id) === seq) {
+        // Roll it back, then say why.
+        if (player.track?.id === id) { player.liked = was.liked; player.disliked = was.disliked; }
+        likes = setLocalLiked(track, was.liked);
+        syncLikedViews(track, was.liked);
+      }
       fail(e, "Couldn't update this", action === 'dislike' ? 'dislike' : 'like');
+    } finally {
+      if (likeSeq.get(id) === seq && pendingRating?.id === id) pendingRating = null;
     }
   }
   async function like(action: string) {
@@ -1084,10 +1139,24 @@
     volHudTimer = setTimeout(() => { volHud = null; }, 900);
   }
 
+  function toggleShuffle() {
+    const on = !player.shuffle;
+    player.shuffle = on;
+    api.setShuffle(on).catch((e) => { player.shuffle = !on; fail(e, "Couldn't change shuffle"); });
+  }
+  function cycleRepeatUi() {
+    const prev = player.repeat;
+    player.repeat = prev === 'off' ? 'all' : prev === 'all' ? 'one' : 'off';
+    api.cycleRepeat()
+      .then((r) => { player.repeat = r; })
+      .catch((e) => { player.repeat = prev; fail(e, "Couldn't change repeat"); });
+  }
+
   function setVolumePrecise(v: number) {
     const next = Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
     if (Math.abs(next - player.volume) < 1e-6) return;
-    api.setVolume(next);
+    player.volume = next;
+    api.setVolume(next).catch(() => {});
     showVolHud(next);
   }
 
@@ -1112,14 +1181,153 @@
     api.setSettings(settings);
   }
 
-  async function share(t?: Track) {
-    const url = shareUrl({
-      video: t?.id || ctx?.track?.id,
-      album: ctx?.albumId,
-      playlist: ctx?.playlistId,
-      artist: ctx?.artistId,
-    });
-    try { await navigator.clipboard.writeText(url); } catch {}
+  async function copyLink(opts: { video?: string; album?: string; playlist?: string; artist?: string }) {
+    try {
+      await navigator.clipboard.writeText(shareUrl(opts));
+      toast('Link copied', 'info', 1800);
+    } catch { toast("Couldn't copy the link", 'info', 2400); }
+  }
+
+  /** Right-click on a playlist / album / artist card. */
+  function ctxColl(e: MouseEvent, c: CollTarget) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctx = {
+      x: e.clientX, y: e.clientY, coll: c,
+      playlistId: c.kind === 'playlist' ? c.id : undefined,
+      albumId: c.kind === 'album' ? c.id : undefined,
+      artistId: c.kind === 'artist' ? c.id : undefined,
+    };
+  }
+
+  function mkItem(c: CollTarget): ShelfItem {
+    return {
+      kind: c.kind, id: c.id, title: c.title, cover: c.cover, subtitle: c.subtitle ?? null,
+      artists: [], artist_ids: [], album: null, album_id: null, duration: null,
+      playlist_id: c.kind === 'playlist' ? c.id : null, color: null,
+      browse_id: c.kind === 'artist' ? c.id : null, params: null, year: null,
+      album_type: null, track_count: null, is_video: false,
+    };
+  }
+
+  async function collTracks(c: CollTarget): Promise<Track[]> {
+    if (c.kind === 'artist') return (await api.artist(c.id)).tracks;
+    return (await openCollection(c.kind, c.id)).tracks;
+  }
+
+  async function queueColl(c: CollTarget, next: boolean) {
+    try {
+      const tracks = (await collTracks(c)).filter((t) => t.id);
+      if (!tracks.length) { toast('Nothing to add', 'info', 2200); return; }
+      await api.queueAdd(tracks, next);
+      toast(next ? `Playing ${tracks.length} songs next` : `Added ${tracks.length} songs to the queue`, 'info', 2400);
+    } catch (e) { fail(e, "Couldn't add this to the queue"); }
+  }
+
+  async function radioColl(c: CollTarget) {
+    try {
+      const first = (await collTracks(c)).find((t) => t.id);
+      if (!first) { toast('Nothing to start a radio from', 'info', 2200); return; }
+      await startRadio(first.id);
+    } catch (e) { fail(e, "Couldn't start the radio"); }
+  }
+
+  async function downloadColl(c: CollTarget) {
+    if (c.kind === 'artist') return;
+    const have = sourceInfo(c.id);
+    try {
+      if (have) {
+        await (have.done < have.total ? api.offlineCancel(c.id) : api.offlineRemove(c.id));
+        toast(have.done < have.total ? 'Download cancelled' : 'Download removed', 'info', 2200);
+      } else {
+        const col = await openCollection(c.kind, c.id);
+        const tracks = col.tracks.filter((t) => t.id);
+        if (!tracks.length) { toast('Nothing to download', 'info', 2200); return; }
+        await api.offlineDownload(
+          { id: c.id, kind: c.kind, name: col.name || c.title, cover: col.cover ?? c.cover, subtitle: col.author || artistsLine(col.artists) || null },
+          tracks,
+        );
+        toast(`Downloading ${tracks.length} songs`, 'info', 2600);
+      }
+      refreshOffline();
+    } catch (e) { fail(e, "Couldn't change this download"); }
+  }
+
+  function inLibrary(c: CollTarget): boolean {
+    const id = c.id.replace(/^VL/, '');
+    if (c.kind === 'playlist') return !!library?.playlists?.some((p) => p.id.replace(/^VL/, '') === id);
+    if (c.kind === 'album') return !!library?.albums?.some((a) => a.id === c.id);
+    return !!library?.artists?.some((a) => a.id === c.id);
+  }
+
+  function buildMenu(c: CtxTarget): MenuEntry[] {
+    const out: MenuEntry[] = [];
+    const sep = () => { if (out.length && !('sep' in out[out.length - 1])) out.push({ sep: true }); };
+    const online = !off.offline;
+    const t = c.track;
+    if (t) {
+      out.push({ label: 'Play', icon: PlayIcon, onclick: () => playOne(t) });
+      out.push({ label: 'Play next', icon: PlayListAddIcon, onclick: () => { api.queueAdd([t], true); toast('Playing next', 'info', 1800); } });
+      out.push({ label: 'Add to queue', icon: Queue02Icon, onclick: () => { api.queueAdd([t], false); toast('Added to queue', 'info', 1800); } });
+      if (online) out.push({ label: 'Start radio', icon: Radio02Icon, onclick: () => startRadio(t.id) });
+      if (online) {
+        sep();
+        out.push({ label: 'Like', icon: FavouriteIcon, onclick: () => likeTrack(t, 'like') });
+        out.push({ label: 'Dislike', icon: ThumbsDownIcon, onclick: () => likeTrack(t, 'dislike') });
+        if (auth.signed_in) {
+          out.push({
+            label: 'Add to playlist', icon: Add01Icon,
+            children: [
+              ...(library?.playlists ?? []).filter((p) => p.id !== 'LM' && p.id !== 'SE').map((p): MenuEntry => ({ label: p.name, onclick: () => addToPlaylist(p.id, t.id) })),
+              { sep: true },
+              { label: 'New playlist…', onclick: () => addToPlaylist('', t.id) },
+            ],
+          });
+        }
+      }
+      sep();
+      const artistId = c.artistId || t.artist_ids?.[0];
+      if (online && (artistId || t.artists?.[0])) out.push({ label: 'Go to artist', icon: UserIcon, onclick: () => goArtist(artistId || '', t.artists?.[0]) });
+      const albumId = c.albumId || t.album_id;
+      if (albumId) out.push({ label: 'Go to album', icon: Album02Icon, onclick: () => go({ id: 'album', albumId }) });
+      if (online) out.push({ label: 'Copy link', icon: Link01Icon, onclick: () => copyLink({ video: t.id }) });
+      return out;
+    }
+    const k = c.coll;
+    if (!k) return out;
+    out.push({ label: 'Play', icon: PlayIcon, onclick: () => playCollection(mkItem(k), false) });
+    out.push({ label: 'Shuffle', icon: ShuffleIcon, onclick: () => playCollection(mkItem(k), true) });
+    out.push({ label: 'Play next', icon: PlayListAddIcon, onclick: () => queueColl(k, true) });
+    out.push({ label: 'Add to queue', icon: Queue02Icon, onclick: () => queueColl(k, false) });
+    if (online) out.push({ label: 'Start radio', icon: Radio02Icon, onclick: () => radioColl(k) });
+    sep();
+    if (k.kind !== 'artist' && (online || sourceInfo(k.id))) {
+      const have = sourceInfo(k.id);
+      out.push({
+        label: !have ? 'Download' : have.done < have.total ? 'Cancel download' : 'Remove download',
+        icon: !have ? Download04Icon : have.done < have.total ? Cancel01Icon : Delete02Icon,
+        onclick: () => downloadColl(k),
+      });
+    }
+    if (online && auth.signed_in) {
+      const saved = inLibrary(k);
+      out.push({
+        label: saved ? 'Remove from library' : k.kind === 'artist' ? 'Subscribe' : 'Save to library',
+        icon: Bookmark02Icon,
+        onclick: async () => {
+          toast(saved ? 'Removed from library' : k.kind === 'artist' ? 'Subscribed' : 'Saved to library', 'info', 2000);
+          try {
+            if (k.kind === 'artist') await api.subscribe(k.id, !saved);
+            else await api.librarySave(k.id, !saved);
+            loadLibrary({ retries: 0 });
+          } catch (e) { fail(e, "Couldn't update your library", 'save'); }
+        },
+      });
+    }
+    sep();
+    out.push({ label: 'Open', icon: ArrowRight01Icon, onclick: () => go(k.kind === 'artist' ? { id: 'artist', artistId: k.id } : k.kind === 'album' ? { id: 'album', albumId: k.id } : { id: 'playlist', playlistId: k.id }) });
+    if (online) out.push({ label: 'Copy link', icon: Link01Icon, onclick: () => copyLink({ [k.kind]: k.id }) });
+    return out;
   }
 
   async function addToPlaylist(pid: string, videoId?: string) {
@@ -1136,6 +1344,8 @@
       } catch (e) { fail(e, "Couldn't create this playlist", 'playlist'); }
       return;
     }
+    const name = library?.playlists?.find((p) => p.id === pid)?.name;
+    toast(name ? `Added to ${name}` : 'Added to playlist', 'info', 2000);
     try { await api.playlistAdd(pid, vid); } catch (e) { fail(e, "Couldn't add to this playlist", 'playlist'); }
   }
 
@@ -1413,7 +1623,7 @@
           <FilterBar compact id="side-filter" bind:value={sideQ} placeholder="Filter playlists" />
         {/if}
         {#each sidePlaylists as p, i (p.id)}
-          <button class="side-pl pl-in" style="--i:{Math.min(i, 12)}" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
+          <button class="side-pl pl-in" style="--i:{Math.min(i, 12)}" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })} oncontextmenu={(e) => ctxColl(e, { kind: 'playlist', id: p.id, title: p.name, cover: p.cover })}>
             <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={36} alt="" />
             <span class="clamp one">{p.name}</span>
           </button>
@@ -1716,7 +1926,7 @@
             <h2 class="shelf-title" style="margin:28px 0 12px">Playlists</h2>
             <div class="row">
               {#each fPlaylists as p (p.id)}
-                <div class="card" role="group">
+                <div class="card" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'playlist', id: p.id, title: p.name, cover: p.cover })}>
                   <button class="art" type="button" title="Play" onclick={() => playPlaylistId(p.id, p.cover, p.covers)}>
                     <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" />
                     <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
@@ -1733,7 +1943,7 @@
             <h2 class="shelf-title" style="margin:28px 0 12px">Albums</h2>
             <div class="row">
               {#each fAlbums as a (a.id)}
-                <div class="card" role="group">
+                <div class="card" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'album', id: a.id, title: a.name, cover: a.cover, subtitle: a.subtitle })}>
                   <button class="art" type="button" title="Play" onclick={() => playAlbumId(a.id, a.cover)}>
                     <Cover src={a.cover} size={152} alt="" />
                     <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
@@ -1750,7 +1960,7 @@
             <h2 class="shelf-title" style="margin:28px 0 12px">Artists</h2>
             <div class="row">
               {#each fArtists as a (a.id)}
-                <div class="card artist" role="group">
+                <div class="card artist" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'artist', id: a.id, title: a.name, cover: a.cover })}>
                   <button class="art" type="button" title="Play" onclick={() => playArtistId(a.id, a.cover)}>
                     <Cover src={a.cover} size={132} round alt="" />
                     <span class="play-ov"><Hi icon={PlayIcon} size={28} /></span>
@@ -1827,7 +2037,7 @@
           <h2 class="shelf-title" style="margin:20px 0 12px">Collections</h2>
           <div class="row">
             {#each off.status.sources as src (src.id)}
-              <div class="card" role="group">
+              <div class="card" role="group" oncontextmenu={(e) => src.kind !== 'liked' && ctxColl(e, { kind: src.kind === 'album' ? 'album' : 'playlist', id: src.id, title: src.name, cover: src.cover })}>
                 <button class="art" type="button" title="Play" onclick={async () => {
                   const c = await api.offlineCollection(src.id);
                   if (c?.tracks.length) playTracks(c.tracks, 0, c.cover);
@@ -1917,7 +2127,7 @@
                   <button class="btn ghost" type="button" onclick={() => api.artistRadio(artist!.radio_id!)}><Hi icon={Radio02Icon} size={18} /> Radio</button>
                 {/if}
                 {#if auth.signed_in}
-                  <button class="btn ghost {artist.subscribed ? 'on' : ''}" type="button" onclick={async () => { if (needAccount('subscribe')) return; const on = !artist!.subscribed; try { await api.subscribe(artist!.id, on); artist = { ...artist!, subscribed: on }; } catch (e) { fail(e, "Couldn't subscribe", 'subscribe'); } }}>
+                  <button class="btn ghost {artist.subscribed ? 'on' : ''}" type="button" onclick={async () => { if (needAccount('subscribe')) return; const a0 = artist!; const on = !a0.subscribed; artist = { ...a0, subscribed: on }; try { await api.subscribe(a0.id, on); } catch (e) { if (artist?.id === a0.id) artist = { ...artist!, subscribed: !on }; fail(e, "Couldn't subscribe", 'subscribe'); } }}>
                     {artist.subscribed ? 'Subscribed' : 'Subscribe'}
                   </button>
                 {/if}
@@ -1937,7 +2147,7 @@
           <h2 class="shelf-title" style="margin:28px 0 12px">Albums</h2>
           <div class="row">
             {#each artist.albums as a}
-              <div class="card" role="group">
+              <div class="card" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'album', id: a.id, title: a.name, cover: a.cover, subtitle: a.subtitle })}>
                 <button class="art" type="button" title="Play" onclick={() => playAlbumId(a.id, a.cover)}>
                   <Cover src={a.cover} size={152} alt="" />
                   <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
@@ -1954,7 +2164,7 @@
           <h2 class="shelf-title" style="margin:28px 0 12px">Singles</h2>
           <div class="row">
             {#each artist.singles as a}
-              <div class="card" role="group">
+              <div class="card" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'album', id: a.id, title: a.name, cover: a.cover, subtitle: a.subtitle })}>
                 <button class="art" type="button" title="Play" onclick={() => playAlbumId(a.id, a.cover)}>
                   <Cover src={a.cover} size={152} alt="" />
                   <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
@@ -1979,7 +2189,7 @@
           <h2 class="shelf-title" style="margin:28px 0 12px">Featured</h2>
           <div class="row">
             {#each artist.playlists as p}
-              <button class="card" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
+              <button class="card" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })} oncontextmenu={(e) => ctxColl(e, { kind: 'playlist', id: p.id, title: p.name, cover: p.cover })}>
                 <div class="art"><PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" /></div>
                 <div class="c-a"><div class="title">{p.name}</div></div>
               </button>
@@ -1990,7 +2200,7 @@
           <h2 class="shelf-title" style="margin:28px 0 12px">Similar artists</h2>
           <div class="row">
             {#each artist.similar as a}
-              <button class="card artist" type="button" onclick={() => go({ id: 'artist', artistId: a.id })}>
+              <button class="card artist" type="button" onclick={() => go({ id: 'artist', artistId: a.id })} oncontextmenu={(e) => ctxColl(e, { kind: 'artist', id: a.id, title: a.name, cover: a.cover })}>
                 <div class="art"><Cover src={a.cover} size={132} round alt="" /></div>
                 <div class="c-a"><div class="title">{a.name}</div></div>
               </button>
@@ -2032,7 +2242,7 @@
                   </button>
                 {/if}
                 {#if auth.signed_in && !off.offline}
-                  <button class="btn ghost {collection.saved ? 'on' : ''}" type="button" onclick={async () => { if (needAccount('save')) return; const s = !collection!.saved; try { await api.librarySave(collection!.playlist_id || collection!.id, s); collection = { ...collection!, saved: s }; } catch (e) { fail(e, "Couldn't save this", 'save'); } }}>
+                  <button class="btn ghost {collection.saved ? 'on' : ''}" type="button" onclick={async () => { if (needAccount('save')) return; const c0 = collection!; const s = !c0.saved; collection = { ...c0, saved: s }; try { await api.librarySave(c0.playlist_id || c0.id, s); loadLibrary({ retries: 0 }); } catch (e) { if (collection?.id === c0.id) collection = { ...collection!, saved: !s }; fail(e, "Couldn't save this", 'save'); } }}>
                     <Hi icon={Bookmark02Icon} size={18} /> {collection.saved ? 'Saved' : 'Save'}
                   </button>
                 {/if}
@@ -2040,6 +2250,9 @@
             </div>
           </div>
         </div>
+        {#if !collection.tracks.length}
+          <div class="no-match">{off.offline ? 'Nothing from this is downloaded yet.' : 'This playlist has no songs yet (YouTube Music reports it as empty).'}</div>
+        {/if}
         {#if collection.tracks.length > 6}
           <div class="lib-filter">
             <FilterBar bind:value={filterQ} placeholder="Find in this {collection.kind === 'album' ? 'album' : 'playlist'}  (Ctrl+F)" count={`${fCollection.length} of ${collection.tracks.length}`} />
@@ -2057,7 +2270,7 @@
           <h2 class="shelf-title" style="margin:28px 0 12px">Related</h2>
           <div class="row">
             {#each collection.related as p}
-              <button class="card" type="button" onclick={() => go({ id: collection!.kind === 'album' ? 'album' : 'playlist', albumId: p.id, playlistId: p.id } as View)}>
+              <button class="card" type="button" onclick={() => go({ id: collection!.kind === 'album' ? 'album' : 'playlist', albumId: p.id, playlistId: p.id } as View)} oncontextmenu={(e) => ctxColl(e, { kind: collection!.kind === 'album' ? 'album' : 'playlist', id: p.id, title: p.name, cover: p.cover })}>
                 <div class="art"><Cover src={p.cover} size={152} alt="" /></div>
                 <div class="c-a"><div class="title">{p.name}</div></div>
               </button>
@@ -2461,7 +2674,7 @@
             <div class="shelf-title" style="font-size:16px;margin:16px 8px 8px">Artists</div>
             <div class="row">
               {#each related.artists as a (a.id)}
-                <button class="card artist" type="button" onclick={() => go({ id: 'artist', artistId: a.id })}>
+                <button class="card artist" type="button" onclick={() => go({ id: 'artist', artistId: a.id })} oncontextmenu={(e) => ctxColl(e, { kind: 'artist', id: a.id, title: a.name, cover: a.cover })}>
                   <div class="art"><Cover src={a.cover} size={132} round alt="" /></div>
                   <div class="c-a"><div class="title">{a.name}</div></div>
                 </button>
@@ -2614,7 +2827,7 @@
       </div>
       <div class="ctrls">
         <div class="row-c">
-          <IconBtn icon={ShuffleIcon} size={22} on={player.shuffle} onclick={() => api.setShuffle(!player.shuffle)} title="Shuffle" btnSize="lg" />
+          <IconBtn icon={ShuffleIcon} size={22} on={player.shuffle} onclick={toggleShuffle} title="Shuffle" btnSize="lg" />
           <IconBtn icon={PreviousIcon} size={26} btnSize="lg" onclick={() => api.prev()} title="Previous" />
           <IconBtn
             icon={PlayIcon}
@@ -2635,7 +2848,7 @@
             size={22}
             on={player.repeat !== 'off'}
             btnSize="lg"
-            onclick={() => api.cycleRepeat()}
+            onclick={cycleRepeatUi}
             title="Repeat"
           />
         </div>
@@ -2690,27 +2903,5 @@
 <UpdatePrompt bind:request={updateCheck} />
 
 {#if ctx}
-  <ContextMenu
-    x={ctx.x}
-    y={ctx.y}
-    track={ctx.track}
-    signedIn={auth.signed_in}
-    playlists={library?.playlists ?? []}
-    onPlay={() => ctx?.track && playOne(ctx.track)}
-    onPlayNext={() => ctx?.track && api.queueAdd([ctx.track], true)}
-    onQueue={() => ctx?.track && api.queueAdd([ctx.track], false)}
-    onRadio={() => ctx?.track && startRadio(ctx.track.id)}
-    onLike={() => ctx?.track && likeTrack(ctx.track, 'like')}
-    onDislike={() => ctx?.track && likeTrack(ctx.track, 'dislike')}
-    onArtist={() => goArtist(ctx?.artistId || ctx?.track?.artist_ids?.[0] || '', ctx?.track?.artists?.[0])}
-    onAlbum={() => (ctx?.albumId || ctx?.track?.album_id) && go({ id: 'album', albumId: ctx!.albumId || ctx!.track!.album_id! })}
-    onShare={() => share(ctx?.track)}
-    onAddTo={(id) => addToPlaylist(id)}
-    onSave={() => {
-      if (needAccount('save')) return;
-      const id = ctx?.playlistId || ctx?.albumId;
-      if (id) api.librarySave(id, true).catch((e) => fail(e, "Couldn't save this", 'save'));
-    }}
-    onClose={() => (ctx = null)}
-  />
+  <ContextMenu x={ctx.x} y={ctx.y} entries={buildMenu(ctx)} onClose={() => (ctx = null)} />
 {/if}
