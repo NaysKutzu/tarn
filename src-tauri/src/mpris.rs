@@ -93,6 +93,30 @@ fn dispatch(app: &Arc<crate::App>, ev: souvlaki::MediaControlEvent) {
             snap.playing, snap.position
         ));
     }
+    // The desktop picks Play/Pause from the PlaybackStatus it last saw, which
+    // lags behind a quick double press - it then sends the same command twice.
+    // A repeat of the same Play/Pause within a short window means "toggle".
+    let ev = {
+        use std::sync::Mutex;
+        static LAST: Mutex<Option<(bool, std::time::Instant)>> = Mutex::new(None);
+        let now = std::time::Instant::now();
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        let kind = match ev {
+            MediaControlEvent::Play => Some(true),
+            MediaControlEvent::Pause => Some(false),
+            _ => None,
+        };
+        match kind {
+            Some(k) => {
+                let repeat = matches!(*last, Some((lk, t)) if lk == k && now.duration_since(t) < Duration::from_millis(700));
+                // What we actually do: flip on a quick repeat, else as asked.
+                let do_play = if repeat { !k } else { k };
+                *last = Some((do_play, now));
+                if do_play { MediaControlEvent::Play } else { MediaControlEvent::Pause }
+            }
+            None => ev,
+        }
+    };
     match ev {
         MediaControlEvent::Toggle => app.player.toggle(),
         MediaControlEvent::Play => app.player.resume(),
@@ -216,8 +240,13 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
     let mut last_meta: Option<(String, u64)> = None;
 
     loop {
-        while let Ok(ev) = rx.try_recv() {
+        // Wake the moment a key arrives so the new status is published at
+        // once (the desktop reads it to decide between Play and Pause).
+        if let Ok(ev) = rx.recv_timeout(Duration::from_millis(100)) {
             dispatch(&app, ev);
+            while let Ok(ev) = rx.try_recv() {
+                dispatch(&app, ev);
+            }
         }
 
         let snap = app.player.snapshot();
@@ -268,9 +297,6 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
             sent_at = std::time::Instant::now();
         }
 
-        // Windows SMTC needs the UI thread to pump messages (Tauri does
-        // that for the real HWND). A short sleep keeps this thread polite.
-        std::thread::sleep(Duration::from_millis(150));
     }
 }
 
