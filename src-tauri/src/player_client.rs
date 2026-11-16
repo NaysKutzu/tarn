@@ -364,7 +364,21 @@ fn pick_aac(v: &Value, kind: Kind) -> Option<Stream> {
             }
         }
     }
-    let Cand { url, mime, duration, .. } = best?;
+    let Cand { url, mime, duration, br, .. } = best?;
+    // Some clients (visionOS) omit approxDurationMs. Fall back to the `dur`
+    // query param googlevideo URLs carry, then to clen / bitrate, so the seek
+    // bar and total time still show.
+    let duration = duration
+        .filter(|d| *d > 0.0)
+        .or_else(|| {
+            url_query(&url, "dur")
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|d| *d > 0.0)
+        })
+        .or_else(|| {
+            let clen = url_query(&url, "clen")?.parse::<f64>().ok()?;
+            (clen > 0.0 && br > 0).then(|| clen * 8.0 / br as f64)
+        });
     let expire = url_query(&url, "expire").and_then(|s| s.parse().ok());
     Some(Stream {
         url,
