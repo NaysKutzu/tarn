@@ -64,20 +64,25 @@ pub fn start(app: Arc<crate::App>, handle: AppHandle, hwnd: WindowHandle) {
     // route keys through MPRIS/SMTC (some compositors, unlocked HUDs).
     // Registered one-by-one: register_all is all-or-nothing, and on Linux
     // MediaPlayPause often has no scancode, which disabled every key.
+    // The same thread also owns the user's own global hotkeys: the hotkey
+    // event receiver is process-wide, so a second loop would steal events.
     let app_h = app.clone();
+    let handle_h = handle.clone();
     std::thread::Builder::new()
         .name("tarn-mediakeys".into())
         .spawn(move || {
+            #[allow(unused_mut)]
+            let mut media_keys = true;
             #[cfg(target_os = "linux")]
             {
                 // Give MPRIS time to register, then prefer it over key grabs.
                 std::thread::sleep(Duration::from_secs(4));
                 if MEDIA_SESSION_OK.load(std::sync::atomic::Ordering::Relaxed) {
                     eprintln!("media key shortcuts: skipped, MPRIS handles media keys");
-                    return;
+                    media_keys = false;
                 }
             }
-            if let Err(e) = run_global_hotkeys(app_h) {
+            if let Err(e) = run_global_hotkeys(app_h, handle_h, media_keys) {
                 eprintln!("media key shortcuts: {e}");
             }
         })
@@ -323,7 +328,96 @@ fn maybe_notify(app: &crate::App, t: &Track) {
     }
 }
 
-fn run_global_hotkeys(app: Arc<crate::App>) -> Result<(), String> {
+/// User-assigned global hotkeys: action name → accelerator (for example
+/// "Ctrl+Alt+KeyP"). Sent to the hotkey thread when settings change.
+static USER_KEYS: parking_lot::Mutex<Option<std::sync::mpsc::Sender<HotkeyMap>>> =
+    parking_lot::Mutex::new(None);
+/// "action: reason" for hotkeys that could not be registered.
+static HOTKEY_ERRORS: parking_lot::Mutex<Vec<String>> = parking_lot::Mutex::new(Vec::new());
+
+pub type HotkeyMap = std::collections::BTreeMap<String, String>;
+
+/// Actions a global hotkey can trigger.
+pub const HOTKEY_ACTIONS: &[&str] = &[
+    "play_pause",
+    "next",
+    "prev",
+    "seek_forward",
+    "seek_back",
+    "volume_up",
+    "volume_down",
+    "like",
+    "show_window",
+];
+
+/// Apply a new set of user global hotkeys (no-op until the thread runs;
+/// it reads the saved settings when it starts).
+pub fn set_user_hotkeys(map: HotkeyMap) {
+    if let Some(tx) = USER_KEYS.lock().as_ref() {
+        let _ = tx.send(map);
+    }
+}
+
+pub fn hotkey_errors() -> Vec<String> {
+    HOTKEY_ERRORS.lock().clone()
+}
+
+/// Parse "Ctrl+Alt+KeyP"-style accelerators (modifiers + a KeyboardEvent
+/// `code`). Empty means unassigned.
+pub fn parse_accel(s: &str) -> Result<Option<global_hotkey::hotkey::HotKey>, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    s.parse::<global_hotkey::hotkey::HotKey>()
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+fn run_action(app: &Arc<crate::App>, handle: &AppHandle, action: &str) {
+    use souvlaki::MediaControlEvent as E;
+    use tauri::{Emitter, Manager};
+    match action {
+        "play_pause" => dispatch(app, E::Toggle),
+        "next" => dispatch(app, E::Next),
+        "prev" => dispatch(app, E::Previous),
+        "seek_forward" | "seek_back" => {
+            let snap = app.player.snapshot();
+            let d = if action == "seek_forward" { 5.0 } else { -5.0 };
+            app.player.seek((snap.position + d).max(0.0));
+        }
+        "volume_up" | "volume_down" => {
+            let v = app.player.snapshot().volume;
+            let d = if action == "volume_up" { 0.05 } else { -0.05 };
+            app.player.set_volume((v + d).clamp(0.0, 1.0));
+        }
+        // The frontend owns like state (optimistic UI, local likes).
+        "like" => {
+            let _ = handle.emit("hotkey", "like");
+        }
+        "show_window" => {
+            if let Some(w) = handle.get_webview_window("main") {
+                let shown = w.is_visible().unwrap_or(false)
+                    && !w.is_minimized().unwrap_or(false)
+                    && w.is_focused().unwrap_or(false);
+                if shown {
+                    let _ = w.minimize();
+                } else {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn run_global_hotkeys(
+    app: Arc<crate::App>,
+    handle: AppHandle,
+    media_keys: bool,
+) -> Result<(), String> {
     use global_hotkey::hotkey::{Code, HotKey, Modifiers};
     use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
     use souvlaki::MediaControlEvent;
@@ -347,15 +441,19 @@ fn run_global_hotkeys(app: Arc<crate::App>) -> Result<(), String> {
         ("MediaPlay", play2),
         ("MediaPause", pause2),
     ];
-    for (name, key) in &named {
-        match manager.register(*key) {
-            Ok(()) => eprintln!("media key shortcuts: registered {name}"),
-            Err(e) => eprintln!("media key shortcuts: {name} failed: {e}"),
+    if media_keys {
+        for (name, key) in &named {
+            match manager.register(*key) {
+                Ok(()) => eprintln!("media key shortcuts: registered {name}"),
+                Err(e) => eprintln!("media key shortcuts: {name} failed: {e}"),
+            }
         }
     }
 
     let map = |id: u32| -> Option<MediaControlEvent> {
-        if id == play.id() || id == play2.id() {
+        if !media_keys {
+            None
+        } else if id == play.id() || id == play2.id() {
             Some(MediaControlEvent::Toggle)
         } else if id == pause2.id() {
             Some(MediaControlEvent::Pause)
@@ -370,61 +468,74 @@ fn run_global_hotkeys(app: Arc<crate::App>) -> Result<(), String> {
         }
     };
 
+    // User hotkeys: (hotkey, action), re-registered when settings change.
+    let mut user: Vec<(HotKey, String)> = Vec::new();
+    let apply_user = |user: &mut Vec<(HotKey, String)>, want: &HotkeyMap| {
+        for (k, _) in user.drain(..) {
+            let _ = manager.unregister(k);
+        }
+        let mut errors = Vec::new();
+        for (action, accel) in want {
+            if !HOTKEY_ACTIONS.contains(&action.as_str()) {
+                continue;
+            }
+            match parse_accel(accel) {
+                Ok(None) => {}
+                Ok(Some(k)) => match manager.register(k) {
+                    Ok(()) => {
+                        eprintln!("global hotkey: {accel} → {action}");
+                        user.push((k, action.clone()));
+                    }
+                    Err(e) => errors.push(format!("{action}: {e}")),
+                },
+                Err(e) => errors.push(format!("{action}: {e}")),
+            }
+        }
+        for e in &errors {
+            eprintln!("global hotkey: {e}");
+        }
+        *HOTKEY_ERRORS.lock() = errors;
+    };
+    let (cfg_tx, cfg_rx) = std::sync::mpsc::channel::<HotkeyMap>();
+    *USER_KEYS.lock() = Some(cfg_tx);
+    let initial = app.settings.lock().global_hotkeys.clone();
+    apply_user(&mut user, &initial);
+
     let rx = GlobalHotKeyEvent::receiver();
     let mut last = std::time::Instant::now() - Duration::from_secs(1);
-
-    #[cfg(windows)]
-    {
-        loop {
-            win_pump::pump();
-            while let Ok(ev) = rx.try_recv() {
-                if ev.state != HotKeyState::Pressed {
-                    continue;
-                }
-                let Some(cmd) = map(ev.id) else {
-                    eprintln!("media key shortcuts: unknown id {}", ev.id);
-                    continue;
-                };
-                let now = std::time::Instant::now();
-                if now.duration_since(last) < Duration::from_millis(250) {
-                    eprintln!("media key: debounce skip {cmd:?}");
-                    continue;
-                }
-                last = now;
-                eprintln!("media key (global): {cmd:?}");
-                dispatch(&app, cmd);
-            }
-            std::thread::sleep(Duration::from_millis(8));
+    loop {
+        #[cfg(windows)]
+        win_pump::pump();
+        while let Ok(want) = cfg_rx.try_recv() {
+            apply_user(&mut user, &want);
         }
-    }
-
-    #[cfg(not(windows))]
-    {
-        for ev in rx.iter() {
-            if ev.state != HotKeyState::Pressed {
-                continue;
-            }
-            let Some(cmd) = map(ev.id) else {
-                continue;
-            };
-            let now = std::time::Instant::now();
-            if now.duration_since(last) < Duration::from_millis(250) {
-                continue;
-            }
+        #[cfg(windows)]
+        let got = rx.try_recv().ok();
+        #[cfg(not(windows))]
+        let got = rx.recv_timeout(Duration::from_millis(150)).ok();
+        let Some(ev) = got else {
+            #[cfg(windows)]
+            std::thread::sleep(Duration::from_millis(8));
+            continue;
+        };
+        if ev.state != HotKeyState::Pressed {
+            continue;
+        }
+        let now = std::time::Instant::now();
+        if now.duration_since(last) < Duration::from_millis(250) {
+            continue;
+        }
+        if let Some(cmd) = map(ev.id) {
             last = now;
             eprintln!("media key (global): {cmd:?}");
             dispatch(&app, cmd);
+        } else if let Some((_, action)) = user.iter().find(|(k, _)| k.id() == ev.id) {
+            last = now;
+            eprintln!("global hotkey: {action}");
+            run_action(&app, &handle, action);
         }
     }
-
-    // Keep the manager alive for the lifetime of the receiver loop.
-    #[allow(unreachable_code)]
-    {
-        drop(manager);
-        Ok(())
-    }
 }
-
 
 /// Create and attach SMTC on the calling thread (must pump messages -
 /// Tauri's UI thread does). MediaControls stays on that thread; a
@@ -778,5 +889,31 @@ mod win_pump {
                 DispatchMessageW(&msg);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_frontend_accelerators() {
+        for a in [
+            "Ctrl+Alt+KeyP",
+            "Shift+ArrowRight",
+            "Cmd+Shift+Digit1",
+            "F9",
+            "Ctrl+Space",
+            "Alt+Comma",
+            "Ctrl+Shift+MediaPlayPause",
+        ] {
+            assert!(matches!(parse_accel(a), Ok(Some(_))), "{a}");
+        }
+        assert!(matches!(parse_accel(""), Ok(None)));
+        assert!(parse_accel("Ctrl+Nope").is_err());
+        // Same combo, same id: lookup by id must line up with registration.
+        let a = parse_accel("Ctrl+Alt+KeyP").unwrap().unwrap();
+        let b = parse_accel("ctrl+alt+keyp").unwrap().unwrap();
+        assert_eq!(a.id(), b.id());
     }
 }

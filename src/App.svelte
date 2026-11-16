@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Shortcuts from './lib/components/Shortcuts.svelte';
+  import { appCombo, actionFor, appShortcuts } from './lib/shortcuts';
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -109,7 +111,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], shortcuts: {}, global_hotkeys: {}, ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -272,6 +274,9 @@
       recents = localRecents();
       try {
         player = await api.state();
+        unsubs.push(await listen<string>('hotkey', (e) => {
+          if (e.payload === 'like' && player.track) void toggleLike();
+        }));
         unsubs.push(await listen<string>('toast', (e) => {
           if (e.payload) toast(String(e.payload), 'info', 3600);
         }));
@@ -291,6 +296,8 @@
           settings.eq_bands = [0, 0, 0, 0, 0];
         }
         settings.eq_enabled = !!settings.eq_enabled;
+        settings.shortcuts ??= {};
+        settings.global_hotkeys ??= {};
         if (settings.crossfade_manual == null) settings.crossfade_manual = true;
         if (settings.cache_max_mb == null || Number.isNaN(Number(settings.cache_max_mb))) {
           settings.cache_max_mb = 1024;
@@ -390,7 +397,9 @@
     const keys = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable;
-      if (e.key === '/' && !typing) {
+      const combo = appCombo(e);
+      const action = combo ? actionFor(appShortcuts(settings.shortcuts), combo) : null;
+      if (action === 'search' && !typing) {
         e.preventDefault();
         go({ id: 'search' });
         queueMicrotask(() => document.getElementById('q')?.focus());
@@ -416,17 +425,27 @@
         else goFwd();
         return;
       }
-      if (e.key === ' ' || e.code === 'MediaPlayPause') {
+      if (action === 'play_pause' || e.code === 'MediaPlayPause') {
         e.preventDefault();
         api.toggle();
-      } else if (e.key === 'ArrowRight' && e.ctrlKey) {
+      } else if (action === 'next') {
+        e.preventDefault();
         api.next();
-      } else if (e.key === 'ArrowLeft' && e.ctrlKey) {
+      } else if (action === 'prev') {
+        e.preventDefault();
         api.prev();
-      } else if (e.key === 'ArrowRight') {
+      } else if (action === 'seek_forward') {
+        e.preventDefault();
         api.seek(player.position + 5);
-      } else if (e.key === 'ArrowLeft') {
+      } else if (action === 'seek_back') {
+        e.preventDefault();
         api.seek(Math.max(0, player.position - 5));
+      } else if (action === 'volume_up' || action === 'volume_down') {
+        e.preventDefault();
+        setVolumePrecise(player.volume + (action === 'volume_up' ? 0.05 : -0.05));
+      } else if (action === 'like') {
+        e.preventDefault();
+        void toggleLike();
       } else if (e.code === 'MediaTrackNext') {
         api.next();
       } else if (e.code === 'MediaTrackPrevious') {
@@ -1168,6 +1187,20 @@
     api.cycleRepeat()
       .then((r) => { player.repeat = r; })
       .catch((e) => { player.repeat = prev; fail(e, "Couldn't change repeat"); });
+  }
+
+  async function saveShortcuts(sc: Record<string, string>, gh: Record<string, string>) {
+    const globalChanged = JSON.stringify(gh) !== JSON.stringify(settings.global_hotkeys);
+    settings.shortcuts = sc;
+    settings.global_hotkeys = gh;
+    await api.setSettings(settings);
+    if (!globalChanged) return;
+    // Registration happens on the hotkey thread; give it a moment.
+    await new Promise((r) => setTimeout(r, 400));
+    try {
+      const errs = await api.hotkeyErrors();
+      if (errs.length) toast(`Couldn't register ${errs.map((e) => e.split(':')[0].replace(/_/g, ' ')).join(', ')} - try another combo`, 'error', 4200);
+    } catch {}
   }
 
   function setVolumePrecise(v: number) {
@@ -2400,6 +2433,13 @@
             <Toggle bind:checked={settings.discord_presence} label="Discord presence" onchange={() => api.setSettings(settings)} />
           </div>
           <Scrobbling onChange={() => scrobbler.reload()} />
+          <Shortcuts
+            shortcuts={settings.shortcuts}
+            globalHotkeys={settings.global_hotkeys}
+            desktop={!/Android|iPhone|iPad/i.test(navigator.userAgent)}
+            mac={isMac}
+            onChange={(sc, gh) => { void saveShortcuts(sc, gh); }}
+          />
           <div class="set-row">
             <span class="lb"><Hi icon={Radio02Icon} size={20} /> Autoplay
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Continue with similar music when the queue ends</span>

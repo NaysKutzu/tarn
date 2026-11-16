@@ -61,6 +61,8 @@ export const api = {
   setSettings: (settings: Settings) => invoke<void>('set_settings', { settings }),
   prefetch: (id: string) => { void invoke<void>('prefetch', { id }); },
   cacheStats: () => invoke<[number, number]>('cache_stats'),
+  /** Global hotkeys that failed to register ("action: reason"). */
+  hotkeyErrors: () => invoke<string[]>('hotkey_errors'),
   savedSession: () => invoke<SavedSession | null>('saved_session'),
   rememberUi: (ui: UiSession) => invoke<void>('remember_ui', { ui }),
   netState: () => invoke<NetState>('net_state'),

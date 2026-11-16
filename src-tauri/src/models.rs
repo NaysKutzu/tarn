@@ -336,6 +336,14 @@ pub struct Settings {
     /// Seconds the new track takes to glide back to its own tempo.
     #[serde(default = "default_bpm_return")]
     pub bpm_return_seconds: f64,
+    /// In-app keyboard shortcuts that differ from the defaults: action →
+    /// key combo ("" = unassigned). Interpreted by the frontend.
+    #[serde(default)]
+    pub shortcuts: std::collections::BTreeMap<String, String>,
+    /// System-wide hotkeys (desktop): action → accelerator such as
+    /// "Ctrl+Alt+KeyP". None by default.
+    #[serde(default)]
+    pub global_hotkeys: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -367,6 +375,8 @@ impl Default for Settings {
             bpm_max_change: default_bpm_max(),
             bpm_beat_align: true,
             bpm_return_seconds: default_bpm_return(),
+            shortcuts: Default::default(),
+            global_hotkeys: Default::default(),
         }
     }
 }
