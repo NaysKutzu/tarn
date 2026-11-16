@@ -339,6 +339,29 @@ pub struct Settings {
     /// Keep the pitch when BPM matching changes the tempo (time stretch).
     #[serde(default)]
     pub bpm_keylock: bool,
+    /// In-app keyboard shortcuts that differ from the defaults: action →
+    /// key combo ("" = unassigned). Interpreted by the frontend.
+    #[serde(default)]
+    pub shortcuts: std::collections::BTreeMap<String, String>,
+    /// System-wide hotkeys (desktop): action → accelerator such as
+    /// "Ctrl+Alt+KeyP". None by default.
+    #[serde(default)]
+    pub global_hotkeys: std::collections::BTreeMap<String, String>,
+    /// Show an icon in the system tray / menu bar (desktop).
+    #[serde(default)]
+    pub tray_icon: bool,
+    /// Closing the main window hides it to the tray instead of quitting.
+    #[serde(default)]
+    pub close_to_tray: bool,
+    /// Play every track at about the same loudness (measured per track).
+    #[serde(default)]
+    pub normalize: bool,
+    /// Loudness target for normalization, LUFS.
+    #[serde(default = "default_normalize_target")]
+    pub normalize_target: f32,
+    /// Reorder upcoming tracks by tempo so transitions flow (no shuffle).
+    #[serde(default)]
+    pub auto_dj: bool,
 }
 
 impl Default for Settings {
@@ -371,6 +394,13 @@ impl Default for Settings {
             bpm_beat_align: true,
             bpm_return_seconds: default_bpm_return(),
             bpm_keylock: false,
+            shortcuts: Default::default(),
+            global_hotkeys: Default::default(),
+            tray_icon: false,
+            close_to_tray: false,
+            normalize: false,
+            normalize_target: default_normalize_target(),
+            auto_dj: false,
         }
     }
 }
@@ -418,6 +448,9 @@ fn default_filter() -> String {
 }
 fn default_bpm_max() -> f64 {
     6.0
+}
+fn default_normalize_target() -> f32 {
+    -14.0
 }
 fn default_bpm_return() -> f64 {
     8.0

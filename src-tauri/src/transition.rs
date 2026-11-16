@@ -194,6 +194,21 @@ impl Biquad {
     pub fn set_highpass(&mut self, fc: f32, sr: f32) {
         self.set(fc, sr, true);
     }
+    /// RBJ high shelf (S = 1) with `gain_db` above `fc`.
+    pub fn set_high_shelf(&mut self, fc: f32, gain_db: f32, sr: f32) {
+        let fc = fc.clamp(10.0, sr * 0.45);
+        let a = 10f32.powf(gain_db / 40.0);
+        let w0 = 2.0 * std::f32::consts::PI * fc / sr;
+        let (s, c) = w0.sin_cos();
+        let alpha = s / 2.0 * std::f32::consts::SQRT_2;
+        let sa = 2.0 * a.sqrt() * alpha;
+        let a0 = (a + 1.0) - (a - 1.0) * c + sa;
+        self.b0 = a * ((a + 1.0) + (a - 1.0) * c + sa) / a0;
+        self.b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * c) / a0;
+        self.b2 = a * ((a + 1.0) + (a - 1.0) * c - sa) / a0;
+        self.a1 = 2.0 * ((a - 1.0) - (a + 1.0) * c) / a0;
+        self.a2 = ((a + 1.0) - (a - 1.0) * c - sa) / a0;
+    }
     fn set(&mut self, fc: f32, sr: f32, high: bool) {
         let fc = fc.clamp(10.0, sr * 0.45);
         let w0 = 2.0 * std::f32::consts::PI * fc / sr;

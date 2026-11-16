@@ -10,10 +10,14 @@ mod player_client;
 mod login;
 mod mix;
 mod transition;
+mod analysis;
+mod autodj;
 #[cfg(desktop)]
 mod mpris;
 #[cfg(desktop)]
 mod discord;
+#[cfg(desktop)]
+mod tray;
 // Phones: system media session / Discord presence are desktop-only for now.
 #[cfg(target_os = "android")]
 mod android_media;
@@ -98,6 +102,8 @@ pub struct App {
     net_down: std::sync::atomic::AtomicBool,
     /// Earliest time a failed blend may be retried while offline.
     blend_retry: Mutex<Option<std::time::Instant>>,
+    /// Per-track loudness / beat-grid cache.
+    pub analysis: std::sync::Arc<analysis::Analyzer>,
 }
 
 impl App {
@@ -134,6 +140,14 @@ impl App {
         );
         player.set_eq(settings.eq_bands, settings.eq_enabled);
         player.set_transition(settings.transition());
+        let analysis = analysis::Analyzer::open(store.data_dir());
+        player.set_analyzer(analysis.clone());
+        {
+            let p = player.clone();
+            analysis.on_done(Box::new(move |id, _| p.analysis_ready(id)));
+        }
+        player.set_normalize(settings.normalize, settings.normalize_target);
+        player.set_auto_dj(settings.auto_dj);
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata - audio is armed later.
             player.set_volume(sess.volume);
@@ -162,6 +176,7 @@ impl App {
             offline,
             net_down: std::sync::atomic::AtomicBool::new(false),
             blend_retry: Mutex::new(None),
+            analysis,
         })
     }
 
@@ -799,6 +814,7 @@ fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
                 break;
             }
             ytm.prefetch(id).await;
+            analyze_prefetched(&ytm, &player, id);
         }
         // Grow the queue before the last song ends so Up next / blend see it.
         if remaining < 3 && player.snapshot().autoplay {
@@ -811,6 +827,30 @@ fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
             }
         }
     });
+}
+
+/// Measure a fully cached track in the background (loudness / beat grid)
+/// so it is ready before it plays. No-op unless a feature needs it.
+pub(crate) fn analyze_prefetched(ytm: &std::sync::Arc<Ytm>, player: &Player, id: &str) {
+    if !player.wants_analysis() || !ytm.cache.has_complete(id) {
+        return;
+    }
+    let (ytm, player, id) = (ytm.clone(), player.clone(), id.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(bytes) = ytm.cache.read_complete(&id) {
+            player.analyze(&id, crate::decode::GrowingBody::from_complete(bytes));
+        }
+    });
+}
+
+#[tauri::command]
+fn analysis_count(app: State<Arc<App>>) -> usize {
+    app.analysis.len()
+}
+
+#[tauri::command]
+fn clear_analysis(app: State<Arc<App>>) {
+    app.analysis.clear();
 }
 
 #[tauri::command]
@@ -1335,6 +1375,15 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     settings.eq_bands = bands;
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
     app.player.set_transition(settings.transition());
+    #[cfg(desktop)]
+    if app.settings.lock().global_hotkeys != settings.global_hotkeys {
+        mpris::set_user_hotkeys(settings.global_hotkeys.clone());
+    }
+    #[cfg(desktop)]
+    tray::apply(&handle, settings.tray_icon);
+    app.player
+        .set_normalize(settings.normalize, settings.normalize_target);
+    app.player.set_auto_dj(settings.auto_dj);
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
     if app.refresh_offline() {
@@ -1485,6 +1534,19 @@ fn saved_session(app: State<Arc<App>>) -> Option<persist::SavedSession> {
 #[tauri::command]
 fn save_session_now(handle: AppHandle) {
     persist::save(&handle);
+}
+
+/// Global hotkeys that could not be registered ("action: reason").
+#[tauri::command]
+fn hotkey_errors() -> Vec<String> {
+    #[cfg(desktop)]
+    {
+        mpris::hotkey_errors()
+    }
+    #[cfg(mobile)]
+    {
+        Vec::new()
+    }
 }
 
 #[tauri::command]
@@ -1729,6 +1791,8 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
                 last_queue_sig = Some(sig);
                 last_queue_sent = std::time::Instant::now();
             }
+            #[cfg(desktop)]
+            tray::update(&handle, &st);
             let _ = handle.emit("player", st);
             if last_save.elapsed() >= std::time::Duration::from_secs(3) {
                 persist::save(&handle);
@@ -1861,6 +1925,7 @@ pub fn run() {
                 crate::ytdlp::maybe_update().await;
             });
             emit_loop(handle.clone(), app.clone());
+            autodj::start(app.clone());
             net_loop(handle.clone(), app.clone());
             {
                 let h = handle.clone();
@@ -1874,6 +1939,8 @@ pub fn run() {
                     emit,
                 );
             }
+            #[cfg(desktop)]
+            tray::apply(&handle, app.settings.lock().tray_icon);
             let hwnd = main_hwnd(tauri_app);
             mpris::start(app.clone(), handle.clone(), hwnd);
             discord::start(app.clone());
@@ -1942,7 +2009,10 @@ pub fn run() {
             set_settings,
             extract_cookie_names,
             prefetch,
+            analysis_count,
+            clear_analysis,
             cache_stats,
+            hotkey_errors,
             remember_ui,
             saved_session,
             save_session_now,
@@ -1953,6 +2023,21 @@ pub fn run() {
             use tauri::{RunEvent, WindowEvent};
             match event {
                 RunEvent::WindowEvent { label, event, .. } if label == "main" => {
+                    // Close to tray: hide instead of quitting.
+                    #[cfg(desktop)]
+                    if let WindowEvent::CloseRequested { api, .. } = &event {
+                        let to_tray = handle
+                            .try_state::<Arc<App>>()
+                            .is_some_and(|a| a.settings.lock().close_to_tray);
+                        if to_tray && tray::active(handle) {
+                            api.prevent_close();
+                            persist::save(handle);
+                            if let Some(w) = handle.get_webview_window("main") {
+                                let _ = w.hide();
+                            }
+                            return;
+                        }
+                    }
                     if matches!(
                         event,
                         WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
@@ -1963,6 +2048,9 @@ pub fn run() {
                 RunEvent::ExitRequested { .. } | RunEvent::Exit => {
                     persist::save(handle);
                 }
+                // macOS: clicking the Dock icon brings a hidden window back.
+                #[cfg(target_os = "macos")]
+                RunEvent::Reopen { .. } => tray::show_window(handle),
                 _ => {}
             }
         });
