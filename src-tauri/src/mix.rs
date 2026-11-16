@@ -651,6 +651,10 @@ impl MixerSource {
             if g.incoming.is_some() {
                 // Gapless: incoming takes over with no overlap and no silence.
                 g.promote_incoming();
+                // The new track starts at 0:00. Without this the clock kept the
+                // old track's elapsed time, the new one looked finished at once
+                // and the player chained through the queue (song spam).
+                self.samples.store(0, Ordering::Relaxed);
                 mixed = b;
                 a_alive = b_alive;
             } else if a_stall.is_some() {

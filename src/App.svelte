@@ -18,6 +18,10 @@
   import ShelfRow from './lib/components/ShelfRow.svelte';
   import TrackTable from './lib/components/TrackTable.svelte';
   import ContextMenu from './lib/components/ContextMenu.svelte';
+  import QueueList from './lib/components/QueueList.svelte';
+  import FilterBar from './lib/components/FilterBar.svelte';
+  import { off, initOffline, refreshOffline, sourceInfo, fmtBytes } from './lib/offline.svelte';
+  import { filterTracks, filterNamed } from './lib/filter';
   import Slider from './lib/components/Slider.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
   import Dropdown from './lib/components/Dropdown.svelte';
@@ -36,6 +40,7 @@
     Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon,
     Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon,
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
+    Download04Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
   } from './lib/icons';
 
   const isMac =
@@ -96,7 +101,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -111,6 +116,54 @@
     shuffle: false, repeat: 'off', liked: false, disliked: false, autoplay: true,
   });
   let loading = $state(false);
+  // Local "find in this list" filters. Cleared whenever the view changes.
+  let filterQ = $state('');
+  let sideQ = $state('');
+  let fCollection = $derived(collection ? filterTracks(collection.tracks, filterQ) : []);
+  const LIKED_PREVIEW = 10;
+  let likedAll = $state(false);
+  let fLiked = $derived(filterTracks((library?.liked ?? []).filter((t) => !off.offline || off.playable.has(t.id)), filterQ));
+  let likedShown = $derived(likedAll ? fLiked : fLiked.slice(0, LIKED_PREVIEW));
+  let fPlaylists = $derived(filterNamed((library?.playlists ?? []).filter((p) => !off.offline || offSrcIds.has(p.id)), filterQ));
+  let fAlbums = $derived(filterNamed((library?.albums ?? []).filter((a) => !off.offline || offSrcIds.has(a.id)), filterQ, (a) => a.subtitle ?? ''));
+  let fArtists = $derived(off.offline ? [] : filterNamed(library?.artists ?? [], filterQ));
+  let fSide = $derived(filterNamed(library?.playlists ?? [], sideQ));
+  let fHistory = $derived(filterTracks(history ?? [], filterQ));
+  // ---- offline / downloads ----
+  const ONLINE_ONLY = new Set(['home', 'explore', 'search', 'charts', 'new-releases', 'genre']);
+  let dlTracks = $state<Track[]>([]);
+  let fDl = $derived(filterTracks(dlTracks, filterQ));
+  let confirmRm = $state<string | null>(null);
+  let colSourceId = $derived(
+    view.id === 'playlist' ? view.playlistId : view.id === 'album' ? view.albumId : null,
+  );
+  let colSrc = $derived(sourceInfo(colSourceId));
+  let dlBusy = $derived((off.status?.queued ?? 0) + (off.status?.active.length ?? 0) > 0);
+  let dlDone = $derived(
+    (off.status?.sources ?? []).reduce((n, s) => n + s.done, 0),
+  );
+  let dlTotal = $derived(
+    (off.status?.sources ?? []).reduce((n, s) => n + s.total, 0),
+  );
+  // Offline library: only what is on disk.
+  let offSrcIds = $derived(new Set((off.status?.sources ?? []).map((s) => s.id)));
+  let sidePlaylists = $derived(
+    off.offline ? fSide.filter((p) => offSrcIds.has(p.id)) : fSide,
+  );
+  $effect(() => {
+    void JSON.stringify(view);
+    filterQ = '';
+    confirmRm = null;
+  });
+  $effect(() => {
+    const m = off.mode;
+    if (settings.offline_mode !== m) settings.offline_mode = m;
+  });
+  // Keep the "Downloaded songs" list fresh while the Downloads page is open.
+  $effect(() => {
+    void off.status?.downloaded.length;
+    if (view.id === 'downloads') loadDownloads();
+  });
   let libLoading = $state(false);
   // True while `library` holds only the cached / sidebar-fast subset.
   let libPartial = $state(false);
@@ -214,6 +267,16 @@
         unsubs.push(await listen<string>('toast', (e) => {
           if (e.payload) toast(String(e.payload), 'info', 3600);
         }));
+        await initOffline((offline, was) => {
+          if (offline && !was) {
+            toast(off.mode ? 'Offline mode - only downloaded songs play' : "You're offline - downloaded music still plays", 'info', 4200);
+            if (ONLINE_ONLY.has(view.id)) go({ id: 'downloads' }, { replace: true });
+          } else if (!offline && was) {
+            toast('Back online', 'info', 2500);
+            if (auth.signed_in) loadLibrary({ retries: 1 });
+            if (view.id === 'home') loadHome();
+          }
+        });
         auth = await api.auth();
         settings = await api.settings();
         if (!Array.isArray(settings.eq_bands) || settings.eq_bands.length !== 5) {
@@ -316,6 +379,15 @@
         queueMicrotask(() => document.getElementById('q')?.focus());
         return;
       }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
+        const el = document.getElementById('filter-input');
+        if (el) {
+          e.preventDefault();
+          el.focus();
+          (el as HTMLInputElement).select();
+          return;
+        }
+      }
       if (typing) return;
       if ((e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) || e.key === 'BrowserBack' || e.key === 'BrowserForward') {
         e.preventDefault();
@@ -416,6 +488,7 @@
     if (v.id === 'charts') loadCharts();
     if (v.id === 'new-releases') loadReleases();
     if (v.id === 'history') loadHistory();
+    if (v.id === 'downloads') loadDownloads();
     if (v.id === 'search') queueMicrotask(() => document.getElementById('q')?.focus());
   }
 
@@ -437,6 +510,13 @@
   }
 
   function go(v: View, opts?: { replace?: boolean; scroll?: number }) {
+    if (off.offline) {
+      if (ONLINE_ONLY.has(v.id)) v = { id: 'downloads' };
+      else if (v.id === 'artist') {
+        toast('Artist pages need a connection', 'info', 2600);
+        return;
+      }
+    }
     if (!opts?.replace && !navLock && viewKey(v) !== viewKey(view)) {
       backStack = [...backStack, snapshot()];
       fwdStack = [];
@@ -483,6 +563,11 @@
     }
   }
   async function loadHome(params?: string | null) {
+    if (off.offline) {
+      loading = false;
+      if (view.id === 'home') go({ id: 'downloads' }, { replace: true });
+      return;
+    }
     const quiet = !params && !!home;
     if (!quiet) loading = true;
     try {
@@ -496,6 +581,7 @@
     }
   }
   async function loadExplore() {
+    if (off.offline) return;
     loading = true;
     try { explore = await api.explore(); } catch (e) { fail(e, "Couldn't load Explore"); } finally { loading = false; }
   }
@@ -503,13 +589,89 @@
     loading = true; artist = null;
     try { artist = await api.artist(id); } catch (e) { fail(e, "Couldn't load this artist"); } finally { loading = false; }
   }
+  /** Playlist/album with a downloaded copy as the offline (or failure) fallback. */
+  async function openCollection(kind: 'album' | 'playlist', id: string): Promise<Collection> {
+    const local = () => api.offlineCollection(id).catch(() => null);
+    if (off.offline) {
+      const c = await local();
+      if (c) return c;
+      throw new Error("Not downloaded - available when you're back online");
+    }
+    try {
+      return kind === 'album' ? await api.album(id) : await api.playlist(id);
+    } catch (e) {
+      const c = await local();
+      if (c) return c;
+      throw e;
+    }
+  }
+  async function toggleDownload() {
+    const c = collection;
+    const id = colSourceId;
+    if (!c || !id) return;
+    const have = sourceInfo(id);
+    try {
+      if (have) {
+        if (have.done < have.total) {
+          await api.offlineCancel(id);
+          toast('Download cancelled', 'info', 2200);
+        } else if (confirmRm === id) {
+          await api.offlineRemove(id);
+          confirmRm = null;
+          toast('Download removed', 'info', 2200);
+        } else {
+          // Second tap on a finished download removes it.
+          confirmRm = id;
+          toast('Tap again to remove this download', 'info', 2400);
+          setTimeout(() => { if (confirmRm === id) confirmRm = null; }, 3000);
+        }
+      } else {
+        const tracks = c.tracks.filter((t) => t.id);
+        if (!tracks.length) return;
+        await api.offlineDownload(
+          { id, kind: c.kind === 'album' ? 'album' : 'playlist', name: c.name, cover: c.cover ?? null, subtitle: c.author || artistsLine(c.artists) || null },
+          tracks,
+        );
+        toast(`Downloading ${tracks.length} songs`, 'info', 2600);
+      }
+      refreshOffline();
+    } catch (e) { fail(e, "Couldn't change this download"); }
+  }
+  async function toggleLikedDownload() {
+    const have = sourceInfo('liked');
+    try {
+      if (have && have.done < have.total) {
+        await api.offlineCancel('liked');
+        toast('Download cancelled', 'info', 2200);
+      } else if (have) {
+        if (confirmRm === 'liked') {
+          await api.offlineRemove('liked');
+          confirmRm = null;
+          toast('Download removed', 'info', 2200);
+        } else {
+          confirmRm = 'liked';
+          toast('Tap again to remove downloaded liked songs', 'info', 2400);
+          setTimeout(() => { if (confirmRm === 'liked') confirmRm = null; }, 3000);
+        }
+      } else {
+        const tracks = (library?.liked ?? []).filter((t) => t.id);
+        if (!tracks.length) return;
+        await api.offlineDownload({ id: 'liked', kind: 'liked', name: 'Liked songs', cover: null, subtitle: null }, tracks);
+        toast(`Downloading ${tracks.length} liked songs`, 'info', 2600);
+      }
+      refreshOffline();
+    } catch (e) { fail(e, "Couldn't change this download"); }
+  }
+  async function loadDownloads() {
+    try { dlTracks = await api.offlineTracks(); } catch { dlTracks = []; }
+  }
   async function loadAlbum(id: string) {
     loading = true; collection = null;
-    try { collection = await api.album(id); } catch (e) { fail(e, "Couldn't load this album"); } finally { loading = false; }
+    try { collection = await openCollection('album', id); } catch (e) { fail(e, "Couldn't load this album"); } finally { loading = false; }
   }
   async function loadPlaylist(id: string) {
     loading = true; collection = null;
-    try { collection = await api.playlist(id); } catch (e) { fail(e, "Couldn't load this playlist"); } finally { loading = false; }
+    try { collection = await openCollection('playlist', id); } catch (e) { fail(e, "Couldn't load this playlist"); } finally { loading = false; }
   }
   async function loadGenre(id: string) {
     loading = true; genre = null;
@@ -546,6 +708,15 @@
         } catch {}
       }
     }
+    if (off.offline) {
+      // No network: whatever was cached on disk is the library.
+      if (!library) {
+        try { library = await api.libraryCached(); } catch {}
+      }
+      libLoading = false;
+      libPartial = false;
+      return;
+    }
     const retries = opts?.retries ?? 3;
     try {
       let last = await api.library();
@@ -575,6 +746,7 @@
   }
   async function loadHistory() {
     loading = true;
+    if (off.offline) { history = []; loading = false; return; }
     try { history = await api.history(); } catch (e) { fail(e, "Couldn't load history"); history = []; } finally { loading = false; }
   }
 
@@ -649,11 +821,11 @@
         tracks = a.tracks;
         cover = a.cover ?? cover;
       } else if (item.kind === 'album') {
-        const c = await api.album(item.id || item.browse_id || '');
+        const c = await openCollection('album', item.id || item.browse_id || '');
         tracks = c.tracks;
         cover = c.cover ?? cover;
       } else if (item.kind === 'playlist') {
-        const c = await api.playlist(item.id);
+        const c = await openCollection('playlist', item.id);
         tracks = c.tracks;
         cover = c.cover ?? cover;
       } else if (item.kind === 'track' || item.kind === 'video') {
@@ -872,7 +1044,7 @@
       lyricsOk = false;
       lyricsReady = false;
       const req = id;
-      api.lyrics(id).then((l) => {
+      (off.offline ? Promise.reject(new Error('offline')) : api.lyrics(id)).then((l) => {
         if (lyricsFor !== req) return;
         lyrics = l;
         lyricsOk = !!(l?.lines?.length);
@@ -888,7 +1060,7 @@
     if (relatedOn && relatedFor !== id) {
       relatedFor = id;
       const req = id;
-      api.related(id).then((r) => {
+      (off.offline ? Promise.reject(new Error('offline')) : api.related(id)).then((r) => {
         if (relatedFor !== req) return;
         related = { ...r, tracks: dedupeTracks(r.tracks), versions: dedupeTracks(r.versions || []) };
       }).catch(() => {
@@ -989,13 +1161,6 @@
     npLyricsMode && lyricsOk && !!lyrics?.synced && (lyrics?.lines.length ?? 0) > 0,
   );
   let npQueueOn = $derived(expanded && queueOn);
-  let npQueueTracks = $derived(
-    npQueueOn
-      ? player.queue
-          .map((t, i) => ({ t, i }))
-          .filter(({ i }) => i >= player.index)
-      : [],
-  );
   let npLyricsEl: HTMLDivElement | null = $state(null);
 
   $effect(() => {
@@ -1228,9 +1393,13 @@
       <button class="nav-item {navOn('library') || view.id === 'history' ? 'on' : ''}" onclick={() => go({ id: 'library' })} type="button">
         <span class="ic"><Hi icon={LibraryIcon} size={24} /></span> Library
       </button>
+      <button class="nav-item {navOn('downloads') ? 'on' : ''}" onclick={() => go({ id: 'downloads' })} type="button">
+        <span class="ic"><Hi icon={Download04Icon} size={24} /></span> Downloads
+        {#if dlBusy}<span class="nav-dot" title="Downloading"></span>{/if}
+      </button>
     </nav>
     <div class="side-scroll">
-      {#if auth.signed_in && !library?.playlists?.length && (libLoading || libPartial || !library)}
+      {#if auth.signed_in && !off.offline && !library?.playlists?.length && (libLoading || libPartial || !library)}
         <div class="side-label">Playlists</div>
         {#each { length: 7 } as _, i (i)}
           <div class="side-pl-sk" aria-hidden="true">
@@ -1238,9 +1407,12 @@
             <div class="shimmer sk-ln" style="width:{[70, 55, 80, 62, 48, 74, 58][i]}%"></div>
           </div>
         {/each}
-      {:else if auth.signed_in && library?.playlists?.length}
+      {:else if auth.signed_in && (sidePlaylists.length > 0 || sideQ || (!off.offline && library?.playlists?.length))}
         <div class="side-label">Playlists</div>
-        {#each library.playlists as p, i (p.id)}
+        {#if (library?.playlists?.length ?? 0) > 7}
+          <FilterBar compact id="side-filter" bind:value={sideQ} placeholder="Filter playlists" />
+        {/if}
+        {#each sidePlaylists as p, i (p.id)}
           <button class="side-pl pl-in" style="--i:{Math.min(i, 12)}" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
             <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={36} alt="" />
             <span class="clamp one">{p.name}</span>
@@ -1278,6 +1450,15 @@
 
   <main class="main {sidePanelOn && !expanded ? 'with-panel' : ''}" class:is-hidden={expanded} bind:this={mainEl}>
     <div class="page">
+      {#if off.offline}
+        <div class="off-banner" role="status">
+          <Hi icon={WifiOff01Icon} size={18} />
+          <span>{off.mode ? 'Offline mode is on' : "You're offline"} - only downloaded songs play.</span>
+          {#if off.mode}
+            <button class="btn ghost sm" type="button" onclick={() => api.setOfflineMode(false)}>Go online</button>
+          {/if}
+        </div>
+      {/if}
 
       {#if view.id === 'home'}
         {#if home?.chips?.length}
@@ -1522,18 +1703,19 @@
           <div class="tabs" style="padding-top:0">
             <button class="tab on" type="button" onclick={() => go({ id: 'history' })}><Hi icon={HistoryIcon} size={18} /> History</button>
           </div>
-          {#if library?.liked?.length}
-            <h2 class="shelf-title" style="margin-bottom:12px">Liked</h2>
-            <TrackTable tracks={library.liked} currentId={player.track?.id} playing={player.playing}
-              onPlay={(t, i) => playTracks(library!.liked, i)}
-              onArtist={(id, n) => goArtist(id, n)}
-              onAlbum={(id) => go({ id: 'album', albumId: id })}
-              onContext={(e, t) => contextTrack(e, t)} />
+          {#if library && (library.liked.length || library.playlists.length || library.albums.length || library.artists.length)}
+            <div class="lib-filter">
+              <FilterBar bind:value={filterQ} placeholder="Search your library  (Ctrl+F)"
+                count={`${fLiked.length + fPlaylists.length + fAlbums.length + fArtists.length} results`} />
+            </div>
           {/if}
-          {#if library?.playlists?.length}
+          {#if filterQ && !fLiked.length && !fPlaylists.length && !fAlbums.length && !fArtists.length && library}
+            <div class="no-match">Nothing in your library matches “{filterQ}”</div>
+          {/if}
+          {#if fPlaylists.length}
             <h2 class="shelf-title" style="margin:28px 0 12px">Playlists</h2>
             <div class="row">
-              {#each library.playlists as p}
+              {#each fPlaylists as p (p.id)}
                 <div class="card" role="group">
                   <button class="art" type="button" title="Play" onclick={() => playPlaylistId(p.id, p.cover, p.covers)}>
                     <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={152} alt="" />
@@ -1547,10 +1729,10 @@
               {/each}
             </div>
           {/if}
-          {#if library?.albums?.length}
+          {#if fAlbums.length}
             <h2 class="shelf-title" style="margin:28px 0 12px">Albums</h2>
             <div class="row">
-              {#each library.albums as a}
+              {#each fAlbums as a (a.id)}
                 <div class="card" role="group">
                   <button class="art" type="button" title="Play" onclick={() => playAlbumId(a.id, a.cover)}>
                     <Cover src={a.cover} size={152} alt="" />
@@ -1564,10 +1746,10 @@
               {/each}
             </div>
           {/if}
-          {#if library?.artists?.length}
+          {#if fArtists.length}
             <h2 class="shelf-title" style="margin:28px 0 12px">Artists</h2>
             <div class="row">
-              {#each library.artists as a}
+              {#each fArtists as a (a.id)}
                 <div class="card artist" role="group">
                   <button class="art" type="button" title="Play" onclick={() => playArtistId(a.id, a.cover)}>
                     <Cover src={a.cover} size={132} round alt="" />
@@ -1580,13 +1762,131 @@
               {/each}
             </div>
           {/if}
+          {#if fLiked.length}
+            <div class="liked-h" style="margin-top:28px">
+              <h2 class="shelf-title" style="margin:0">Liked{filterQ ? ` · ${fLiked.length} of ${library?.liked.length}` : ''}</h2>
+              {#if !off.offline || sourceInfo('liked')}
+                {@const ls = sourceInfo('liked')}
+                <button class="btn ghost sm" type="button" onclick={() => toggleLikedDownload()}>
+                  {#if !ls}<Hi icon={Download04Icon} size={16} /> Download
+                  {:else if ls.done >= ls.total}<Hi icon={CheckmarkCircle02Icon} size={16} /> Downloaded
+                  {:else}<Hi icon={Cancel01Icon} size={16} /> Cancel · {ls.done}/{ls.total}{/if}
+                </button>
+              {/if}
+            </div>
+            <TrackTable tracks={likedShown} currentId={player.track?.id} playing={player.playing}
+              onPlay={(t, i) => playTracks(fLiked, i)}
+              onArtist={(id, n) => goArtist(id, n)}
+              onAlbum={(id) => go({ id: 'album', albumId: id })}
+              onContext={(e, t) => contextTrack(e, t)} />
+            {#if fLiked.length > LIKED_PREVIEW}
+              <button class="btn ghost more-btn" type="button" onclick={() => (likedAll = !likedAll)}>
+                {likedAll ? 'Show fewer' : `Show all ${fLiked.length} songs`}
+              </button>
+            {/if}
+          {/if}
+        {/if}
+
+      {:else if view.id === 'downloads'}
+        <h1 class="page-title">Downloads</h1>
+        <p class="dl-sub">
+          {#if off.status?.sources.length}
+            {dlDone} of {dlTotal} songs on this device · {fmtBytes(off.status?.bytes ?? 0)}
+          {:else}
+            Download playlists, albums and your liked songs to listen without a connection.
+          {/if}
+        </p>
+        {#if dlBusy || (off.status?.failed ?? 0) > 0}
+          <div class="dl-card">
+            <div class="dl-card-top">
+              <div class="dl-card-t">
+                {#if dlBusy}
+                  {off.status?.paused ? 'Paused' : off.offline ? 'Waiting for a connection' : 'Downloading'}
+                  · {(off.status?.queued ?? 0) + (off.status?.active.length ?? 0)} left
+                {:else}
+                  {off.status?.failed} couldn't be downloaded
+                {/if}
+              </div>
+              <div class="dl-card-a">
+                {#if dlBusy}
+                  <button class="btn ghost sm" type="button" onclick={() => api.offlinePause(!off.status?.paused)}>{off.status?.paused ? 'Resume' : 'Pause'}</button>
+                  <button class="btn ghost sm" type="button" onclick={() => { api.offlineCancel(); toast('Downloads cancelled', 'info', 2200); }}>Cancel all</button>
+                {/if}
+                {#if (off.status?.failed ?? 0) > 0}
+                  <button class="btn ghost sm" type="button" onclick={() => api.offlineRetry()}>Retry failed</button>
+                {/if}
+              </div>
+            </div>
+            {#if off.status?.active.length}
+              <div class="dl-now clamp one">{off.status.active.map((a) => a.title).filter(Boolean).join(' · ')}</div>
+            {/if}
+            <div class="dl-bar"><span style="width:{dlTotal ? Math.round((dlDone / dlTotal) * 100) : 0}%"></span></div>
+          </div>
+        {/if}
+        {#if off.status?.sources.length}
+          <h2 class="shelf-title" style="margin:20px 0 12px">Collections</h2>
+          <div class="row">
+            {#each off.status.sources as src (src.id)}
+              <div class="card" role="group">
+                <button class="art" type="button" title="Play" onclick={async () => {
+                  const c = await api.offlineCollection(src.id);
+                  if (c?.tracks.length) playTracks(c.tracks, 0, c.cover);
+                }}>
+                  {#if src.kind === 'liked'}
+                    <PlaylistCover id="LM" name={src.name} cover={null} covers={[]} size={152} alt="" />
+                  {:else}
+                    <Cover src={src.cover} size={152} alt="" />
+                  {/if}
+                  <span class="play-ov"><Hi icon={PlayIcon} size={36} /></span>
+                  {#if src.done < src.total && !src.failed}
+                    <span class="dl-chip">{src.done}/{src.total}</span>
+                  {:else if src.done >= src.total}
+                    <span class="dl-chip ok"><Hi icon={CheckmarkCircle02Icon} size={14} /></span>
+                  {:else}
+                    <span class="dl-chip warn">{src.done}/{src.total}</span>
+                  {/if}
+                </button>
+                <div class="c-a">
+                  <button class="c-open" type="button" onclick={() => go(src.kind === 'album' ? { id: 'album', albumId: src.id } : src.kind === 'liked' ? { id: 'library' } : { id: 'playlist', playlistId: src.id })}>
+                    <div class="title">{src.name}</div>
+                    <div class="sub">{src.kind === 'liked' ? 'Liked songs' : src.kind === 'album' ? 'Album' : 'Playlist'} · {src.total}</div>
+                  </button>
+                  {#if src.done < src.total}
+                    <button class="dl-rm show" type="button" title="Cancel download" onclick={() => api.offlineCancel(src.id)}>Cancel</button>
+                  {/if}
+                  <button class="dl-rm" class:armed={confirmRm === src.id} type="button" title="Remove download"
+                    onclick={() => { if (confirmRm === src.id) { api.offlineRemove(src.id); confirmRm = null; } else { confirmRm = src.id; } }}
+                    onblur={() => { if (confirmRm === src.id) confirmRm = null; }}>
+                    {#if confirmRm === src.id}Remove?{:else}<Hi icon={Delete02Icon} size={16} />{/if}
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        {#if dlTracks.length}
+          <h2 class="shelf-title" style="margin:28px 0 12px">Songs</h2>
+          <div class="lib-filter">
+            <FilterBar bind:value={filterQ} placeholder="Search downloads  (Ctrl+F)" count={`${fDl.length} of ${dlTracks.length}`} />
+          </div>
+          {#if filterQ && !fDl.length}<div class="no-match">No downloaded songs match “{filterQ}”</div>{/if}
+          <TrackTable tracks={fDl} currentId={player.track?.id} playing={player.playing}
+            onPlay={(t, i) => playTracks(fDl, i)}
+            onArtist={(id, n) => goArtist(id, n)}
+            onAlbum={(id) => go({ id: 'album', albumId: id })}
+            onContext={(e, t) => contextTrack(e, t)} />
+        {:else if !off.status?.sources.length}
+          <div class="no-match">Nothing downloaded yet. Open a playlist or album and press <b>Download</b>, or use the button next to <b>Liked</b> in your Library.</div>
         {/if}
 
       {:else if view.id === 'history'}
         <h1 class="page-title">History</h1>
         {#if history?.length}
-          <TrackTable tracks={history} currentId={player.track?.id} playing={player.playing}
-            onPlay={(t, i) => playTracks(history!, i)}
+          <div class="lib-filter">
+            <FilterBar bind:value={filterQ} placeholder="Search history  (Ctrl+F)" count={`${fHistory.length} of ${history.length}`} />
+          </div>
+          <TrackTable tracks={fHistory} currentId={player.track?.id} playing={player.playing}
+            onPlay={(t, i) => playTracks(fHistory, i)}
             onArtist={(id, n) => goArtist(id, n)}
             onAlbum={(id) => go({ id: 'album', albumId: id })}
             onContext={(e, t) => contextTrack(e, t)} />
@@ -1718,7 +2018,20 @@
                 <button class="btn" type="button" onclick={() => playTracks(collection!.tracks, 0, collection!.cover)}><Hi icon={PlayIcon} size={18} /> Play</button>
                 <button class="btn ghost" type="button" onclick={async () => { await playTracks(collection!.tracks, 0, collection!.cover); api.setShuffle(true); }}><Hi icon={ShuffleIcon} size={18} /> Shuffle</button>
                 <button class="btn ghost" type="button" onclick={() => collection!.tracks[0] && startRadio(collection!.tracks[0].id)}><Hi icon={Radio02Icon} size={18} /> Radio</button>
-                {#if auth.signed_in}
+                {#if colSourceId && (!off.offline || colSrc)}
+                  <button class="btn ghost {colSrc && colSrc.done >= colSrc.total ? 'on' : ''}" type="button"
+                    title={!colSrc ? 'Download for offline listening' : colSrc.done < colSrc.total ? 'Cancel download' : 'Remove download'}
+                    onclick={() => toggleDownload()}>
+                    {#if !colSrc}
+                      <Hi icon={Download04Icon} size={18} /> Download
+                    {:else if colSrc.done >= colSrc.total}
+                      <Hi icon={CheckmarkCircle02Icon} size={18} /> Downloaded
+                    {:else}
+                      <Hi icon={Cancel01Icon} size={18} /> Cancel · {colSrc.done}/{colSrc.total}
+                    {/if}
+                  </button>
+                {/if}
+                {#if auth.signed_in && !off.offline}
                   <button class="btn ghost {collection.saved ? 'on' : ''}" type="button" onclick={async () => { if (needAccount('save')) return; const s = !collection!.saved; try { await api.librarySave(collection!.playlist_id || collection!.id, s); collection = { ...collection!, saved: s }; } catch (e) { fail(e, "Couldn't save this", 'save'); } }}>
                     <Hi icon={Bookmark02Icon} size={18} /> {collection.saved ? 'Saved' : 'Save'}
                   </button>
@@ -1727,8 +2040,16 @@
             </div>
           </div>
         </div>
-        <TrackTable tracks={collection.tracks} currentId={player.track?.id} playing={player.playing} showAlbum={collection.kind === 'playlist'} fallbackCover={collection.cover}
-          onPlay={(t, i) => playTracks(collection!.tracks, i, collection!.cover)}
+        {#if collection.tracks.length > 6}
+          <div class="lib-filter">
+            <FilterBar bind:value={filterQ} placeholder="Find in this {collection.kind === 'album' ? 'album' : 'playlist'}  (Ctrl+F)" count={`${fCollection.length} of ${collection.tracks.length}`} />
+          </div>
+        {/if}
+        {#if filterQ && !fCollection.length}
+          <div class="no-match">No songs match “{filterQ}”</div>
+        {/if}
+        <TrackTable tracks={fCollection} currentId={player.track?.id} playing={player.playing} showAlbum={collection.kind === 'playlist'} fallbackCover={collection.cover}
+          onPlay={(t, i) => playTracks(fCollection, i, collection!.cover)}
           onArtist={(id, n) => goArtist(id, n)}
           onAlbum={(id) => go({ id: 'album', albumId: id })}
           onContext={(e, t) => contextTrack(e, t)} />
@@ -1797,6 +2118,23 @@
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Continue with similar music when the queue ends</span>
             </span>
             <Toggle bind:checked={settings.autoplay} label="Autoplay" onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
+            <span class="lb"><Hi icon={WifiOff01Icon} size={20} /> Offline mode
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Play only downloaded songs and never touch the network{off.netDown && !off.mode ? ' (no connection detected right now)' : ''}</span>
+            </span>
+            <Toggle checked={off.mode} label="Offline mode" onchange={(v) => api.setOfflineMode(v)} />
+          </div>
+          <div class="set-row">
+            <span class="lb"><Hi icon={Download04Icon} size={20} /> Downloads
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{off.status?.sources.length ?? 0} collections · {fmtBytes(off.status?.bytes ?? 0)} on this device</span>
+            </span>
+            <span style="display:flex;gap:8px">
+              <button class="btn ghost sm" type="button" onclick={() => go({ id: 'downloads' })}>Manage</button>
+              {#if off.status?.sources.length}
+                <button class="btn ghost sm" type="button" class:on={confirmRm === 'all'} onclick={() => { if (confirmRm === 'all') { api.offlineRemoveAll(); confirmRm = null; } else { confirmRm = 'all'; setTimeout(() => { if (confirmRm === 'all') confirmRm = null; }, 3000); } }}>{confirmRm === 'all' ? 'Really remove all?' : 'Remove all'}</button>
+              {/if}
+            </span>
           </div>
           <div class="set-row">
             <span class="lb"><Hi icon={PlayIcon} size={20} /> Resume on start
@@ -2073,15 +2411,23 @@
       </div>
       <div class="panel-b">
         {#if sidePanelView === 'queue'}
-          {#each player.queue as t, i (`${i}:${t.id}`)}
-            <button class="q-item {i === player.index ? 'on' : ''}" type="button" onclick={() => playTracks(player.queue, i)} oncontextmenu={(e) => contextTrack(e, t)} onmouseenter={() => t.id && api.prefetch(t.id)}>
-              <Cover src={t.cover} size={40} alt="" />
-              <div class="tx">
-                <div class="tn">{t.title}</div>
-                <div class="ta">{artistsLine(t.artists)}</div>
-              </div>
-            </button>
-          {/each}
+          {#if player.queue.length}
+            <div class="q-bar">
+              <span>{Math.max(0, player.queue.length - player.index - 1)} up next</span>
+              {#if player.queue.length - player.index > 1}
+                <button class="q-clear" type="button" onclick={() => api.queueClear()}>Clear</button>
+              {/if}
+            </div>
+          {/if}
+          <QueueList
+            tracks={player.queue}
+            index={player.index}
+            onPlay={(i) => playTracks(player.queue, i)}
+            onRemove={(i) => api.queueRemove(i)}
+            onMove={(f, t) => api.queueMove(f, t)}
+            onContext={(e, t) => contextTrack(e, t)}
+            onHover={(t) => t.id && api.prefetch(t.id)}
+          />
         {:else if sidePanelView === 'lyrics'}
           <div class="lyrics">
             {#if lyrics && lyrics.lines.length}
@@ -2210,27 +2556,19 @@
         >
           <div class="np-queue-h">Up next</div>
           <div class="np-queue-list">
-            {#each npQueueTracks as { t, i } (`${i}:${t.id}`)}
-              <button
-                class="np-qi"
-                class:now={i === player.index}
-                type="button"
-                onclick={() => playTracks(player.queue, i)}
-                oncontextmenu={(e) => contextTrack(e, t)}
-                onmouseenter={() => t.id && api.prefetch(t.id)}
-              >
-                <Cover src={t.cover} videoId={t.id} size={44} alt="" />
-                <div class="tx">
-                  <div class="tn">{t.title}</div>
-                  <div class="ta">{artistsLine(t.artists)}</div>
-                </div>
-                {#if i === player.index}
-                  <span class="np-qi-now">Now</span>
-                {/if}
-              </button>
-            {:else}
+            <QueueList
+              variant="np"
+              tracks={player.queue}
+              index={player.index}
+              onPlay={(i) => playTracks(player.queue, i)}
+              onRemove={(i) => api.queueRemove(i)}
+              onMove={(f, t) => api.queueMove(f, t)}
+              onContext={(e, t) => contextTrack(e, t)}
+              onHover={(t) => t.id && api.prefetch(t.id)}
+            />
+            {#if player.queue.length - player.index <= 1}
               <div class="np-queue-empty">Nothing else in the queue</div>
-            {/each}
+            {/if}
           </div>
         </aside>
       {/if}

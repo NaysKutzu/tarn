@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { sizedCover, srcsetFor, bannerSrcset, ytThumb } from '../cover';
+  import { sizedCover, srcsetFor, bannerSrcset, ytThumb, localCover } from '../cover';
+  import { off } from '../offline.svelte';
 
   let {
     src = null,
@@ -34,19 +35,32 @@
   let broken = $state(false);
   let useOrig = $state(false);
   let fallback = $state<string | null>(null);
+  // Downloaded art on disk: first choice when offline, last resort online.
+  let useLocal = $state(false);
+  let localTried = $state(false);
 
   $effect(() => {
     void src;
     broken = false;
     useOrig = false;
     fallback = null;
+    localTried = false;
+    useLocal = off.offline && !!src && /^https?:/.test(src);
   });
 
-  let shown = $derived(fallback || (useOrig && src ? src : srcUrl));
-  let shownSet = $derived(fallback || useOrig ? '' : srcset);
+  let shown = $derived(
+    useLocal && src ? localCover(src) : fallback || (useOrig && src ? src : srcUrl),
+  );
+  let shownSet = $derived(useLocal || fallback || useOrig ? '' : srcset);
   let empty = $derived(!src);
 
   function onErr() {
+    // The on-disk copy was the last thing to try (or missing while offline).
+    if (useLocal) {
+      useLocal = false;
+      broken = true;
+      return;
+    }
     // Rewritten size failed - try the original URL from the API.
     if (!useOrig && !fallback && src && shown !== src) {
       useOrig = true;
@@ -70,6 +84,11 @@
         fallback = thumb;
         return;
       }
+    }
+    if (!localTried && src && /^https?:/.test(src)) {
+      localTried = true;
+      useLocal = true;
+      return;
     }
     broken = true;
   }

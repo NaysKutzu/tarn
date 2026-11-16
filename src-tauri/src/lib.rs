@@ -1,6 +1,7 @@
 mod auth;
 mod diag;
 mod cache;
+mod offline;
 mod color;
 pub mod decode;
 mod eq;
@@ -31,6 +32,16 @@ use ytm::Ytm;
 
 use crate::auth::SessionStore;
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct NetState {
+    /// The user switched offline mode on.
+    pub mode: bool,
+    /// The connection is down (detected).
+    pub net_down: bool,
+    /// Effective: mode || net_down.
+    pub offline: bool,
+}
+
 pub struct App {
     ytm: std::sync::Arc<Ytm>,
     pub player: Player,
@@ -52,6 +63,11 @@ pub struct App {
     liked_ids: Mutex<std::collections::HashSet<String>>,
     /// Last library liked track list - used to open LM without rustypipe.
     liked_tracks: Mutex<Vec<Track>>,
+    pub offline: std::sync::Arc<offline::Offline>,
+    /// True while music.youtube.com is unreachable (checked in the background).
+    net_down: std::sync::atomic::AtomicBool,
+    /// Earliest time a failed blend may be retried while offline.
+    blend_retry: Mutex<Option<std::time::Instant>>,
 }
 
 impl App {
@@ -60,6 +76,8 @@ impl App {
         let settings = load_settings(store.data_dir());
         let ytm = std::sync::Arc::new(Ytm::new()?);
         ytm.apply_settings(&settings);
+        ytm.set_offline(settings.offline_mode);
+        let offline = offline::Offline::open(&ytm.cache);
         let mock = std::env::var("TARN_MOCK_AUTH").ok().as_deref() == Some("1");
         let auth = if mock {
             AuthStatus {
@@ -111,7 +129,36 @@ impl App {
             autoplay_fetching: Mutex::new(None),
             liked_ids: Mutex::new(std::collections::HashSet::new()),
             liked_tracks: Mutex::new(Vec::new()),
+            offline,
+            net_down: std::sync::atomic::AtomicBool::new(false),
+            blend_retry: Mutex::new(None),
         })
+    }
+
+    /// Offline for any reason: the user's toggle or a dead connection.
+    pub fn is_offline(&self) -> bool {
+        self.ytm.is_offline()
+    }
+
+    /// Recompute the effective offline flag. Returns true if it changed.
+    fn refresh_offline(&self) -> bool {
+        let mode = self.settings.lock().offline_mode;
+        let down = self.net_down.load(std::sync::atomic::Ordering::Relaxed);
+        let was = self.ytm.is_offline();
+        let now = mode || down;
+        self.ytm.set_offline(now);
+        if was && !now {
+            self.offline.requeue_missing(&self.ytm.cache);
+        }
+        was != now
+    }
+
+    fn net_state(&self) -> NetState {
+        NetState {
+            mode: self.settings.lock().offline_mode,
+            net_down: self.net_down.load(std::sync::atomic::Ordering::Relaxed),
+            offline: self.ytm.is_offline(),
+        }
     }
 
     pub fn notifications_enabled(&self) -> bool {
@@ -461,6 +508,30 @@ pub(crate) async fn start_playback_at(
     skip_on_fail: bool,
 ) -> Result<(), String> {
     let id = track.id.clone();
+    // Offline: only downloaded songs can play. Hop over the rest when moving
+    // through the queue; refuse an explicit click with a clear reason.
+    if app.is_offline() && !app.ytm.cache.has_complete(&id) {
+        if skip_on_fail {
+            let next = queue
+                .iter()
+                .enumerate()
+                .skip(index + 1)
+                .find(|(_, t)| app.ytm.cache.has_complete(&t.id))
+                .map(|(i, t)| (i, t.clone()));
+            if let Some((i, t)) = next {
+                return Box::pin(start_playback_at(
+                    app, t, queue, i, start, paused, manual, skip_on_fail,
+                ))
+                .await;
+            }
+            *app.pending_toast.lock() = Some("No more downloaded songs in the queue".into());
+            return Err("Offline - nothing else downloaded".into());
+        }
+        let msg = "Not downloaded - available when you're back online".to_string();
+        app.player.set_error(msg.clone());
+        *app.pending_toast.lock() = Some(format!("{} isn't downloaded", track.title));
+        return Err(msg);
+    }
     let mut track = track;
     track.ensure_cover();
     let cover = track.cover.clone();
@@ -662,6 +733,9 @@ async fn fetch_autoplay_more(ytm: &crate::ytm::Ytm, seed_id: &str) -> Vec<Track>
 }
 
 fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
+    if app.is_offline() {
+        return;
+    }
     let ids: Vec<String> = queue
         .iter()
         .skip(index + 1)
@@ -828,6 +902,11 @@ fn queue_remove(app: State<Arc<App>>, index: usize) {
 }
 
 #[tauri::command]
+fn queue_clear_upcoming(app: State<Arc<App>>) {
+    app.player.clear_upcoming();
+}
+
+#[tauri::command]
 fn queue_move(app: State<Arc<App>>, from: usize, to: usize) {
     app.player.move_item(from, to);
     let (q, i) = app.player.queue_and_index();
@@ -859,6 +938,15 @@ async fn prev(app: State<'_, Arc<App>>) -> Result<(), String> {
 }
 
 pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
+    {
+        let snap = app.player.snapshot();
+        diag::log(format!(
+            "advance: user={user} from {:?} at {:.1}/{:.1}s",
+            snap.track.as_ref().map(|t| t.id.as_str()),
+            snap.position,
+            snap.duration
+        ));
+    }
     match app.player.next_choice(user) {
         NextChoice::Play(i) => {
             let (queue, _) = app.player.queue_and_index();
@@ -869,6 +957,10 @@ pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
             }
         }
         NextChoice::Autoplay => {
+            if app.is_offline() {
+                *app.pending_toast.lock() = Some("You're offline - no more downloaded songs".into());
+                return Ok(());
+            }
             let (queue, index) = app.player.queue_and_index();
             let id = queue.get(index).map(|t| t.id.clone());
             let Some(id) = id else {
@@ -1186,7 +1278,7 @@ fn get_settings(app: State<Arc<App>>) -> Settings {
 }
 
 #[tauri::command]
-fn set_settings(app: State<Arc<App>>, settings: Settings) {
+fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     let mut settings = settings;
     // Keep the one-shot flag so a later load does not flip the user off again.
     settings.notifications_migrated = true;
@@ -1209,8 +1301,131 @@ fn set_settings(app: State<Arc<App>>, settings: Settings) {
     app.player.set_transition(settings.transition());
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
+    if app.refresh_offline() {
+        let _ = handle.emit("net", app.net_state());
+    }
 }
 
+
+
+// ---------------------------------------------------------------- offline
+
+#[tauri::command]
+fn net_state(app: State<Arc<App>>) -> NetState {
+    app.net_state()
+}
+
+#[tauri::command]
+fn set_offline_mode(app: State<Arc<App>>, handle: AppHandle, on: bool) {
+    {
+        let mut s = app.settings.lock();
+        s.offline_mode = on;
+        save_settings(app.store.data_dir(), &s);
+    }
+    app.refresh_offline();
+    let _ = handle.emit("net", app.net_state());
+}
+
+#[tauri::command]
+fn offline_status(app: State<Arc<App>>) -> offline::Status {
+    app.offline.status(&app.ytm.cache)
+}
+
+#[tauri::command]
+fn offline_download(
+    app: State<Arc<App>>,
+    handle: AppHandle,
+    source: offline::Source,
+    tracks: Vec<Track>,
+) {
+    let id = source.id.clone();
+    app.offline.add_source(&app.ytm.cache, source, tracks);
+    let _ = handle.emit("offline", ());
+    let off = app.offline.clone();
+    let http = app.http.clone();
+    tauri::async_runtime::spawn(async move {
+        off.fetch_source_covers(&http, &id).await;
+        let _ = handle.emit("offline", ());
+    });
+}
+
+#[tauri::command]
+fn offline_remove(app: State<Arc<App>>, handle: AppHandle, id: String) {
+    app.offline.remove_source(&app.ytm.cache, &id);
+    let _ = handle.emit("offline", ());
+}
+
+#[tauri::command]
+fn offline_cancel(app: State<Arc<App>>, handle: AppHandle, id: Option<String>) {
+    match id {
+        Some(id) => app.offline.cancel_source(&app.ytm.cache, &id),
+        None => app.offline.cancel_all(&app.ytm.cache),
+    }
+    let _ = handle.emit("offline", ());
+}
+
+#[tauri::command]
+fn offline_remove_all(app: State<Arc<App>>, handle: AppHandle) {
+    app.offline.remove_all(&app.ytm.cache);
+    let _ = handle.emit("offline", ());
+}
+
+#[tauri::command]
+fn offline_retry(app: State<Arc<App>>, handle: AppHandle) {
+    app.offline.retry_failed(&app.ytm.cache);
+    let _ = handle.emit("offline", ());
+}
+
+#[tauri::command]
+fn offline_pause(app: State<Arc<App>>, handle: AppHandle, on: bool) {
+    app.offline.set_paused(on);
+    let _ = handle.emit("offline", ());
+}
+
+#[tauri::command]
+fn offline_collection(app: State<Arc<App>>, id: String) -> Option<Collection> {
+    app.offline.collection(&app.ytm.cache, &id)
+}
+
+#[tauri::command]
+fn offline_tracks(app: State<Arc<App>>) -> Vec<Track> {
+    app.offline.all_tracks(&app.ytm.cache)
+}
+
+/// Background reachability check; flips the effective offline flag.
+fn net_loop(handle: AppHandle, app: Arc<App>) {
+    tauri::async_runtime::spawn(async move {
+        let mut misses = 0u8;
+        loop {
+            let ok = tokio::time::timeout(
+                std::time::Duration::from_secs(4),
+                tokio::net::TcpStream::connect(("music.youtube.com", 443)),
+            )
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false);
+            let down_now = app.net_down.load(std::sync::atomic::Ordering::Relaxed);
+            if ok {
+                misses = 0;
+                if down_now {
+                    app.net_down.store(false, std::sync::atomic::Ordering::Relaxed);
+                    app.refresh_offline();
+                    let _ = handle.emit("net", app.net_state());
+                }
+            } else {
+                misses = misses.saturating_add(1);
+                // Two misses in a row, so one dropped packet doesn't flip us.
+                if misses >= 2 && !down_now {
+                    app.net_down.store(true, std::sync::atomic::Ordering::Relaxed);
+                    app.refresh_offline();
+                    let _ = handle.emit("net", app.net_state());
+                }
+            }
+            let wait = if app.net_down.load(std::sync::atomic::Ordering::Relaxed) { 4 } else { 10 };
+            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        }
+    });
+}
 
 #[tauri::command]
 fn remember_ui(app: State<Arc<App>>, ui: persist::UiMem) {
@@ -1274,9 +1489,25 @@ fn main_hwnd(tauri_app: &tauri::App) -> crate::mpris::WindowHandle {
 
 
 fn maybe_blend(app: &Arc<App>) {
+    if let Some(at) = *app.blend_retry.lock() {
+        if std::time::Instant::now() < at {
+            return;
+        }
+    }
     let Some((track, index, style)) = app.player.blend_due() else {
         return;
     };
+    {
+        let snap = app.player.snapshot();
+        diag::log(format!(
+            "blend: due, {:?} at {:.1}/{:.1}s -> {} ({})",
+            snap.track.as_ref().map(|t| t.id.as_str()),
+            snap.position,
+            snap.duration,
+            track.id,
+            track.title
+        ));
+    }
     let gen = app.player.play_gen();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -1336,11 +1567,20 @@ fn maybe_blend(app: &Arc<App>) {
         if let Err(e) = result {
             eprintln!("blend: {e}");
             app.player.clear_blending();
+            // Offline and the next song isn't downloaded: don't hammer it every
+            // tick - the normal end-of-track advance will skip ahead.
+            if app.is_offline() {
+                *app.blend_retry.lock() =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(4));
+            }
         }
     });
 }
 
 fn ensure_autoplay_buffer(app: &Arc<App>) {
+    if app.is_offline() {
+        return;
+    }
     let snap = app.player.snapshot();
     if !snap.autoplay || !snap.playing {
         return;
@@ -1461,6 +1701,27 @@ pub fn run() {
             .plugin(tauri_plugin_process::init());
     }
     builder
+        .register_uri_scheme_protocol("tarncover", |_ctx, req| {
+            let name = req
+                .uri()
+                .path()
+                .trim_start_matches('/')
+                .to_string();
+            let ok = name.len() == 16 && name.chars().all(|c| c.is_ascii_hexdigit());
+            let path = offline::root_dir().join("covers").join(&name);
+            match ok.then(|| std::fs::read(path).ok()).flatten() {
+                Some(bytes) => tauri::http::Response::builder()
+                    .header("Content-Type", offline::sniff_image(&bytes))
+                    .header("Cache-Control", "max-age=86400")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(bytes)
+                    .unwrap(),
+                None => tauri::http::Response::builder()
+                    .status(404)
+                    .body(Vec::new())
+                    .unwrap(),
+            }
+        })
         .setup(move |tauri_app| {
             let handle = tauri_app.handle().clone();
             let app = app_for_setup.clone();
@@ -1501,6 +1762,19 @@ pub fn run() {
                 crate::ytdlp::maybe_update().await;
             });
             emit_loop(handle.clone(), app.clone());
+            net_loop(handle.clone(), app.clone());
+            {
+                let h = handle.clone();
+                let emit: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                    let _ = h.emit("offline", ());
+                });
+                app.offline.spawn_workers(
+                    app.ytm.clone(),
+                    app.player.clone(),
+                    app.http.clone(),
+                    emit,
+                );
+            }
             let hwnd = main_hwnd(tauri_app);
             mpris::start(app.clone(), handle.clone(), hwnd);
             discord::start(app.clone());
@@ -1535,6 +1809,18 @@ pub fn run() {
             queue_add,
             queue_remove,
             queue_move,
+            queue_clear_upcoming,
+            net_state,
+            set_offline_mode,
+            offline_status,
+            offline_download,
+            offline_remove,
+            offline_remove_all,
+            offline_cancel,
+            offline_retry,
+            offline_pause,
+            offline_collection,
+            offline_tracks,
             next,
             prev,
             like_track,

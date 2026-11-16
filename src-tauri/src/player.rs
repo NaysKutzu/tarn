@@ -936,8 +936,28 @@ impl Player {
         }
     }
 
+    /// Drop everything after the current track (keeps what is playing).
+    pub fn clear_upcoming(&self) {
+        let mut s = self.state.lock();
+        let keep = s.index.saturating_add(1);
+        if keep >= s.queue.len() {
+            return;
+        }
+        s.queue.truncate(keep);
+        let ids: std::collections::HashSet<String> =
+            s.queue.iter().map(|t| t.id.clone()).collect();
+        if let Some(lin) = self.linear_queue.lock().as_mut() {
+            lin.retain(|t| ids.contains(&t.id));
+        }
+    }
+
     pub fn remove_at(&self, i: usize) {
         let mut s = self.state.lock();
+        // The playing entry can't be removed - the audio would keep going
+        // while the queue pointed at the next song.
+        if i == s.index {
+            return;
+        }
         if i < s.queue.len() {
             let removed_id = s.queue[i].id.clone();
             s.queue.remove(i);
@@ -1224,6 +1244,9 @@ fn audio_thread(
                 match make_source(audio, start) {
                     Ok(src) => {
                         mix.queue_gapless(src);
+                        // The UI switches to the new track now (position 0);
+                        // restart the clock so it doesn't read as already over.
+                        samples.store(0, Ordering::Relaxed);
                         flush_pending_adopt(&extras, &state);
                     }
                     Err(e) => eprintln!("gapless: {e}"),

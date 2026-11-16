@@ -57,3 +57,7 @@ export { SlidersHorizontalIcon } from '@hugeicons/core-free-icons';
 export { Delete02Icon } from '@hugeicons/core-free-icons';
 export { UserIcon } from '@hugeicons/core-free-icons';
 export { PencilEdit01Icon } from '@hugeicons/core-free-icons';
+export { Download04Icon } from '@hugeicons/core-free-icons';
+export { DragDropVerticalIcon } from '@hugeicons/core-free-icons';
+export { WifiOff01Icon } from '@hugeicons/core-free-icons';
+export { CheckmarkCircle02Icon } from '@hugeicons/core-free-icons';

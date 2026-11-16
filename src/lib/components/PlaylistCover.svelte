@@ -1,7 +1,8 @@
 <script lang="ts">
   import Cover from './Cover.svelte';
   import Hi from './Hi.svelte';
-  import { sizedCover } from '../cover';
+  import { sizedCover, localCover } from '../cover';
+  import { off } from '../offline.svelte';
   import { ThumbsUpIcon, Bookmark02Icon } from '../icons';
 
   let {
@@ -94,7 +95,12 @@
   >
     {#each tiles as src, i (src + i)}
       <img
-        src={sizedCover(src, Math.max(48, Math.round(size)))}
+        src={off.offline ? localCover(src) : sizedCover(src, Math.max(48, Math.round(size)))}
+        onerror={(e) => {
+          const el = e.currentTarget as HTMLImageElement;
+          const local = localCover(src);
+          if (el.src !== local) el.src = local;
+        }}
         {alt}
         referrerpolicy="no-referrer"
         draggable="false"

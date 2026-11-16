@@ -1,3 +1,21 @@
+import { convertFileSrc } from '@tauri-apps/api/core';
+
+/** FNV-1a 64 over the URL - must match `offline::cover_key` in Rust. */
+function coverKey(url: string): string {
+  let h = 0xcbf29ce484222325n;
+  const bytes = new TextEncoder().encode(url);
+  for (const b of bytes) {
+    h ^= BigInt(b);
+    h = (h * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return h.toString(16).padStart(16, '0');
+}
+
+/** Local copy of a downloaded cover (served by the `tarncover` protocol). */
+export function localCover(url: string): string {
+  return convertFileSrc(coverKey(url), 'tarncover');
+}
+
 function isYt3(url: string): boolean {
   return url.includes('yt3.ggpht.com') || url.includes('yt3.googleusercontent.com');
 }

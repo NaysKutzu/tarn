@@ -188,6 +188,8 @@ export interface Settings {
   /** Resume and play the last session when the app starts. */
   resume_on_start: boolean;
   cache_max_mb: number;
+  /** Only downloaded / cached songs play; nothing touches the network. */
+  offline_mode: boolean;
   crossfade: boolean;
   crossfade_seconds: number;
   album_continuity: boolean;
@@ -256,7 +258,8 @@ export type View =
   | { id: 'genre'; genreId: string; title?: string }
   | { id: 'charts' }
   | { id: 'new-releases' }
-  | { id: 'history' };
+  | { id: 'history' }
+  | { id: 'downloads' };
 
 export interface CtxTarget {
   x: number;
@@ -284,4 +287,43 @@ export interface SavedSession {
   view: View | null;
   search_q: string | null;
   scroll: number | null;
+}
+
+export interface NetState {
+  /** User switched offline mode on. */
+  mode: boolean;
+  /** Connection looks dead. */
+  net_down: boolean;
+  /** Effective: mode || net_down. */
+  offline: boolean;
+}
+
+export interface OfflineSourceInfo {
+  id: string;
+  kind: 'playlist' | 'album' | 'liked';
+  name: string;
+  cover: string | null;
+  subtitle: string | null;
+  total: number;
+  done: number;
+  failed: number;
+}
+
+export interface OfflineStatus {
+  sources: OfflineSourceInfo[];
+  queued: number;
+  active: { id: string; title: string }[];
+  failed: number;
+  bytes: number;
+  downloaded: string[];
+  cached: string[];
+  paused: boolean;
+}
+
+export interface OfflineSource {
+  id: string;
+  kind: 'playlist' | 'album' | 'liked';
+  name: string;
+  cover: string | null;
+  subtitle: string | null;
 }

@@ -3,8 +3,9 @@
   import { fmtTime, artistsLine } from '../format';
   import Cover from './Cover.svelte';
   import Hi from './Hi.svelte';
-  import { MoreHorizontalIcon, PlayIcon } from '../icons';
+  import { MoreHorizontalIcon, PlayIcon, Download04Icon } from '../icons';
   import { api } from '../api';
+  import { off } from '../offline.svelte';
 
   let {
     tracks,
@@ -36,6 +37,7 @@
 
   // Prewarm resolve for rows the user can already see.
   $effect(() => {
+    if (off.offline) return;
     for (const t of tracks.slice(0, 8)) {
       if (t.id) api.prefetch(t.id);
     }
@@ -77,9 +79,10 @@
     {#each visible as t, i}
       <tr
         class="trow {t.id === currentId ? 'on' : ''}"
+        class:gone={off.offline && !off.playable.has(t.id)}
         ondblclick={() => onPlay(t, i)}
         oncontextmenu={(e) => onContext(e, t, i)}
-        onmouseenter={() => t.id && api.prefetch(t.id)}
+        onmouseenter={() => t.id && !off.offline && api.prefetch(t.id)}
       >
         {#if numbered}
           <td class="idx">
@@ -124,7 +127,10 @@
             {/if}
           </td>
         {/if}
-        <td class="dur">{t.duration ? fmtTime(t.duration) : ''}</td>
+        <td class="dur">
+          {#if off.downloaded.has(t.id)}<span class="dl" title="Downloaded"><Hi icon={Download04Icon} size={13} /></span>{/if}
+          {t.duration ? fmtTime(t.duration) : ''}
+        </td>
         <td class="acts">
           <button
             class="ibtn"

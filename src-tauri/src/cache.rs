@@ -29,6 +29,10 @@ struct Entry {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Index {
     items: HashMap<String, Entry>,
+    /// Ids kept for offline listening: never evicted, not counted against
+    /// the cache cap.
+    #[serde(default)]
+    pinned: std::collections::HashSet<String>,
 }
 
 pub struct AudioCache {
@@ -68,14 +72,63 @@ impl AudioCache {
         self.max_bytes.load(Ordering::Relaxed)
     }
 
+    /// Bytes held by evictable (non-downloaded) entries.
     pub fn used_bytes(&self) -> u64 {
-        self.index
-            .lock()
-            .unwrap()
-            .items
-            .values()
-            .map(|e| e.size)
+        let g = self.index.lock().unwrap();
+        g.items
+            .iter()
+            .filter(|(k, _)| !g.pinned.contains(*k))
+            .map(|(_, e)| e.size)
             .sum()
+    }
+
+    /// Bytes held by tracks pinned for offline listening.
+    pub fn pinned_bytes(&self) -> u64 {
+        let g = self.index.lock().unwrap();
+        g.items
+            .iter()
+            .filter(|(k, _)| g.pinned.contains(*k))
+            .map(|(_, e)| e.size)
+            .sum()
+    }
+
+    pub fn is_pinned(&self, id: &str) -> bool {
+        self.index.lock().unwrap().pinned.contains(id)
+    }
+
+    /// Mark ids as downloaded-for-offline. Files that arrive later are
+    /// protected from eviction from the moment they are committed.
+    pub fn pin<I: IntoIterator<Item = String>>(&self, ids: I) {
+        {
+            let mut g = self.index.lock().unwrap();
+            g.pinned.extend(ids);
+        }
+        let _ = self.persist();
+    }
+
+    /// Release ids back into the normal LRU pool (files stay until evicted).
+    pub fn unpin<'a, I: IntoIterator<Item = &'a String>>(&self, ids: I) {
+        {
+            let mut g = self.index.lock().unwrap();
+            for id in ids {
+                g.pinned.remove(id);
+            }
+        }
+        let _ = self.persist();
+    }
+
+    /// Ids that are fully on disk but only cached (not downloaded).
+    pub fn complete_unpinned(&self) -> Vec<String> {
+        let g = self.index.lock().unwrap();
+        g.items
+            .iter()
+            .filter(|(k, e)| e.complete && e.size > 64 && !g.pinned.contains(*k))
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+
+    pub fn pinned_ids(&self) -> Vec<String> {
+        self.index.lock().unwrap().pinned.iter().cloned().collect()
     }
 
     pub fn has_complete(&self, id: &str) -> bool {
@@ -124,7 +177,7 @@ impl AudioCache {
 
     /// Append a chunk to the part file. Creates it if needed.
     pub fn append_part(&self, id: &str, chunk: &[u8]) -> Result<()> {
-        if chunk.is_empty() || self.max_bytes() == 0 {
+        if chunk.is_empty() || (self.max_bytes() == 0 && !self.is_pinned(id)) {
             return Ok(());
         }
         let path = self.part_path(id);
@@ -139,7 +192,7 @@ impl AudioCache {
 
     /// Seed a part file from already-in-memory bytes (overwrite).
     pub fn write_part(&self, id: &str, bytes: &[u8]) -> Result<()> {
-        if self.max_bytes() == 0 {
+        if self.max_bytes() == 0 && !self.is_pinned(id) {
             return Ok(());
         }
         fs::write(self.part_path(id), bytes)?;
@@ -149,14 +202,16 @@ impl AudioCache {
     /// Mark the download complete: move `.part` (or the given bytes) into the
     /// final file and record it in the index. Evicts LRU entries if needed.
     pub fn commit(&self, id: &str, bytes: &[u8]) -> Result<()> {
-        if self.max_bytes() == 0 {
+        if self.max_bytes() == 0 && !self.is_pinned(id) {
             let _ = fs::remove_file(self.part_path(id));
             return Ok(());
         }
         if bytes.len() < 64 {
             return Err(anyhow!("cache commit too small"));
         }
-        self.evict(bytes.len() as u64);
+        if !self.is_pinned(id) {
+            self.evict(bytes.len() as u64);
+        }
         let dest = self.final_path(id);
         let part = self.part_path(id);
         if part.exists() {
@@ -202,21 +257,24 @@ impl AudioCache {
             return;
         }
         loop {
-            let (used, victim) = {
+            let victim = {
                 let g = self.index.lock().unwrap();
-                let used: u64 = g.items.values().map(|e| e.size).sum();
+                let used: u64 = g
+                    .items
+                    .iter()
+                    .filter(|(k, _)| !g.pinned.contains(*k))
+                    .map(|(_, e)| e.size)
+                    .sum();
                 if used.saturating_add(extra) <= max {
                     return;
                 }
-                let v = g
-                    .items
+                g.items
                     .iter()
+                    .filter(|(k, _)| !g.pinned.contains(*k))
                     .min_by_key(|(_, e)| e.accessed)
-                    .map(|(k, e)| (k.clone(), e.file.clone()));
-                (used, v)
+                    .map(|(k, e)| (k.clone(), e.file.clone()))
             };
             let Some((id, file)) = victim else {
-                let _ = used;
                 return;
             };
             let _ = fs::remove_file(self.dir.join(&file));
@@ -234,16 +292,36 @@ impl AudioCache {
         let _ = self.persist();
     }
 
+    /// Empty the cache. Downloaded (pinned) tracks are kept.
     pub fn clear(&self) {
+        let keep: std::collections::HashSet<String> = {
+            let g = self.index.lock().unwrap();
+            g.pinned
+                .iter()
+                .filter_map(|id| g.items.get(id).map(|e| e.file.clone()))
+                .collect()
+        };
         if let Ok(rd) = fs::read_dir(&self.dir) {
             for e in rd.flatten() {
                 let p = e.path();
-                if p.is_file() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if p.is_file() && name != INDEX && !keep.contains(&name) {
                     let _ = fs::remove_file(p);
                 }
             }
         }
-        *self.index.lock().unwrap() = Index::default();
+        {
+            let mut g = self.index.lock().unwrap();
+            let pinned = g.pinned.clone();
+            g.items.retain(|k, _| pinned.contains(k));
+        }
+        let _ = self.persist();
+    }
+
+    /// Remove one file for good, pinned or not (used when deleting a download).
+    pub fn remove_file(&self, id: &str) {
+        self.forget(id);
+        self.index.lock().unwrap().pinned.remove(id);
         let _ = self.persist();
     }
 
@@ -285,4 +363,58 @@ fn safe(id: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("tarn-cache-test-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn cache_in(dir: PathBuf, max_bytes: u64) -> AudioCache {
+        AudioCache {
+            dir,
+            max_bytes: AtomicU64::new(max_bytes),
+            index: Mutex::new(Index::default()),
+        }
+    }
+
+    #[test]
+    fn pinned_tracks_survive_eviction_and_clear() {
+        let dir = tmp("pin");
+        let c = cache_in(dir.clone(), 250);
+        c.pin(["keep".to_string()]);
+        c.commit("keep", &[1u8; 200]).unwrap();
+        c.commit("a", &[2u8; 200]).unwrap();
+        // Over the cap: the unpinned one is evicted, the download stays.
+        c.commit("b", &[3u8; 200]).unwrap();
+        assert!(c.has_complete("keep"));
+        assert!(!c.has_complete("a"));
+        assert!(c.has_complete("b"));
+        assert_eq!(c.pinned_bytes(), 200);
+        c.clear();
+        assert!(c.has_complete("keep"));
+        assert!(!c.has_complete("b"));
+        c.remove_file("keep");
+        assert!(!c.has_complete("keep"));
+        assert!(!c.is_pinned("keep"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pinned_download_works_with_cache_disabled() {
+        let dir = tmp("zero");
+        let c = cache_in(dir.clone(), 0);
+        c.commit("x", &[1u8; 200]).unwrap();
+        assert!(!c.has_complete("x"));
+        c.pin(["x".to_string()]);
+        c.commit("x", &[1u8; 200]).unwrap();
+        assert!(c.has_complete("x"));
+        let _ = fs::remove_dir_all(dir);
+    }
 }

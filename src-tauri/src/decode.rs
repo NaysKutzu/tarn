@@ -560,7 +560,13 @@ impl AudioSource {
         let mut fresh = AudioSource::open_seekable(self.body.clone(), true)?;
         fresh.sample_rate = self.sample_rate;
         fresh.channels = self.channels;
+        let reopens = self.reopens;
         *self = fresh;
+        self.reopens = reopens;
+        // `pulled` is the absolute playhead; a fresh source starts at 0, so
+        // re-base it on the seek target. Otherwise a later "ended early?"
+        // check thinks we're at ~0s and reopens at the start of the track.
+        self.pulled = (start * self.sample_rate.max(1) as f64 * self.channels.max(1) as f64) as u64;
         let seconds = start.floor() as u64;
         let frac = start - seconds as f64;
         let time = Time { seconds, frac };

@@ -46,6 +46,8 @@ pub struct Ytm {
     resolve_disk: ResolveCache,
     /// Titles of auto mixes seen on Home, so opening one keeps its name.
     mix_titles: Mutex<std::collections::HashMap<String, String>>,
+    /// Offline mode (user toggle or no network): only cached audio plays.
+    offline: std::sync::atomic::AtomicBool,
 }
 
 impl Ytm {
@@ -82,7 +84,16 @@ impl Ytm {
             players: std::sync::Arc::new(PlayerHub::new()?),
             resolve_disk: ResolveCache::open(),
             mix_titles: Mutex::new(std::collections::HashMap::new()),
+            offline: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    pub fn set_offline(&self, on: bool) {
+        self.offline.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_offline(&self) -> bool {
+        self.offline.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn apply_settings(&self, s: &Settings) {
@@ -1576,6 +1587,13 @@ impl Ytm {
     /// the requester's IP and an expiry. The sidecar is the last resort
     /// (never on Android/iOS). Fresh URLs are cached until they expire.
     pub async fn stream(&self, video_id: &str) -> Result<Stream> {
+        // A finished download needs no network at all - start instantly.
+        if self.cache.has_complete(video_id) {
+            return Ok(Stream::from_disk(video_id));
+        }
+        if self.is_offline() {
+            return Err(anyhow!("Not downloaded - available when you're back online"));
+        }
         if let Some(s) = self.cached_stream(video_id) {
             return Ok(s);
         }
@@ -1810,6 +1828,15 @@ impl Ytm {
         }
 
         let mut stream = stream.clone();
+        // The on-disk copy was unusable (checked above) - go to the network.
+        if stream.url.starts_with("cache://") {
+            if self.is_offline() {
+                return Err(anyhow!("Downloaded file is damaged - reconnect to repair it"));
+            }
+            self.evict_stream(video_id);
+            stream = self.resolve_stream(video_id).await?;
+            self.put_stream(video_id, stream.clone());
+        }
         if !stream_is_fresh(&stream, Instant::now()) {
             self.evict_stream(video_id);
             stream = self.resolve_stream(video_id).await?;
@@ -1951,7 +1978,7 @@ impl Ytm {
 
     /// Resolve the stream and fully download it into the disk cache.
     pub async fn prefetch(&self, video_id: &str) {
-        if self.cache.has_complete(video_id) {
+        if self.cache.has_complete(video_id) || self.is_offline() {
             return;
         }
         if let Ok(stream) = self.stream(video_id).await {
@@ -1983,6 +2010,19 @@ pub struct Stream {
 }
 
 impl Stream {
+    /// Placeholder for audio that is already fully on disk.
+    pub fn from_disk(id: &str) -> Self {
+        Stream {
+            url: format!("cache://{id}"),
+            headers: Vec::new(),
+            duration: None,
+            source: "disk",
+            mime: Some("audio/mp4".into()),
+            client: "",
+            expire: None,
+        }
+    }
+
     pub fn label(&self) -> String {
         if self.client.is_empty() {
             self.source.to_string()

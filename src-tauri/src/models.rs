@@ -285,6 +285,9 @@ pub struct Settings {
     /// Disk cache cap for prefetched audio, in mebibytes. 0 disables it.
     #[serde(default = "default_cache_mb")]
     pub cache_max_mb: u64,
+    /// Offline mode: only downloaded / cached songs play, nothing hits the net.
+    #[serde(default)]
+    pub offline_mode: bool,
     #[serde(default = "default_true")]
     pub crossfade: bool,
     #[serde(default = "default_xf_secs")]
@@ -347,6 +350,7 @@ impl Default for Settings {
             autoplay: true,
             resume_on_start: false,
             cache_max_mb: default_cache_mb(),
+            offline_mode: false,
             crossfade: true,
             crossfade_seconds: default_xf_secs(),
             album_continuity: true,

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
-  ArtistPage, AuthStatus, Collection, Explore, GenrePage, Home, Library,
+  ArtistPage, AuthStatus, NetState, OfflineSource, OfflineStatus, Collection, Explore, GenrePage, Home, Library,
   LikeState, Lyrics, PlayerState, Related, SearchResults, Settings, Track, SavedSession, UiSession,
 } from './types';
 
@@ -36,6 +36,7 @@ export const api = {
   queueAdd: (tracks: Track[], next: boolean) => invoke<void>('queue_add', { tracks, next }),
   queueRemove: (index: number) => invoke<void>('queue_remove', { index }),
   queueMove: (from: number, to: number) => invoke<void>('queue_move', { from, to }),
+  queueClear: () => invoke<void>('queue_clear_upcoming'),
   like: (id: string, action: string, track?: Track) =>
     invoke<LikeState>('like_track', { id, action, track }),
   subscribe: (id: string, on: boolean) => invoke<void>('subscribe_artist', { id, on }),
@@ -61,6 +62,18 @@ export const api = {
   cacheStats: () => invoke<[number, number]>('cache_stats'),
   savedSession: () => invoke<SavedSession | null>('saved_session'),
   rememberUi: (ui: UiSession) => invoke<void>('remember_ui', { ui }),
+  netState: () => invoke<NetState>('net_state'),
+  setOfflineMode: (on: boolean) => invoke<void>('set_offline_mode', { on }),
+  offlineStatus: () => invoke<OfflineStatus>('offline_status'),
+  offlineDownload: (source: OfflineSource, tracks: Track[]) =>
+    invoke<void>('offline_download', { source, tracks }),
+  offlineRemove: (id: string) => invoke<void>('offline_remove', { id }),
+  offlineCancel: (id?: string) => invoke<void>('offline_cancel', { id: id ?? null }),
+  offlineRemoveAll: () => invoke<void>('offline_remove_all'),
+  offlineRetry: () => invoke<void>('offline_retry'),
+  offlinePause: (on: boolean) => invoke<void>('offline_pause', { on }),
+  offlineCollection: (id: string) => invoke<Collection | null>('offline_collection', { id }),
+  offlineTracks: () => invoke<Track[]>('offline_tracks'),
   saveSessionNow: () => invoke<void>('save_session_now'),
 };
 
