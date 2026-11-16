@@ -1,1 +1,9 @@
-{ "bundle": { "externalBin": [], "createUpdaterArtifacts": false } }
+{
+  "bundle": {
+    "externalBin": [],
+    "createUpdaterArtifacts": false,
+    "iOS": {
+      "frameworks": ["AudioToolbox", "CoreAudio", "AVFoundation"]
+    }
+  }
+}
