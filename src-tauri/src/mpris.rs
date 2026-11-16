@@ -200,6 +200,9 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
     let mut last_id: Option<String> = None;
     let mut last_playing: Option<bool> = None;
     let mut last_pos_bucket: u64 = u64::MAX;
+    // Metadata carries the cover URL: the OS re-downloads the art every time
+    // it is set, so only send it when the track (or its duration) changes.
+    let mut last_meta: Option<(String, u64)> = None;
 
     loop {
         while let Ok(ev) = rx.try_recv() {
@@ -217,19 +220,23 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
 
         if changed {
             if let Some(t) = &snap.track {
-                let artists = t.artists.join(", ");
                 let dur = snap.duration;
-                let _ = controls.set_metadata(MediaMetadata {
-                    title: Some(&t.title),
-                    artist: Some(&artists),
-                    album: t.album.as_deref(),
-                    duration: if dur > 0.0 {
-                        Some(Duration::from_secs_f64(dur))
-                    } else {
-                        None
-                    },
-                    cover_url: t.cover.as_deref(),
-                });
+                let meta_key = (t.id.clone(), dur.max(0.0).round() as u64);
+                if last_meta.as_ref() != Some(&meta_key) {
+                    let artists = t.artists.join(", ");
+                    let _ = controls.set_metadata(MediaMetadata {
+                        title: Some(&t.title),
+                        artist: Some(&artists),
+                        album: t.album.as_deref(),
+                        duration: if dur > 0.0 {
+                            Some(Duration::from_secs_f64(dur))
+                        } else {
+                            None
+                        },
+                        cover_url: t.cover.as_deref(),
+                    });
+                    last_meta = Some(meta_key);
+                }
                 if id != last_id {
                     maybe_notify(&app, t);
                 }
@@ -436,6 +443,7 @@ fn start_smtc_ui(
             let mut last_id: Option<String> = None;
             let mut last_playing: Option<bool> = None;
             let mut last_pos_bucket: u64 = u64::MAX;
+            let mut last_meta: Option<(String, u64)> = None;
             loop {
                 let snap = app.player.snapshot();
                 let playing = snap.playing;
@@ -453,13 +461,23 @@ fn start_smtc_ui(
                             maybe_notify(&app, t);
                         }
                     }
+                    // Only (re)send metadata when the track or duration changed;
+                    // it carries the cover URL, which the OS re-downloads.
+                    let send_meta = snap.track.as_ref().is_some_and(|t| {
+                        let key = (t.id.clone(), snap.duration.max(0.0).round() as u64);
+                        let fresh = last_meta.as_ref() != Some(&key);
+                        if fresh {
+                            last_meta = Some(key);
+                        }
+                        fresh
+                    });
                     if let Err(e) = handle.run_on_main_thread(move || {
                         use souvlaki::{MediaMetadata, MediaPlayback};
                         let mut slot = slot.0.borrow_mut();
                         let Some(controls) = slot.as_mut() else {
                             return;
                         };
-                        if let Some(t) = &snap.track {
+                        if let Some(t) = snap.track.as_ref().filter(|_| send_meta) {
                             let artists = t.artists.join(", ");
                             let dur = snap.duration;
                             if let Err(e) = controls.set_metadata(MediaMetadata {
@@ -550,6 +568,7 @@ fn smtc_update_loop(
     let mut last_id: Option<String> = None;
     let mut last_playing: Option<bool> = None;
     let mut last_pos_bucket: u64 = u64::MAX;
+    let mut last_meta: Option<(String, u64)> = None;
     loop {
         while let Ok(ev) = rx.try_recv() {
             dispatch(&app, ev);
@@ -563,18 +582,22 @@ fn smtc_update_loop(
             if let Some(t) = &snap.track {
                 let artists = t.artists.join(", ");
                 let dur = snap.duration;
-                if let Err(e) = controls.set_metadata(MediaMetadata {
-                    title: Some(&t.title),
-                    artist: Some(&artists),
-                    album: t.album.as_deref(),
-                    duration: if dur > 0.0 {
-                        Some(Duration::from_secs_f64(dur))
-                    } else {
-                        None
-                    },
-                    cover_url: t.cover.as_deref(),
-                }) {
-                    eprintln!("media controls: set_metadata: {e:?}");
+                let key = (t.id.clone(), dur.max(0.0).round() as u64);
+                if last_meta.as_ref() != Some(&key) {
+                    last_meta = Some(key);
+                    if let Err(e) = controls.set_metadata(MediaMetadata {
+                        title: Some(&t.title),
+                        artist: Some(&artists),
+                        album: t.album.as_deref(),
+                        duration: if dur > 0.0 {
+                            Some(Duration::from_secs_f64(dur))
+                        } else {
+                            None
+                        },
+                        cover_url: t.cover.as_deref(),
+                    }) {
+                        eprintln!("media controls: set_metadata: {e:?}");
+                    }
                 }
                 if id != last_id {
                     maybe_notify(&app, t);
@@ -611,6 +634,7 @@ fn smtc_update_loop_pumped(
     let mut last_id: Option<String> = None;
     let mut last_playing: Option<bool> = None;
     let mut last_pos_bucket: u64 = u64::MAX;
+    let mut last_meta: Option<(String, u64)> = None;
     loop {
         win_pump::pump();
         while let Ok(ev) = rx.try_recv() {
@@ -625,17 +649,21 @@ fn smtc_update_loop_pumped(
             if let Some(t) = &snap.track {
                 let artists = t.artists.join(", ");
                 let dur = snap.duration;
-                let _ = controls.set_metadata(MediaMetadata {
-                    title: Some(&t.title),
-                    artist: Some(&artists),
-                    album: t.album.as_deref(),
-                    duration: if dur > 0.0 {
-                        Some(Duration::from_secs_f64(dur))
-                    } else {
-                        None
-                    },
-                    cover_url: t.cover.as_deref(),
-                });
+                let key = (t.id.clone(), dur.max(0.0).round() as u64);
+                if last_meta.as_ref() != Some(&key) {
+                    last_meta = Some(key);
+                    let _ = controls.set_metadata(MediaMetadata {
+                        title: Some(&t.title),
+                        artist: Some(&artists),
+                        album: t.album.as_deref(),
+                        duration: if dur > 0.0 {
+                            Some(Duration::from_secs_f64(dur))
+                        } else {
+                            None
+                        },
+                        cover_url: t.cover.as_deref(),
+                    });
+                }
                 if id != last_id {
                     maybe_notify(&app, t);
                 }
