@@ -336,6 +336,12 @@ pub struct Settings {
     /// Seconds the new track takes to glide back to its own tempo.
     #[serde(default = "default_bpm_return")]
     pub bpm_return_seconds: f64,
+    /// Show an icon in the system tray / menu bar (desktop).
+    #[serde(default)]
+    pub tray_icon: bool,
+    /// Closing the main window hides it to the tray instead of quitting.
+    #[serde(default)]
+    pub close_to_tray: bool,
 }
 
 impl Default for Settings {
@@ -367,6 +373,8 @@ impl Default for Settings {
             bpm_max_change: default_bpm_max(),
             bpm_beat_align: true,
             bpm_return_seconds: default_bpm_return(),
+            tray_icon: false,
+            close_to_tray: false,
         }
     }
 }

@@ -54,6 +54,7 @@
   const isMac =
     typeof navigator !== 'undefined' &&
     (/Mac/i.test(navigator.platform) || /macOS|Macintosh/i.test(navigator.userAgent));
+  const isPhone = typeof navigator !== 'undefined' && /Android|iPhone|iPad/i.test(navigator.userAgent);
   const EQ_LABELS = ['60', '230', '910', '3.6k', '14k'] as const;
   type EqBands = SettingsT['eq_bands'];
   const EQ_PRESETS: { id: string; label: string; bands: EqBands }[] = [
@@ -109,7 +110,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], tray_icon: false, close_to_tray: false, ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -272,6 +273,9 @@
       recents = localRecents();
       try {
         player = await api.state();
+        unsubs.push(await listen<string>('tray', (e) => {
+          if (e.payload === 'like' && player.track) void toggleLike();
+        }));
         unsubs.push(await listen<string>('toast', (e) => {
           if (e.payload) toast(String(e.payload), 'info', 3600);
         }));
@@ -2399,6 +2403,22 @@
             </span>
             <Toggle bind:checked={settings.discord_presence} label="Discord presence" onchange={() => api.setSettings(settings)} />
           </div>
+          {#if !isPhone}
+            <div class="set-row">
+              <span class="lb">Tray icon
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Play/pause, next, previous and like from the {isMac ? 'menu bar' : 'system tray'}</span>
+              </span>
+              <Toggle bind:checked={settings.tray_icon} label="Tray icon" onchange={() => { if (!settings.tray_icon) settings.close_to_tray = false; api.setSettings(settings); }} />
+            </div>
+            {#if settings.tray_icon}
+              <div class="set-row">
+                <span class="lb">Close to tray
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Closing the window keeps the music playing; quit from the tray menu</span>
+                </span>
+                <Toggle bind:checked={settings.close_to_tray} label="Close to tray" onchange={() => api.setSettings(settings)} />
+              </div>
+            {/if}
+          {/if}
           <Scrobbling onChange={() => scrobbler.reload()} />
           <div class="set-row">
             <span class="lb"><Hi icon={Radio02Icon} size={20} /> Autoplay
