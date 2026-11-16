@@ -15,6 +15,11 @@ use crate::player::NextChoice;
 /// Native HWND stored as usize so it can cross threads. Ignored off Windows.
 pub type WindowHandle = Option<usize>;
 
+/// Set once the MPRIS / SMTC session is registered. On Linux the desktop
+/// already routes media keys through it, so a second X11 key grab would only
+/// double-fire (and does nothing on Wayland).
+static MEDIA_SESSION_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn start(app: Arc<crate::App>, handle: AppHandle, hwnd: WindowHandle) {
     let _ = &handle;
     // Windows: SystemMediaTransportControls must be created and attached on
@@ -63,6 +68,15 @@ pub fn start(app: Arc<crate::App>, handle: AppHandle, hwnd: WindowHandle) {
     std::thread::Builder::new()
         .name("tarn-mediakeys".into())
         .spawn(move || {
+            #[cfg(target_os = "linux")]
+            {
+                // Give MPRIS time to register, then prefer it over key grabs.
+                std::thread::sleep(Duration::from_secs(4));
+                if MEDIA_SESSION_OK.load(std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!("media key shortcuts: skipped, MPRIS handles media keys");
+                    return;
+                }
+            }
             if let Err(e) = run_global_hotkeys(app_h) {
                 eprintln!("media key shortcuts: {e}");
             }
@@ -172,6 +186,7 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
         })
         .map_err(|e| format!("attach: {e:?}"))?;
 
+    MEDIA_SESSION_OK.store(true, std::sync::atomic::Ordering::Relaxed);
     eprintln!("media controls: registered (MPRIS name org.mpris.MediaPlayer2.tarn / SMTC)");
 
     // Paused (not Stopped) so OS media keys are routed to us before play.
