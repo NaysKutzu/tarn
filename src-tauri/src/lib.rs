@@ -16,6 +16,8 @@ mod autodj;
 mod mpris;
 #[cfg(desktop)]
 mod discord;
+#[cfg(desktop)]
+mod tray;
 // Phones: system media session / Discord presence are desktop-only for now.
 #[cfg(target_os = "android")]
 mod android_media;
@@ -1373,6 +1375,8 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     settings.eq_bands = bands;
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
     app.player.set_transition(settings.transition());
+    #[cfg(desktop)]
+    tray::apply(&handle, settings.tray_icon);
     app.player
         .set_normalize(settings.normalize, settings.normalize_target);
     app.player.set_auto_dj(settings.auto_dj);
@@ -1770,6 +1774,8 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
                 last_queue_sig = Some(sig);
                 last_queue_sent = std::time::Instant::now();
             }
+            #[cfg(desktop)]
+            tray::update(&handle, &st);
             let _ = handle.emit("player", st);
             if last_save.elapsed() >= std::time::Duration::from_secs(3) {
                 persist::save(&handle);
@@ -1916,6 +1922,8 @@ pub fn run() {
                     emit,
                 );
             }
+            #[cfg(desktop)]
+            tray::apply(&handle, app.settings.lock().tray_icon);
             let hwnd = main_hwnd(tauri_app);
             mpris::start(app.clone(), handle.clone(), hwnd);
             discord::start(app.clone());
@@ -1997,6 +2005,21 @@ pub fn run() {
             use tauri::{RunEvent, WindowEvent};
             match event {
                 RunEvent::WindowEvent { label, event, .. } if label == "main" => {
+                    // Close to tray: hide instead of quitting.
+                    #[cfg(desktop)]
+                    if let WindowEvent::CloseRequested { api, .. } = &event {
+                        let to_tray = handle
+                            .try_state::<Arc<App>>()
+                            .is_some_and(|a| a.settings.lock().close_to_tray);
+                        if to_tray && tray::active(handle) {
+                            api.prevent_close();
+                            persist::save(handle);
+                            if let Some(w) = handle.get_webview_window("main") {
+                                let _ = w.hide();
+                            }
+                            return;
+                        }
+                    }
                     if matches!(
                         event,
                         WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
@@ -2007,6 +2030,9 @@ pub fn run() {
                 RunEvent::ExitRequested { .. } | RunEvent::Exit => {
                     persist::save(handle);
                 }
+                // macOS: clicking the Dock icon brings a hidden window back.
+                #[cfg(target_os = "macos")]
+                RunEvent::Reopen { .. } => tray::show_window(handle),
                 _ => {}
             }
         });

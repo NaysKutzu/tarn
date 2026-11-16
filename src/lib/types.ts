@@ -213,6 +213,10 @@ export interface Settings {
   bpm_max_change: number;
   bpm_beat_align: boolean;
   bpm_return_seconds: number;
+  /** Desktop: icon in the system tray / menu bar. */
+  tray_icon: boolean;
+  /** Desktop: closing the window hides it to the tray. */
+  close_to_tray: boolean;
   /** Play every track at about the same loudness. */
   normalize: boolean;
   /** Normalization target, LUFS (−23…−8). */
