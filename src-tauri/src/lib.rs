@@ -1686,8 +1686,37 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
     });
 }
 
+/// Android has no HOME / XDG dirs, so `dirs::data_dir()` and friends resolve to
+/// read-only paths ("failed to start: Read-only file system"). Point them at
+/// the app's private storage before anything touches the disk.
+#[cfg(target_os = "android")]
+fn init_android_dirs() {
+    let pkg = std::fs::read("/proc/self/cmdline")
+        .ok()
+        .and_then(|b| {
+            let end = b.iter().position(|c| *c == 0).unwrap_or(b.len());
+            String::from_utf8(b[..end].to_vec()).ok()
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "app.tarn.desktop".to_string());
+    let base = std::path::PathBuf::from("/data/data").join(&pkg);
+    let files = base.join("files");
+    let cache = base.join("cache");
+    for d in [&files, &cache, &files.join("config")] {
+        let _ = std::fs::create_dir_all(d);
+    }
+    std::env::set_var("HOME", &files);
+    std::env::set_var("XDG_DATA_HOME", &files);
+    std::env::set_var("XDG_CONFIG_HOME", files.join("config"));
+    std::env::set_var("XDG_CACHE_HOME", &cache);
+    std::env::set_var("XDG_RUNTIME_DIR", &cache);
+    std::env::set_var("TMPDIR", &cache);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "android")]
+    init_android_dirs();
     crate::win::init();
     // WebKitGTK compositing often blurs glyphs at fractional DPI on X11, but
     // on Wayland forcing it off causes black flicker. Keep it off only on X11.
