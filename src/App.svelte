@@ -19,6 +19,12 @@
   import ShelfRow from './lib/components/ShelfRow.svelte';
   import TrackTable from './lib/components/TrackTable.svelte';
   import ContextMenu from './lib/components/ContextMenu.svelte';
+  import SleepTimer from './lib/components/SleepTimer.svelte';
+  import ImportPlaylist from './lib/components/ImportPlaylist.svelte';
+  import Scrobbling from './lib/components/Scrobbling.svelte';
+  import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+  import { Scrobbler } from './lib/scrobble';
+  import { tracksToCsv } from './lib/playlistIo';
   import QueueList from './lib/components/QueueList.svelte';
   import FilterBar from './lib/components/FilterBar.svelte';
   import { off, initOffline, refreshOffline, sourceInfo, fmtBytes } from './lib/offline.svelte';
@@ -42,7 +48,7 @@
     Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon,
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
     Download04Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
-    PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon,
+    PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon,
   } from './lib/icons';
 
   const isMac =
@@ -329,6 +335,10 @@
     import('@tauri-apps/api/app').then((m) => m.getVersion()).then((v) => { appVersion = v; }).catch(() => {});
     listen<PlayerState>('player', (e) => {
       const next = e.payload;
+      // The backend leaves the queue out of unchanged updates (it can be
+      // thousands of tracks): keep the same array so nothing is re-parsed,
+      // re-proxied or re-rendered five times a second.
+      if (next.queue_same) next.queue = player.queue;
       if (next.track) {
         const id = next.track.id;
         const known =
@@ -1338,6 +1348,48 @@
     return out;
   }
 
+  let importOpen = $state(false);
+
+  // Small always-on-top player window (same page, ?mini=1).
+  async function openMini() {
+    try {
+      const existing = await WebviewWindow.getByLabel('mini');
+      if (existing) {
+        await existing.setFocus();
+        return;
+      }
+      const w = new WebviewWindow('mini', {
+        url: '/?mini=1',
+        title: 'Tarn',
+        width: 360,
+        height: 110,
+        resizable: false,
+        decorations: false,
+        alwaysOnTop: true,
+        shadow: true,
+      });
+      w.once('tauri://error', (e) => fail(e.payload, "Couldn't open the mini player"));
+    } catch (e) { fail(e, "Couldn't open the mini player"); }
+  }
+
+  // Scrobbling (Last.fm / ListenBrainz): the tracker watches playback state.
+  const scrobbler = new Scrobbler();
+  $effect(() => {
+    scrobbler.update(player.track ?? null, player.position, player.duration, player.playing);
+  });
+
+  async function exportCollection() {
+    const c = collection;
+    if (!c?.tracks.length) return;
+    const csv = tracksToCsv(c.tracks);
+    try {
+      await navigator.clipboard.writeText(csv);
+      toast(`Copied ${c.tracks.length} songs as CSV`, 'info', 2800);
+    } catch {
+      toast("Couldn't copy to the clipboard", 'error', 2800);
+    }
+  }
+
   async function addToPlaylist(pid: string, videoId?: string) {
     const vid = videoId || ctx?.track?.id;
     if (!vid) return;
@@ -1932,6 +1984,11 @@
           {#if filterQ && !fLiked.length && !fPlaylists.length && !fAlbums.length && !fArtists.length && library}
             <div class="no-match">Nothing in your library matches “{filterQ}”</div>
           {/if}
+          {#if auth.signed_in && !off.offline}
+            <div style="margin-top:20px">
+              <button class="btn ghost" type="button" onclick={() => (importOpen = true)}>Import playlist</button>
+            </div>
+          {/if}
           {#if fPlaylists.length}
             <h2 class="shelf-title" style="margin:28px 0 12px">Playlists</h2>
             <div class="row">
@@ -2251,6 +2308,11 @@
                     {/if}
                   </button>
                 {/if}
+                {#if collection.tracks.length}
+                  <button class="btn ghost" type="button" title="Copy this list as CSV (title, artist, album, duration, id)" onclick={exportCollection}>
+                    <Hi icon={Link01Icon} size={18} /> Export CSV
+                  </button>
+                {/if}
                 {#if auth.signed_in && !off.offline}
                   <button class="btn ghost {collection.saved ? 'on' : ''}" type="button" onclick={async () => { if (needAccount('save')) return; const c0 = collection!; const s = !c0.saved; collection = { ...c0, saved: s }; try { await api.librarySave(c0.playlist_id || c0.id, s); loadLibrary({ retries: 0 }); } catch (e) { if (collection?.id === c0.id) collection = { ...collection!, saved: !s }; fail(e, "Couldn't save this", 'save'); } }}>
                     <Hi icon={Bookmark02Icon} size={18} /> {collection.saved ? 'Saved' : 'Save'}
@@ -2272,7 +2334,8 @@
           <div class="no-match">No songs match “{filterQ}”</div>
         {/if}
         <TrackTable tracks={fCollection} currentId={player.track?.id} playing={player.playing} showAlbum={collection.kind === 'playlist'} fallbackCover={collection.cover}
-          onPlay={(t, i) => playTracks(fCollection, i, collection!.cover)}
+          sortable sortId={collection.id}
+          onPlay={(t, i, list) => playTracks(list, i, collection!.cover)}
           onArtist={(id, n) => goArtist(id, n)}
           onAlbum={(id) => go({ id: 'album', albumId: id })}
           onContext={(e, t) => contextTrack(e, t)} />
@@ -2336,6 +2399,7 @@
             </span>
             <Toggle bind:checked={settings.discord_presence} label="Discord presence" onchange={() => api.setSettings(settings)} />
           </div>
+          <Scrobbling onChange={() => scrobbler.reload()} />
           <div class="set-row">
             <span class="lb"><Hi icon={Radio02Icon} size={20} /> Autoplay
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Continue with similar music when the queue ends</span>
@@ -2899,6 +2963,15 @@
         />
         <IconBtn icon={Queue02Icon} size={22} on={queueOn} onclick={() => openPanel('queue')} title="Queue" btnSize="lg" />
         <IconBtn icon={Radio02Icon} size={22} onclick={() => startRadio()} title="Radio" btnSize="lg" />
+        {#if !/Android|iPhone|iPad/i.test(navigator.userAgent)}
+          <IconBtn icon={MiniPlayerIcon} size={22} onclick={openMini} title="Mini player" btnSize="lg" />
+        {/if}
+        <SleepTimer
+          trackId={player.track?.id ?? null}
+          position={player.position}
+          duration={player.duration}
+          onStop={() => { api.pause().catch(() => {}); toast('Sleep timer: paused', 'info', 2600); }}
+        />
         <div class="vol">
           <Hi icon={player.volume < 0.01 ? VolumeMute01Icon : VolumeHighIcon} size={20} />
           <Slider
@@ -2918,6 +2991,12 @@
 </div>
 
 <Toast />
+{#if importOpen}
+  <ImportPlaylist
+    onClose={() => (importOpen = false)}
+    onDone={(n, a, t) => { toast(`Imported ${a} of ${t} songs into ${n}`, 'info', 3200); loadLibrary(); }}
+  />
+{/if}
 <UpdatePrompt bind:request={updateCheck} />
 
 {#if ctx}

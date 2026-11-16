@@ -5,6 +5,7 @@
   import Hi from './Hi.svelte';
   import { Cancel01Icon, DragDropVerticalIcon, Download04Icon } from '../icons';
   import { off } from '../offline.svelte';
+  import { filterTracks } from '../filter';
 
   let {
     tracks,
@@ -41,8 +42,25 @@
   // Optimistic order while a drop is in flight, so rows don't snap back.
   let local = $state<Track[] | null>(null);
   let shown = $derived(local ?? tracks);
+  // Search (side panel only): keeps each row's real queue index so play,
+  // remove and the keyboard shortcuts still act on the right track.
+  let q = $state('');
+  let searching = $derived(variant === 'panel' && q.trim().length > 0);
+  const MAX_HITS = 100;
+  let hits = $derived.by(() => {
+    if (!searching) return [] as { t: Track; i: number }[];
+    const want = new Set(filterTracks(shown, q));
+    const out: { t: Track; i: number }[] = [];
+    for (let i = 0; i < shown.length && out.length < MAX_HITS; i++) {
+      if (want.has(shown[i])) out.push({ t: shown[i], i });
+    }
+    return out;
+  });
+
   let end = $derived(Math.min(shown.length, first + limit));
-  let rows = $derived(shown.slice(first, end).map((t, k) => ({ t, i: first + k })));
+  let rows = $derived(
+    searching ? hits : shown.slice(first, end).map((t, k) => ({ t, i: first + k })),
+  );
 
   let sentinel = $state<HTMLDivElement | undefined>();
   $effect(() => {
@@ -75,7 +93,7 @@
   }
 
   function startDrag(e: PointerEvent, i: number) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || searching) return;
     e.preventDefault();
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -155,8 +173,20 @@
 
 <svelte:window onblur={cancelDrag} />
 
+{#if variant === 'panel' && tracks.length > 8}
+  <input
+    class="qsearch"
+    type="search"
+    placeholder="Search in queue"
+    aria-label="Search in queue"
+    bind:value={q}
+  />
+{/if}
 <div class="ql" class:np={variant === 'np'} class:dragging={!!drag} bind:this={listEl}>
-  {#if first > 0 && variant === 'panel'}
+  {#if searching && !hits.length}
+    <div class="qnone">No songs match “{q}”</div>
+  {/if}
+  {#if first > 0 && variant === 'panel' && !searching}
     <button class="more" type="button" onclick={() => (back += PAGE)}>
       Show earlier ({first})
     </button>
@@ -209,16 +239,31 @@
       {/if}
     </div>
   {/each}
-  {#if end < shown.length}
+  {#if !searching && end < shown.length}
     <div class="more-sentinel" bind:this={sentinel}></div>
   {/if}
-  {#if drag && end === shown.length && drag.over >= shown.length && drag.from !== shown.length - 1}
+  {#if !searching && drag && end === shown.length && drag.over >= shown.length && drag.from !== shown.length - 1}
     <div class="drop-end"></div>
   {/if}
 </div>
 
 <style>
   .ql { position: relative; }
+  .qsearch {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0 0 8px;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg-hover);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    outline: none;
+  }
+  .qsearch:focus { border-color: rgba(var(--accent-rgb), 0.6); }
+  .qnone { padding: 14px 8px; font-size: 13px; color: var(--text-2); }
   .more {
     display: block;
     width: 100%;

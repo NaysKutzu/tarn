@@ -1,8 +1,12 @@
 import './app.css';
 import { mount } from 'svelte';
 import App from './App.svelte';
+import Mini from './Mini.svelte';
 import { probeLayout } from './lib/layoutProbe';
 
-mount(App, { target: document.getElementById('app')! });
+// The mini player is a second window that loads this same page with ?mini=1.
+const mini = new URLSearchParams(location.search).has('mini');
 
-probeLayout();
+mount(mini ? Mini : App, { target: document.getElementById('app')! });
+
+if (!mini) probeLayout();

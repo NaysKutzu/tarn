@@ -3,6 +3,7 @@
   "description": "default",
   "windows": [
     "main",
+    "mini",
     "login",
     "cookie-extract"
   ],

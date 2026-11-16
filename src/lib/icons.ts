@@ -61,3 +61,45 @@ export { Download04Icon } from '@hugeicons/core-free-icons';
 export { DragDropVerticalIcon } from '@hugeicons/core-free-icons';
 export { WifiOff01Icon } from '@hugeicons/core-free-icons';
 export { CheckmarkCircle02Icon } from '@hugeicons/core-free-icons';
+/** Crescent moon (sleep timer). Stroke icon, same shape format as the others. */
+export const MoonSleepIcon = [
+  [
+    'path',
+    {
+      d: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z',
+      stroke: 'currentColor',
+      strokeWidth: '1.5',
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fill: 'none',
+      key: '0',
+    },
+  ],
+] as const;
+/** Small window with a player strip (mini player). */
+export const MiniPlayerIcon = [
+  [
+    'path',
+    {
+      d: 'M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z',
+      stroke: 'currentColor',
+      strokeWidth: '1.5',
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fill: 'none',
+      key: '0',
+    },
+  ],
+  [
+    'path',
+    {
+      d: 'M12 13h6v4h-6z',
+      stroke: 'currentColor',
+      strokeWidth: '1.5',
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      fill: 'none',
+      key: '1',
+    },
+  ],
+] as const;

@@ -106,6 +106,8 @@
     sizes="{w}px"
     referrerpolicy="no-referrer"
     draggable="false"
+    loading="lazy"
+    decoding="async"
     onerror={onErr}
   />
 {:else}
