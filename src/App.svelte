@@ -564,13 +564,21 @@
     return true;
   }
 
+  // iOS webviews often refuse clipboard writes; then show the text so it can be selected by hand.
+  let diagText = $state<string | null>(null);
   async function copyDiagnostics() {
+    let text = '';
     try {
-      const text = await api.diagnostics();
+      text = await api.diagnostics();
+    } catch (e) {
+      fail(e, "Couldn't read diagnostics");
+      return;
+    }
+    try {
       await navigator.clipboard.writeText(text);
       toast('Diagnostics copied', 'info', 2500);
-    } catch (e) {
-      fail(e, "Couldn't copy diagnostics");
+    } catch {
+      diagText = text;
     }
   }
   async function loadHome(params?: string | null) {
@@ -2602,6 +2610,12 @@
             </span>
             <button class="btn ghost" type="button" onclick={copyDiagnostics}>Copy diagnostics</button>
           </div>
+          {#if diagText !== null}
+            <div style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;flex-direction:column;gap:8px;padding:calc(env(safe-area-inset-top) + 12px) 12px calc(env(safe-area-inset-bottom) + 12px)">
+              <textarea readonly style="flex:1;width:100%;box-sizing:border-box;font:11px/1.35 monospace;background:#121212;color:#eee;border:1px solid #444;border-radius:8px;padding:8px" onfocus={(e) => e.currentTarget.select()}>{diagText}</textarea>
+              <button class="btn ghost" type="button" onclick={() => (diagText = null)}>Close</button>
+            </div>
+          {/if}
           {#if auth.signed_in}
             <div class="set-row">
               <span class="lb"><Hi icon={Logout03Icon} size={20} /> {auth.account?.name || 'Account'}</span>
