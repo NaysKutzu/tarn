@@ -8,4 +8,6 @@ object MediaBridge {
 
   @JvmStatic external fun nativeState(): String
   @JvmStatic external fun nativeAction(action: String)
+  @JvmStatic external fun nativeLoginCookies(header: String)
+  @JvmStatic external fun nativeLoginCancel()
 }

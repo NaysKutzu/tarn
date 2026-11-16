@@ -23,9 +23,11 @@ fn state_json() -> String {
     let Some(app) = APP.get() else {
         return "{}".into();
     };
+    let login = crate::login::android::take_request();
     let snap = app.player.snapshot();
     match snap.track.as_ref() {
         Some(t) => serde_json::json!({
+            "login": login,
             "has": true,
             "id": t.id,
             "title": t.title,
@@ -37,7 +39,7 @@ fn state_json() -> String {
             "duration": snap.duration.max(0.0),
         })
         .to_string(),
-        None => serde_json::json!({ "has": false }).to_string(),
+        None => serde_json::json!({ "has": false, "login": login }).to_string(),
     }
 }
 
@@ -99,4 +101,23 @@ pub extern "system" fn Java_app_tarn_desktop_MediaBridge_nativeAction(
         let a: String = s.into();
         act(&a);
     }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_app_tarn_desktop_MediaBridge_nativeLoginCookies(
+    mut env: JNIEnv,
+    _class: JClass,
+    header: JString,
+) {
+    if let Ok(s) = env.get_string(&header) {
+        crate::login::android::finish(s.into());
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_app_tarn_desktop_MediaBridge_nativeLoginCancel(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    crate::login::android::cancel();
 }

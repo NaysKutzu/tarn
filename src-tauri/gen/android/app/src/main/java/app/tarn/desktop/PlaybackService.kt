@@ -93,6 +93,9 @@ class PlaybackService : Service() {
 
   private fun refresh() {
     val st = JSONObject(MediaBridge.nativeState())
+    if (st.optBoolean("login", false)) {
+      startActivity(Intent(this, LoginActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
     if (!st.optBoolean("has", false)) {
       if (inForeground && lastId.isNotEmpty()) {
         stopForeground(STOP_FOREGROUND_REMOVE)

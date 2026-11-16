@@ -35,6 +35,14 @@ pub fn open_login(
         + Sync
         + 'static,
 ) -> Result<()> {
+    // Phones have no second window: a native LoginActivity (Kotlin WebView)
+    // does the sign-in and hands the cookies back through JNI.
+    #[cfg(target_os = "android")]
+    {
+        android::request(app, Arc::new(on_session));
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
     if let Some(w) = app.get_webview_window(LOGIN_LABEL) {
         let _ = w.set_focus();
         return Ok(());
@@ -302,4 +310,53 @@ fn cookie_path(c: &tauri::webview::cookie::Cookie<'_>) -> String {
 }
 fn cookie_secure(c: &tauri::webview::cookie::Cookie<'_>) -> bool {
     c.secure().unwrap_or(true)
+}
+
+/// Android sign-in plumbing. The Kotlin side polls `take_request()` (via
+/// `nativeState`) to learn it should open `LoginActivity`, then reports the
+/// captured cookie header with `finish()` or backs out with `cancel()`.
+#[cfg(target_os = "android")]
+pub mod android {
+    use super::*;
+    use std::sync::Mutex;
+
+    static PENDING: Mutex<Option<(OnSession, AppHandle)>> = Mutex::new(None);
+    static WANT: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn request(app: AppHandle, on_session: OnSession) {
+        *PENDING.lock().unwrap() = Some((on_session, app));
+        WANT.store(true, Ordering::SeqCst);
+        diag::log("login: requested native sign-in");
+    }
+
+    pub fn take_request() -> bool {
+        WANT.swap(false, Ordering::SeqCst)
+    }
+
+    pub fn finish(header: String) {
+        let Some((on_session, app)) = PENDING.lock().unwrap().take() else {
+            return;
+        };
+        tauri::async_runtime::spawn(async move {
+            match on_session(header).await {
+                Ok(()) => {
+                    diag::log("login: session accepted");
+                    let _ = app.emit("auth", serde_json::json!({ "signed_in": true }));
+                }
+                Err(e) => {
+                    diag::log(format!("login: apply failed ({e})"));
+                    let _ = app.emit("auth", serde_json::json!({ "signed_in": false }));
+                }
+            }
+        });
+    }
+
+    pub fn cancel() {
+        if let Some((_, app)) = PENDING.lock().unwrap().take() {
+            let _ = app.emit(
+                "auth",
+                serde_json::json!({ "signed_in": false, "cancelled": true }),
+            );
+        }
+    }
 }
