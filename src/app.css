@@ -2838,7 +2838,7 @@ img, svg { -webkit-user-drag: none; }
 
   /* Track tables: drop the album column, keep actions reachable. */
   .tbl { table-layout: fixed; }
-  .trow td:nth-child(2) { overflow: hidden; }
+  .trow td { overflow: hidden; }
   .trow .ta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tbl th.al, .tbl td.al { display: none; }
   .tbl td { padding: 6px 4px; }
