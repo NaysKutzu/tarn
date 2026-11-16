@@ -61,6 +61,9 @@ export const api = {
   setSettings: (settings: Settings) => invoke<void>('set_settings', { settings }),
   prefetch: (id: string) => { void invoke<void>('prefetch', { id }); },
   cacheStats: () => invoke<[number, number]>('cache_stats'),
+  /** Local listens since `since` (unix seconds), for the Stats page. */
+  getListens: (since: number) => invoke<import('./stats').Listen[]>('get_listens', { since }),
+  clearListens: () => invoke<void>('clear_listens'),
   /** Global hotkeys that failed to register ("action: reason"). */
   hotkeyErrors: () => invoke<string[]>('hotkey_errors'),
   /** Tracks with cached loudness / tempo analysis. */

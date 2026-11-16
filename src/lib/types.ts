@@ -213,6 +213,8 @@ export interface Settings {
   bpm_max_change: number;
   bpm_beat_align: boolean;
   bpm_return_seconds: number;
+  /** Keep a local listening history for the Stats page. */
+  listening_stats: boolean;
   /** Keep the pitch when matching tempo (time stretch). */
   bpm_keylock: boolean;
   /** In-app shortcuts changed from the defaults: action → combo ("" = none). */
@@ -277,7 +279,8 @@ export type View =
   | { id: 'charts' }
   | { id: 'new-releases' }
   | { id: 'history' }
-  | { id: 'downloads' };
+  | { id: 'downloads' }
+  | { id: 'stats' };
 
 import type { IconSvgElement } from '@hugeicons/svelte';
 

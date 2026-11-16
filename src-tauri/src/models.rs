@@ -336,6 +336,9 @@ pub struct Settings {
     /// Seconds the new track takes to glide back to its own tempo.
     #[serde(default = "default_bpm_return")]
     pub bpm_return_seconds: f64,
+    /// Keep a local listening history for the Stats page.
+    #[serde(default = "default_true")]
+    pub listening_stats: bool,
     /// Keep the pitch when BPM matching changes the tempo (time stretch).
     #[serde(default)]
     pub bpm_keylock: bool,
@@ -393,6 +396,7 @@ impl Default for Settings {
             bpm_max_change: default_bpm_max(),
             bpm_beat_align: true,
             bpm_return_seconds: default_bpm_return(),
+            listening_stats: true,
             bpm_keylock: false,
             shortcuts: Default::default(),
             global_hotkeys: Default::default(),

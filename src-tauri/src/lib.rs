@@ -10,6 +10,7 @@ mod player_client;
 mod login;
 mod mix;
 mod transition;
+mod stats;
 mod analysis;
 mod autodj;
 #[cfg(desktop)]
@@ -102,6 +103,8 @@ pub struct App {
     net_down: std::sync::atomic::AtomicBool,
     /// Earliest time a failed blend may be retried while offline.
     blend_retry: Mutex<Option<std::time::Instant>>,
+    /// Local listening history for the Stats page.
+    pub stats: stats::Stats,
     /// Per-track loudness / beat-grid cache.
     pub analysis: std::sync::Arc<analysis::Analyzer>,
 }
@@ -154,6 +157,7 @@ impl App {
             player.set_shuffle(sess.shuffle);
             player.set_repeat(&sess.repeat);
         }
+        let stats = stats::Stats::open(store.data_dir(), settings.listening_stats);
         Ok(Self {
             ytm,
             player,
@@ -176,6 +180,7 @@ impl App {
             offline,
             net_down: std::sync::atomic::AtomicBool::new(false),
             blend_retry: Mutex::new(None),
+            stats,
             analysis,
         })
     }
@@ -1375,6 +1380,7 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     settings.eq_bands = bands;
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
     app.player.set_transition(settings.transition());
+    app.stats.set_enabled(settings.listening_stats);
     #[cfg(desktop)]
     if app.settings.lock().global_hotkeys != settings.global_hotkeys {
         mpris::set_user_hotkeys(settings.global_hotkeys.clone());
@@ -1534,6 +1540,20 @@ fn saved_session(app: State<Arc<App>>) -> Option<persist::SavedSession> {
 #[tauri::command]
 fn save_session_now(handle: AppHandle) {
     persist::save(&handle);
+}
+
+/// Listens recorded for the Stats page since `since` (unix seconds).
+#[tauri::command]
+async fn get_listens(app: State<'_, Arc<App>>, since: u64) -> Result<Vec<stats::Listen>, String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || app.stats.listens(since))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_listens(app: State<Arc<App>>) {
+    app.stats.clear();
 }
 
 /// Global hotkeys that could not be registered ("action: reason").
@@ -1781,6 +1801,7 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
                 let _ = handle.emit("toast", msg);
             }
             let mut st = app.player.snapshot();
+            app.stats.tick(&st);
             let sig = queue_signature(&st.queue);
             if last_queue_sig == Some(sig)
                 && last_queue_sent.elapsed() < std::time::Duration::from_secs(10)
@@ -2012,6 +2033,8 @@ pub fn run() {
             analysis_count,
             clear_analysis,
             cache_stats,
+            get_listens,
+            clear_listens,
             hotkey_errors,
             remember_ui,
             saved_session,
@@ -2047,6 +2070,9 @@ pub fn run() {
                 }
                 RunEvent::ExitRequested { .. } | RunEvent::Exit => {
                     persist::save(handle);
+                    if let Some(app) = handle.try_state::<Arc<App>>() {
+                        app.stats.flush();
+                    }
                 }
                 // macOS: clicking the Dock icon brings a hidden window back.
                 #[cfg(target_os = "macos")]
