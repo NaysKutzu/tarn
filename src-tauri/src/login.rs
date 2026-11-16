@@ -61,8 +61,11 @@ pub fn open_login(
     let mut builder = WebviewWindowBuilder::new(&app, LOGIN_LABEL, WebviewUrl::External(url))
         .title("Sign in")
         .inner_size(520.0, 760.0)
-        .resizable(true)
-        .center();
+        .resizable(true);
+    #[cfg(desktop)]
+    {
+        builder = builder.center();
+    }
     builder = builder.data_directory(data_dir);
 
     let builder = builder.on_page_load(move |window, payload| {

@@ -86,6 +86,7 @@ pub fn read_geom(win: &tauri::WebviewWindow) -> Option<WinGeom> {
     })
 }
 
+#[cfg(desktop)]
 fn on_a_monitor(win: &tauri::WebviewWindow, g: &WinGeom) -> bool {
     let Ok(monitors) = win.available_monitors() else {
         return true;
@@ -108,6 +109,18 @@ fn on_a_monitor(win: &tauri::WebviewWindow, g: &WinGeom) -> bool {
 }
 
 pub fn apply_window(win: &tauri::WebviewWindow, g: &WinGeom) {
+    // Phones are always fullscreen; saved desktop geometry does not apply.
+    #[cfg(mobile)]
+    {
+        let _ = (win, g);
+        return;
+    }
+    #[cfg(desktop)]
+    apply_window_desktop(win, g);
+}
+
+#[cfg(desktop)]
+fn apply_window_desktop(win: &tauri::WebviewWindow, g: &WinGeom) {
     let w = g.w.clamp(900, 8000);
     let h = g.h.clamp(620, 8000);
     let _ = win.set_size(Size::Physical(PhysicalSize { width: w, height: h }));

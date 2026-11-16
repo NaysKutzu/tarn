@@ -10,8 +10,20 @@ mod player_client;
 mod login;
 mod mix;
 mod transition;
+#[cfg(desktop)]
 mod mpris;
+#[cfg(desktop)]
 mod discord;
+// Phones: system media session / Discord presence are desktop-only for now.
+#[cfg(mobile)]
+mod mpris {
+    pub type WindowHandle = Option<usize>;
+    pub fn start(_: std::sync::Arc<crate::App>, _: tauri::AppHandle, _: WindowHandle) {}
+}
+#[cfg(mobile)]
+mod discord {
+    pub fn start(_: std::sync::Arc<crate::App>) {}
+}
 mod models;
 mod persist;
 mod win;
