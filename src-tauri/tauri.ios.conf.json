@@ -3,7 +3,7 @@
     "externalBin": [],
     "createUpdaterArtifacts": false,
     "iOS": {
-      "frameworks": ["AudioToolbox", "CoreAudio", "AVFoundation"]
+      "frameworks": ["AudioToolbox", "CoreAudio", "AVFoundation", "AVFAudio", "MediaPlayer"]
     }
   }
 }
