@@ -1407,11 +1407,25 @@ fn artists_of(v: &Value) -> (Vec<String>, Vec<String>) {
 fn duration_of(v: &Value) -> Option<u32> {
     let mut found = None;
     walk(v, &mut |key, val| {
-        if found.is_none() && (key == "lengthText" || key == "duration" || key == "fixedColumns") {
-            if let Some(t) = yt_text(val) {
-                if let Some(s) = parse_mmss(&t) {
-                    found = Some(s);
+        if found.is_some() {
+            return;
+        }
+        if key == "fixedColumns" {
+            // Album/playlist rows keep the length in an array of fixed columns:
+            // fixedColumns[i].musicResponsiveListItemFixedColumnRenderer.text.
+            // yt_text() cannot read the array itself, so look inside each column.
+            if let Some(cols) = val.as_array() {
+                for col in cols {
+                    let text = &col["musicResponsiveListItemFixedColumnRenderer"]["text"];
+                    if let Some(s) = yt_text(text).and_then(|t| parse_mmss(&t)) {
+                        found = Some(s);
+                        return;
+                    }
                 }
+            }
+        } else if key == "lengthText" || key == "duration" {
+            if let Some(s) = yt_text(val).and_then(|t| parse_mmss(&t)) {
+                found = Some(s);
             }
         }
     });

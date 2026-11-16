@@ -297,11 +297,14 @@ impl Player {
             t.ensure_cover();
         }
         let mut s = self.state.lock();
-        if let Some(d) = track.duration {
-            if d > 0 {
-                s.duration = d as f64;
-            }
-        }
+        // Always take the new track's length (0 = not known yet). Keeping the
+        // previous track's value would show the wrong total and leave the seek
+        // bar pointing at the wrong length until the stream reports its own.
+        s.duration = track
+            .duration
+            .filter(|&d| d > 0)
+            .map(|d| d as f64)
+            .unwrap_or(0.0);
         s.track = Some(track);
         s.loading = loading;
         s.playing = false;
