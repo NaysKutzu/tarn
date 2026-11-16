@@ -231,6 +231,8 @@ export interface Settings {
   normalize_target: number;
   /** Reorder upcoming tracks by tempo (only when shuffle is off). */
   auto_dj: boolean;
+  /** DJ mode: long beat-matched blends with filter sweeps. */
+  dj_mode: boolean;
 }
 
 export interface PlayerState {

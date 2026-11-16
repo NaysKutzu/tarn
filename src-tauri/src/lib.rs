@@ -150,7 +150,7 @@ impl App {
             analysis.on_done(Box::new(move |id, _| p.analysis_ready(id)));
         }
         player.set_normalize(settings.normalize, settings.normalize_target);
-        player.set_auto_dj(settings.auto_dj);
+        player.set_auto_dj(settings.auto_dj || settings.dj_mode);
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata - audio is armed later.
             player.set_volume(sess.volume);
@@ -1389,7 +1389,7 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     tray::apply(&handle, settings.tray_icon);
     app.player
         .set_normalize(settings.normalize, settings.normalize_target);
-    app.player.set_auto_dj(settings.auto_dj);
+    app.player.set_auto_dj(settings.auto_dj || settings.dj_mode);
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
     if app.refresh_offline() {

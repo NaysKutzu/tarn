@@ -88,7 +88,7 @@ pub fn start(app: Arc<crate::App>) {
         let mut last_fp: Option<Vec<String>> = None;
         loop {
             tokio::time::sleep(Duration::from_secs(4)).await;
-            if !app.settings.lock().auto_dj {
+            if !{ let st = app.settings.lock(); st.auto_dj || st.dj_mode } {
                 last_fp = None;
                 continue;
             }
