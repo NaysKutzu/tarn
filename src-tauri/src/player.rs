@@ -569,12 +569,20 @@ impl Player {
     }
 
     pub fn pause(&self) {
+        // Reflect it now: the audio thread applies Pause a moment later, and a
+        // second quick key press must already see "paused".
+        if matches!(self.phase.load(Ordering::Relaxed), 1 | 4) {
+            self.phase.store(2, Ordering::Relaxed);
+        }
         let _ = self.tx.send(Cmd::Pause);
     }
     pub fn resume(&self) {
         if !self.has_src.load(Ordering::Relaxed) {
             self.request_recover(true);
             return;
+        }
+        if self.phase.load(Ordering::Relaxed) == 2 {
+            self.phase.store(1, Ordering::Relaxed);
         }
         let _ = self.tx.send(Cmd::Resume);
     }
