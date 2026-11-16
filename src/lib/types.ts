@@ -213,6 +213,12 @@ export interface Settings {
   bpm_max_change: number;
   bpm_beat_align: boolean;
   bpm_return_seconds: number;
+  /** Play every track at about the same loudness. */
+  normalize: boolean;
+  /** Normalization target, LUFS (−23…−8). */
+  normalize_target: number;
+  /** Reorder upcoming tracks by tempo (only when shuffle is off). */
+  auto_dj: boolean;
 }
 
 export interface PlayerState {

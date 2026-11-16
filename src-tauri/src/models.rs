@@ -336,6 +336,15 @@ pub struct Settings {
     /// Seconds the new track takes to glide back to its own tempo.
     #[serde(default = "default_bpm_return")]
     pub bpm_return_seconds: f64,
+    /// Play every track at about the same loudness (measured per track).
+    #[serde(default)]
+    pub normalize: bool,
+    /// Loudness target for normalization, LUFS.
+    #[serde(default = "default_normalize_target")]
+    pub normalize_target: f32,
+    /// Reorder upcoming tracks by tempo so transitions flow (no shuffle).
+    #[serde(default)]
+    pub auto_dj: bool,
 }
 
 impl Default for Settings {
@@ -367,6 +376,9 @@ impl Default for Settings {
             bpm_max_change: default_bpm_max(),
             bpm_beat_align: true,
             bpm_return_seconds: default_bpm_return(),
+            normalize: false,
+            normalize_target: default_normalize_target(),
+            auto_dj: false,
         }
     }
 }
@@ -413,6 +425,9 @@ fn default_filter() -> String {
 }
 fn default_bpm_max() -> f64 {
     6.0
+}
+fn default_normalize_target() -> f32 {
+    -14.0
 }
 fn default_bpm_return() -> f64 {
     8.0
