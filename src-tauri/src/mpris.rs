@@ -199,7 +199,12 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
 
     let mut last_id: Option<String> = None;
     let mut last_playing: Option<bool> = None;
-    let mut last_pos_bucket: u64 = u64::MAX;
+    // Position is extrapolated by the OS from the last value we sent, so only
+    // resend it on a real jump (seek). Re-announcing every 500ms spams
+    // PropertiesChanged and makes some desktops hand the media keys to
+    // another player.
+    let mut sent_pos: f64 = 0.0;
+    let mut sent_at = std::time::Instant::now();
     // Metadata carries the cover URL: the OS re-downloads the art every time
     // it is set, so only send it when the track (or its duration) changes.
     let mut last_meta: Option<(String, u64)> = None;
@@ -212,11 +217,13 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
         let snap = app.player.snapshot();
         let playing = snap.playing;
         let id = snap.track.as_ref().map(|t| t.id.clone());
-        // Refresh position about once a second so system UIs can seek.
-        let pos_bucket = (snap.position.max(0.0) * 2.0) as u64;
-        let changed = id != last_id
-            || Some(playing) != last_playing
-            || pos_bucket != last_pos_bucket;
+        let expected = if playing {
+            sent_pos + sent_at.elapsed().as_secs_f64()
+        } else {
+            sent_pos
+        };
+        let jumped = (snap.position - expected).abs() > 2.0;
+        let changed = id != last_id || Some(playing) != last_playing || jumped;
 
         if changed {
             if let Some(t) = &snap.track {
@@ -251,7 +258,8 @@ fn run_souvlaki(app: Arc<crate::App>, hwnd: WindowHandle) -> Result<(), String> 
             });
             last_id = id;
             last_playing = Some(playing);
-            last_pos_bucket = pos_bucket;
+            sent_pos = snap.position.max(0.0);
+            sent_at = std::time::Instant::now();
         }
 
         // Windows SMTC needs the UI thread to pump messages (Tauri does
