@@ -213,6 +213,8 @@ export interface Settings {
   bpm_max_change: number;
   bpm_beat_align: boolean;
   bpm_return_seconds: number;
+  /** Keep the pitch when matching tempo (time stretch). */
+  bpm_keylock: boolean;
 }
 
 export interface PlayerState {

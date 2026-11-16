@@ -1364,6 +1364,7 @@ fn plain_plan(cfg: &XfConfig) -> crate::mix::XfPlan {
     crate::mix::XfPlan {
         shape: cfg.shape.clone(),
         return_secs: cfg.bpm_return_secs,
+        keylock: cfg.keylock,
         smart: cfg.smart,
         ..crate::mix::XfPlan::simple(cfg.shape.secs)
     }

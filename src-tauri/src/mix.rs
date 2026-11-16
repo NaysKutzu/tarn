@@ -39,6 +39,8 @@ pub struct XfPlan {
     pub skipped_frames: u64,
     /// Shorten the overlap when the outgoing track has already gone quiet.
     pub smart: bool,
+    /// Change the incoming tempo without changing its pitch.
+    pub keylock: bool,
 }
 
 impl XfPlan {
@@ -50,6 +52,7 @@ impl XfPlan {
             return_secs: 8.0,
             skipped_frames: 0,
             smart: false,
+            keylock: false,
         }
     }
 }
@@ -313,7 +316,11 @@ impl Mixer {
         g.shape = plan.shape.clone();
         g.shape.secs = secs;
         g.return_secs = plan.return_secs;
-        g.inc_vari = Vari::with_rate(plan.in_rate);
+        g.inc_vari = if plan.keylock {
+            Vari::keylocked(plan.in_rate, sr)
+        } else {
+            Vari::with_rate(plan.in_rate)
+        };
         g.lp_out = vec![Biquad::default(); ch as usize];
         g.hp_in = vec![Biquad::default(); ch as usize];
         g.xf_wait = 0;
