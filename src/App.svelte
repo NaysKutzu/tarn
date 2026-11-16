@@ -104,6 +104,7 @@
     bpm_max_change: 6,
     bpm_beat_align: true,
     bpm_return_seconds: 8,
+    bpm_keylock: false,
   } satisfies Partial<SettingsT>;
   const XF_CURVES = [
     { value: 'equal_power', label: 'Equal power' },
@@ -2631,6 +2632,12 @@
                 <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Start the blend on a beat so kicks line up</span>
               </span>
               <Toggle bind:checked={settings.bpm_beat_align} label="Beat-aligned start" onchange={() => api.setSettings(settings)} />
+            </div>
+            <div class="set-row">
+              <span class="lb">Keep pitch
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Time-stretch instead of speeding up, so vocals don't change key</span>
+              </span>
+              <Toggle bind:checked={settings.bpm_keylock} label="Keep pitch" onchange={() => api.setSettings(settings)} />
             </div>
             <div class="set-row">
               <span class="lb">Tempo return

@@ -336,6 +336,9 @@ pub struct Settings {
     /// Seconds the new track takes to glide back to its own tempo.
     #[serde(default = "default_bpm_return")]
     pub bpm_return_seconds: f64,
+    /// Keep the pitch when BPM matching changes the tempo (time stretch).
+    #[serde(default)]
+    pub bpm_keylock: bool,
     /// In-app keyboard shortcuts that differ from the defaults: action →
     /// key combo ("" = unassigned). Interpreted by the frontend.
     #[serde(default)]
@@ -390,6 +393,7 @@ impl Default for Settings {
             bpm_max_change: default_bpm_max(),
             bpm_beat_align: true,
             bpm_return_seconds: default_bpm_return(),
+            bpm_keylock: false,
             shortcuts: Default::default(),
             global_hotkeys: Default::default(),
             tray_icon: false,
@@ -419,6 +423,7 @@ impl Settings {
             bpm_max_pct: self.bpm_max_change.clamp(0.5, 16.0) as f32,
             beat_align: self.bpm_beat_align,
             bpm_return_secs: self.bpm_return_seconds.clamp(1.0, 60.0) as f32,
+            keylock: self.bpm_keylock,
         }
     }
 }
