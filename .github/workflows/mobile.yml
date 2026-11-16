@@ -127,12 +127,25 @@ jobs:
           npx tauri ios build --debug --no-codesign \
             || npx tauri ios build --debug
 
+      - name: Package unsigned IPA (for sideloading)
+        if: success()
+        run: |
+          APP=$(find src-tauri/gen/apple -name '*.app' -not -path '*/Intermediates*' -prune | head -1)
+          echo "app bundle: ${APP:-none}"
+          find src-tauri/gen/apple -name '*.ipa' | head -3
+          if [ -n "$APP" ]; then
+            rm -rf ipa-out && mkdir -p ipa-out/Payload
+            cp -R "$APP" ipa-out/Payload/
+            (cd ipa-out && zip -qry Tarn-unsigned.ipa Payload)
+            ls -la ipa-out
+          fi
+
       - name: Upload iOS artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: success()
         with:
           name: tarn-ios
           path: |
-            src-tauri/gen/apple/**/*.app
+            ipa-out/Tarn-unsigned.ipa
             src-tauri/gen/apple/**/*.ipa
           if-no-files-found: warn
