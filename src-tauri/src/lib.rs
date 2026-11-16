@@ -15,10 +15,18 @@ mod mpris;
 #[cfg(desktop)]
 mod discord;
 // Phones: system media session / Discord presence are desktop-only for now.
+#[cfg(target_os = "android")]
+mod android_media;
 #[cfg(mobile)]
 mod mpris {
     pub type WindowHandle = Option<usize>;
-    pub fn start(_: std::sync::Arc<crate::App>, _: tauri::AppHandle, _: WindowHandle) {}
+    pub fn start(app: std::sync::Arc<crate::App>, _: tauri::AppHandle, _: WindowHandle) {
+        // Android: the Kotlin foreground service polls this for its notification.
+        #[cfg(target_os = "android")]
+        crate::android_media::start(app);
+        #[cfg(not(target_os = "android"))]
+        let _ = app;
+    }
 }
 #[cfg(mobile)]
 mod discord {

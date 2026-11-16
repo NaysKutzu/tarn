@@ -5074,6 +5074,7 @@ dependencies = [
  "global-hotkey",
  "hex",
  "image",
+ "jni 0.21.1",
  "keyring",
  "notify-rust",
  "parking_lot",
