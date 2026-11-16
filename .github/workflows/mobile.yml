@@ -124,13 +124,16 @@ jobs:
       - name: Init and build (unsigned)
         run: |
           npx tauri ios init --ci || npx tauri ios init
-          npx tauri ios build --debug --no-codesign \
-            || npx tauri ios build --debug
+          # Unsigned build: AltStore / SideStore re-sign it on install.
+          printf 'CODE_SIGNING_ALLOWED = NO\nCODE_SIGNING_REQUIRED = NO\nCODE_SIGN_IDENTITY =\nEXPANDED_CODE_SIGN_IDENTITY =\n' > "$RUNNER_TEMP/nosign.xcconfig"
+          export XCODE_XCCONFIG_FILE="$RUNNER_TEMP/nosign.xcconfig"
+          # The export step needs signing and may fail; the .app is still built.
+          npx tauri ios build --debug || echo "tauri ios build exited non-zero (expected without signing)"
 
       - name: Package unsigned IPA (for sideloading)
         if: success()
         run: |
-          APP=$(find src-tauri/gen/apple -name '*.app' -not -path '*/Intermediates*' -prune | head -1)
+          APP=$(find src-tauri/gen/apple ~/Library/Developer/Xcode/DerivedData -path '*iphoneos*' -name '*.app' -prune 2>/dev/null | head -1)
           echo "app bundle: ${APP:-none}"
           find src-tauri/gen/apple -name '*.ipa' | head -3
           if [ -n "$APP" ]; then
