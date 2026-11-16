@@ -342,6 +342,9 @@ pub struct Settings {
     /// Loudness target for normalization, LUFS.
     #[serde(default = "default_normalize_target")]
     pub normalize_target: f32,
+    /// Reorder upcoming tracks by tempo so transitions flow (no shuffle).
+    #[serde(default)]
+    pub auto_dj: bool,
 }
 
 impl Default for Settings {
@@ -375,6 +378,7 @@ impl Default for Settings {
             bpm_return_seconds: default_bpm_return(),
             normalize: false,
             normalize_target: default_normalize_target(),
+            auto_dj: false,
         }
     }
 }

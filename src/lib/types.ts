@@ -217,6 +217,8 @@ export interface Settings {
   normalize: boolean;
   /** Normalization target, LUFS (−23…−8). */
   normalize_target: number;
+  /** Reorder upcoming tracks by tempo (only when shuffle is off). */
+  auto_dj: boolean;
 }
 
 export interface PlayerState {

@@ -11,6 +11,7 @@ mod login;
 mod mix;
 mod transition;
 mod analysis;
+mod autodj;
 #[cfg(desktop)]
 mod mpris;
 #[cfg(desktop)]
@@ -144,6 +145,7 @@ impl App {
             analysis.on_done(Box::new(move |id, _| p.analysis_ready(id)));
         }
         player.set_normalize(settings.normalize, settings.normalize_target);
+        player.set_auto_dj(settings.auto_dj);
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata - audio is armed later.
             player.set_volume(sess.volume);
@@ -827,7 +829,7 @@ fn prefetch_ahead(app: &App, queue: &[Track], index: usize) {
 
 /// Measure a fully cached track in the background (loudness / beat grid)
 /// so it is ready before it plays. No-op unless a feature needs it.
-fn analyze_prefetched(ytm: &std::sync::Arc<Ytm>, player: &Player, id: &str) {
+pub(crate) fn analyze_prefetched(ytm: &std::sync::Arc<Ytm>, player: &Player, id: &str) {
     if !player.wants_analysis() || !ytm.cache.has_complete(id) {
         return;
     }
@@ -1373,6 +1375,7 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     app.player.set_transition(settings.transition());
     app.player
         .set_normalize(settings.normalize, settings.normalize_target);
+    app.player.set_auto_dj(settings.auto_dj);
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
     if app.refresh_offline() {
@@ -1899,6 +1902,7 @@ pub fn run() {
                 crate::ytdlp::maybe_update().await;
             });
             emit_loop(handle.clone(), app.clone());
+            autodj::start(app.clone());
             net_loop(handle.clone(), app.clone());
             {
                 let h = handle.clone();

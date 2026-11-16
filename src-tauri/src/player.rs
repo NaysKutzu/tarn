@@ -105,6 +105,8 @@ pub struct Player {
     normalize: Arc<Mutex<Option<f32>>>,
     /// Video id of the track the mixer is (about to be) playing.
     audible: Arc<Mutex<String>>,
+    /// Auto-DJ wants upcoming tracks analysed.
+    auto_dj: Arc<AtomicBool>,
 }
 
 impl Player {
@@ -218,6 +220,7 @@ impl Player {
             analyzer: Arc::new(Mutex::new(None)),
             normalize: Arc::new(Mutex::new(None)),
             audible: Arc::new(Mutex::new(String::new())),
+            auto_dj: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -494,7 +497,13 @@ impl Player {
     /// True when a feature needs per-track analysis (normalization or BPM
     /// matching), so nothing is decoded in the background otherwise.
     pub fn wants_analysis(&self) -> bool {
-        self.normalize.lock().is_some() || self.xf_cfg.lock().bpm_match
+        self.normalize.lock().is_some()
+            || self.xf_cfg.lock().bpm_match
+            || self.auto_dj.load(Ordering::Relaxed)
+    }
+
+    pub fn set_auto_dj(&self, on: bool) {
+        self.auto_dj.store(on, Ordering::Relaxed);
     }
 
     /// Queue a complete (or downloading) body for analysis when useful.
@@ -1076,6 +1085,32 @@ impl Player {
                 lin.retain(|t| t.id != removed_id);
             }
         }
+    }
+
+    /// Replace `queue[start..]` (currently `expected`, by id) with the same
+    /// tracks in `new_ids` order. Returns false if the queue changed since
+    /// the caller looked at it.
+    pub fn reorder_window(&self, start: usize, expected: &[String], new_ids: &[String]) -> bool {
+        let mut s = self.state.lock();
+        let end = start + expected.len();
+        if s.shuffle
+            || end > s.queue.len()
+            || start <= s.index
+            || expected.len() != new_ids.len()
+            || !s.queue[start..end].iter().zip(expected).all(|(t, id)| &t.id == id)
+        {
+            return false;
+        }
+        let mut pool: Vec<Option<Track>> = s.queue[start..end].iter().cloned().map(Some).collect();
+        let mut out = Vec::with_capacity(pool.len());
+        for id in new_ids {
+            let Some(t) = pool.iter_mut().find(|t| t.as_ref().is_some_and(|t| &t.id == id)) else {
+                return false;
+            };
+            out.extend(t.take());
+        }
+        s.queue.splice(start..end, out);
+        true
     }
 
     pub fn move_item(&self, from: usize, to: usize) {
@@ -1815,5 +1850,29 @@ mod crossfade_tests {
         assert!(matches!(p.next_choice(false), NextChoice::Play(0)));
         p.set_repeat("one");
         assert!(matches!(p.next_choice(false), NextChoice::Play(2)));
+    }
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::*;
+
+    #[test]
+    fn reorders_only_an_unchanged_window() {
+        let p = Player::start();
+        let q: Vec<Track> = (0..6)
+            .map(|i| Track { id: format!("t{i}"), ..Default::default() })
+            .collect();
+        p.replace_queue(q, 0);
+        let ids = |p: &Player| p.queue_and_index().0.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+        let win: Vec<String> = ["t2", "t3", "t4", "t5"].iter().map(|s| s.to_string()).collect();
+        let new: Vec<String> = ["t4", "t2", "t5", "t3"].iter().map(|s| s.to_string()).collect();
+        assert!(p.reorder_window(2, &win, &new));
+        assert_eq!(ids(&p), ["t0", "t1", "t4", "t2", "t5", "t3"]);
+        // Stale view of the queue: refuse.
+        assert!(!p.reorder_window(2, &win, &new));
+        // Never touches the current track.
+        let w0: Vec<String> = ["t0", "t1"].iter().map(|s| s.to_string()).collect();
+        assert!(!p.reorder_window(0, &w0, &w0));
     }
 }

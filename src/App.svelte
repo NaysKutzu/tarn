@@ -109,7 +109,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], normalize: false, normalize_target: -14, ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], normalize: false, normalize_target: -14, auto_dj: false, ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -2620,7 +2620,13 @@
               </div>
             </div>
           {/if}
-          {#if settings.normalize || settings.bpm_match}
+          <div class="set-row">
+            <span class="lb">Auto-DJ
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Reorder upcoming songs by tempo so transitions flow{player.shuffle ? ' (paused while shuffle is on)' : ''}. Works best with BPM matching</span>
+            </span>
+            <Toggle bind:checked={settings.auto_dj} label="Auto-DJ" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
+          </div>
+          {#if settings.normalize || settings.bpm_match || settings.auto_dj}
             <div class="set-row">
               <span class="lb">Track analysis
                 <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Loudness and tempo saved for {analysisCount} {analysisCount === 1 ? 'track' : 'tracks'}</span>
