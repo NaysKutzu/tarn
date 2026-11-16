@@ -84,7 +84,11 @@ jobs:
         # npm#4828: optional rollup/esbuild/cli binaries can be skipped
         shell: bash
         run: |
-          npm install --no-save --force rollup esbuild @tauri-apps/cli
+          R=$(node -p "require('./node_modules/rollup/package.json').version")
+          E=$(node -p "require('./node_modules/esbuild/package.json').version")
+          C=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
+          echo "pinning rollup@$R esbuild@$E @tauri-apps/cli@$C"
+          npm install --no-save --force "rollup@$R" "esbuild@$E" "@tauri-apps/cli@$C"
           node -e "require('rollup'); require('@tauri-apps/cli'); console.log('native bindings ok')"
 
       - name: Stamp release version
@@ -204,20 +208,24 @@ jobs:
 
       - name: Reinstall platform-native bindings
         run: |
-          npm install --no-save --force rollup esbuild @tauri-apps/cli
+          R=$(node -p "require('./node_modules/rollup/package.json').version")
+          E=$(node -p "require('./node_modules/esbuild/package.json').version")
+          C=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
+          echo "pinning rollup@$R esbuild@$E @tauri-apps/cli@$C"
+          npm install --no-save --force "rollup@$R" "esbuild@$E" "@tauri-apps/cli@$C"
           arch="$(uname -m)"
           case "$arch" in
             aarch64|arm64)
               npm install --no-save --force \
-                @tauri-apps/cli-linux-arm64-gnu \
-                @rollup/rollup-linux-arm64-gnu \
-                @esbuild/linux-arm64
+                "@tauri-apps/cli-linux-arm64-gnu@$C" \
+                "@rollup/rollup-linux-arm64-gnu@$R" \
+                "@esbuild/linux-arm64@$E"
               ;;
             x86_64|amd64)
               npm install --no-save --force \
-                @tauri-apps/cli-linux-x64-gnu \
-                @rollup/rollup-linux-x64-gnu \
-                @esbuild/linux-x64
+                "@tauri-apps/cli-linux-x64-gnu@$C" \
+                "@rollup/rollup-linux-x64-gnu@$R" \
+                "@esbuild/linux-x64@$E"
               ;;
             *)
               echo "Unknown arch: $arch" >&2
@@ -292,10 +300,13 @@ jobs:
           - rust_target: aarch64-apple-darwin
             platform_key: darwin-aarch64
             artifact_name: macos-arm64
+            runner: macos-15
+          # Native Intel runner: free for public repos, separate queue from the M1 pool.
           - rust_target: x86_64-apple-darwin
             platform_key: darwin-x86_64
             artifact_name: macos-x64
-    runs-on: macos-15
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
     env:
       VITE_TARN_BUILD: ${{ needs.version.outputs.build }}
       RELEASE_TAG: ${{ needs.version.outputs.tag }}
@@ -332,7 +343,11 @@ jobs:
 
       - name: Reinstall platform-native bindings
         run: |
-          npm install --no-save --force rollup esbuild @tauri-apps/cli
+          R=$(node -p "require('./node_modules/rollup/package.json').version")
+          E=$(node -p "require('./node_modules/esbuild/package.json').version")
+          C=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
+          echo "pinning rollup@$R esbuild@$E @tauri-apps/cli@$C"
+          npm install --no-save --force "rollup@$R" "esbuild@$E" "@tauri-apps/cli@$C"
           node -e "require('rollup'); require('@tauri-apps/cli'); console.log('native bindings ok')"
 
       - name: Stamp release version
