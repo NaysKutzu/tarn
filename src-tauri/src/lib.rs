@@ -17,15 +17,25 @@ mod discord;
 // Phones: system media session / Discord presence are desktop-only for now.
 #[cfg(target_os = "android")]
 mod android_media;
+#[cfg(target_os = "ios")]
+mod ios_media;
+#[cfg(target_os = "ios")]
+mod ios_bridge;
 #[cfg(mobile)]
 mod mpris {
     pub type WindowHandle = Option<usize>;
-    pub fn start(app: std::sync::Arc<crate::App>, _: tauri::AppHandle, _: WindowHandle) {
+    pub fn start(app: std::sync::Arc<crate::App>, handle: tauri::AppHandle, _: WindowHandle) {
         // Android: the Kotlin foreground service polls this for its notification.
         #[cfg(target_os = "android")]
-        crate::android_media::start(app);
-        #[cfg(not(target_os = "android"))]
-        let _ = app;
+        {
+            let _ = handle;
+            crate::android_media::start(app);
+        }
+        // iOS: lock-screen Now Playing + remote commands.
+        #[cfg(target_os = "ios")]
+        crate::ios_bridge::start(app, handle);
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let _ = (app, handle);
     }
 }
 #[cfg(mobile)]
@@ -1254,6 +1264,12 @@ async fn apply_session(app: &App, header: String) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Lets the frontend leave a line in the diagnostics (layout metrics on phones).
+#[tauri::command]
+fn diag_note(msg: String) {
+    crate::diag::log(format!("ui: {}", msg.chars().take(400).collect::<String>()));
+}
+
 #[tauri::command]
 fn diagnostics(app: State<Arc<App>>) -> String {
     let auth = app.auth.lock().clone();
@@ -1725,6 +1741,12 @@ fn init_android_dirs() {
 pub fn run() {
     #[cfg(target_os = "android")]
     init_android_dirs();
+    // iOS: must be set before the audio output opens, or the OS silences us
+    // in the background / when the screen locks.
+    #[cfg(target_os = "ios")]
+    if let Err(e) = crate::ios_media::setup_audio_session() {
+        eprintln!("ios audio session: {e}");
+    }
     crate::win::init();
     // WebKitGTK compositing often blurs glyphs at fractional DPI on X11, but
     // on Wayland forcing it off causes black flicker. Keep it off only on X11.
@@ -1887,6 +1909,7 @@ pub fn run() {
             open_login,
             sign_out,
             diagnostics,
+            diag_note,
             get_settings,
             set_settings,
             extract_cookie_names,

@@ -139,6 +139,12 @@ jobs:
       - name: Init and build (unsigned)
         run: |
           npx tauri ios init --ci || npx tauri ios init
+          # Keep playing with the screen locked / app in the background.
+          PL=$(find src-tauri/gen/apple -maxdepth 2 -name Info.plist | head -1)
+          echo "Info.plist: ${PL:-none}"
+          [ -n "$PL" ] || { echo "::error::generated Info.plist not found"; exit 1; }
+          /usr/libexec/PlistBuddy -c "Delete :UIBackgroundModes" "$PL" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" -c "Add :UIBackgroundModes:0 string audio" "$PL"
           # Tauri shells out to `xcodebuild`; wrap it so every build is unsigned
           # (AltStore / SideStore re-sign on install).
           mkdir -p "$RUNNER_TEMP/bin"
@@ -162,6 +168,9 @@ jobs:
           echo "app bundle: ${APP:-none}"
           if [ -z "$APP" ]; then echo "::error::no .app produced"; exit 1; fi
           du -sh "$APP"; ls -la "$APP"
+          # The background-audio entitlement must have made it into the built app.
+          plutil -extract UIBackgroundModes xml1 -o - "$APP/Info.plist" | tee /dev/stderr | grep -q "<string>audio</string>" \
+            || { echo "::error::UIBackgroundModes=audio missing from the built Info.plist"; exit 1; }
           if [ ! -f "$APP/Info.plist" ] || [ "$(du -sk "$APP" | cut -f1)" -lt 1000 ]; then echo "::error::.app looks empty"; exit 1; fi
           rm -rf ipa-out && mkdir -p ipa-out/Payload
           cp -R "$APP" ipa-out/Payload/
