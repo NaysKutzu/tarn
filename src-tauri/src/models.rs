@@ -339,6 +339,32 @@ pub struct Settings {
     /// Keep a local listening history for the Stats page.
     #[serde(default = "default_true")]
     pub listening_stats: bool,
+    /// Keep the pitch when BPM matching changes the tempo (time stretch).
+    #[serde(default)]
+    pub bpm_keylock: bool,
+    /// In-app keyboard shortcuts that differ from the defaults: action →
+    /// key combo ("" = unassigned). Interpreted by the frontend.
+    #[serde(default)]
+    pub shortcuts: std::collections::BTreeMap<String, String>,
+    /// System-wide hotkeys (desktop): action → accelerator such as
+    /// "Ctrl+Alt+KeyP". None by default.
+    #[serde(default)]
+    pub global_hotkeys: std::collections::BTreeMap<String, String>,
+    /// Show an icon in the system tray / menu bar (desktop).
+    #[serde(default)]
+    pub tray_icon: bool,
+    /// Closing the main window hides it to the tray instead of quitting.
+    #[serde(default)]
+    pub close_to_tray: bool,
+    /// Play every track at about the same loudness (measured per track).
+    #[serde(default)]
+    pub normalize: bool,
+    /// Loudness target for normalization, LUFS.
+    #[serde(default = "default_normalize_target")]
+    pub normalize_target: f32,
+    /// Reorder upcoming tracks by tempo so transitions flow (no shuffle).
+    #[serde(default)]
+    pub auto_dj: bool,
 }
 
 impl Default for Settings {
@@ -371,6 +397,14 @@ impl Default for Settings {
             bpm_beat_align: true,
             bpm_return_seconds: default_bpm_return(),
             listening_stats: true,
+            bpm_keylock: false,
+            shortcuts: Default::default(),
+            global_hotkeys: Default::default(),
+            tray_icon: false,
+            close_to_tray: false,
+            normalize: false,
+            normalize_target: default_normalize_target(),
+            auto_dj: false,
         }
     }
 }
@@ -393,6 +427,7 @@ impl Settings {
             bpm_max_pct: self.bpm_max_change.clamp(0.5, 16.0) as f32,
             beat_align: self.bpm_beat_align,
             bpm_return_secs: self.bpm_return_seconds.clamp(1.0, 60.0) as f32,
+            keylock: self.bpm_keylock,
         }
     }
 }
@@ -417,6 +452,9 @@ fn default_filter() -> String {
 }
 fn default_bpm_max() -> f64 {
     6.0
+}
+fn default_normalize_target() -> f32 {
+    -14.0
 }
 fn default_bpm_return() -> f64 {
     8.0

@@ -215,6 +215,22 @@ export interface Settings {
   bpm_return_seconds: number;
   /** Keep a local listening history for the Stats page. */
   listening_stats: boolean;
+  /** Keep the pitch when matching tempo (time stretch). */
+  bpm_keylock: boolean;
+  /** In-app shortcuts changed from the defaults: action → combo ("" = none). */
+  shortcuts: Record<string, string>;
+  /** Desktop global hotkeys: action → accelerator, e.g. "Ctrl+Alt+KeyP". */
+  global_hotkeys: Record<string, string>;
+  /** Desktop: icon in the system tray / menu bar. */
+  tray_icon: boolean;
+  /** Desktop: closing the window hides it to the tray. */
+  close_to_tray: boolean;
+  /** Play every track at about the same loudness. */
+  normalize: boolean;
+  /** Normalization target, LUFS (−23…−8). */
+  normalize_target: number;
+  /** Reorder upcoming tracks by tempo (only when shuffle is off). */
+  auto_dj: boolean;
 }
 
 export interface PlayerState {

@@ -64,6 +64,11 @@ export const api = {
   /** Local listens since `since` (unix seconds), for the Stats page. */
   getListens: (since: number) => invoke<import('./stats').Listen[]>('get_listens', { since }),
   clearListens: () => invoke<void>('clear_listens'),
+  /** Global hotkeys that failed to register ("action: reason"). */
+  hotkeyErrors: () => invoke<string[]>('hotkey_errors'),
+  /** Tracks with cached loudness / tempo analysis. */
+  analysisCount: () => invoke<number>('analysis_count'),
+  clearAnalysis: () => invoke<void>('clear_analysis'),
   savedSession: () => invoke<SavedSession | null>('saved_session'),
   rememberUi: (ui: UiSession) => invoke<void>('remember_ui', { ui }),
   netState: () => invoke<NetState>('net_state'),

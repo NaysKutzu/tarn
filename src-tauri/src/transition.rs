@@ -152,6 +152,8 @@ pub struct XfConfig {
     /// After the fade, glide the new track back to its own tempo over
     /// this many seconds.
     pub bpm_return_secs: f32,
+    /// Tempo changes keep the pitch (time stretch instead of varispeed).
+    pub keylock: bool,
 }
 
 impl XfConfig {
@@ -163,6 +165,7 @@ impl XfConfig {
             bpm_max_pct: 6.0,
             beat_align: true,
             bpm_return_secs: 8.0,
+            keylock: false,
         }
     }
     pub fn needs_analysis(&self) -> bool {
@@ -190,6 +193,21 @@ impl Biquad {
     }
     pub fn set_highpass(&mut self, fc: f32, sr: f32) {
         self.set(fc, sr, true);
+    }
+    /// RBJ high shelf (S = 1) with `gain_db` above `fc`.
+    pub fn set_high_shelf(&mut self, fc: f32, gain_db: f32, sr: f32) {
+        let fc = fc.clamp(10.0, sr * 0.45);
+        let a = 10f32.powf(gain_db / 40.0);
+        let w0 = 2.0 * std::f32::consts::PI * fc / sr;
+        let (s, c) = w0.sin_cos();
+        let alpha = s / 2.0 * std::f32::consts::SQRT_2;
+        let sa = 2.0 * a.sqrt() * alpha;
+        let a0 = (a + 1.0) - (a - 1.0) * c + sa;
+        self.b0 = a * ((a + 1.0) + (a - 1.0) * c + sa) / a0;
+        self.b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * c) / a0;
+        self.b2 = a * ((a + 1.0) + (a - 1.0) * c - sa) / a0;
+        self.a1 = 2.0 * ((a - 1.0) - (a + 1.0) * c) / a0;
+        self.a2 = ((a + 1.0) - (a - 1.0) * c - sa) / a0;
     }
     fn set(&mut self, fc: f32, sr: f32, high: bool) {
         let fc = fc.clamp(10.0, sr * 0.45);
@@ -496,6 +514,9 @@ pub struct Vari {
     primed: bool,
     flush: VecDeque<Vec<i16>>,
     ended: bool,
+    /// Keylock: change tempo with WSOLA instead of resampling, so the
+    /// pitch stays put. Dropped once the rate is back at 1.
+    stretch: Option<Box<Stretch>>,
 }
 
 impl Default for Vari {
@@ -524,7 +545,22 @@ impl Vari {
             primed: false,
             flush: VecDeque::new(),
             ended: false,
+            stretch: None,
         }
+    }
+
+    /// Like `with_rate`, but tempo changes keep the original pitch.
+    pub fn keylocked(rate: f64, sr: u32) -> Self {
+        let mut v = Self::with_rate(rate);
+        if rate != 1.0 {
+            v.stretch = Some(Box::new(Stretch::new(sr)));
+        }
+        v
+    }
+
+    #[cfg(test)]
+    pub fn is_keylocked(&self) -> bool {
+        self.stretch.is_some()
     }
 
     /// Glide to `tgt` over `secs` seconds of output at `sr`.
@@ -535,7 +571,23 @@ impl Vari {
     }
 
     pub fn active(&self) -> bool {
-        self.primed || !self.flush.is_empty() || self.rate != 1.0 || self.tgt != 1.0
+        self.primed
+            || self.stretch.is_some()
+            || !self.flush.is_empty()
+            || self.rate != 1.0
+            || self.tgt != 1.0
+    }
+
+    fn step_rate(&mut self) {
+        if self.rate != self.tgt {
+            if (self.tgt - self.rate).abs() <= self.step {
+                self.rate = self.tgt;
+            } else if self.rate < self.tgt {
+                self.rate += self.step;
+            } else {
+                self.rate -= self.step;
+            }
+        }
     }
 
     /// Pull one output frame into `out`, using `raw` to read source frames.
@@ -549,6 +601,20 @@ impl Vari {
         }
         if !self.active() {
             return raw(out);
+        }
+        if let Some(st) = self.stretch.as_mut() {
+            let settle = self.rate == 1.0 && self.tgt == 1.0;
+            let r = st.pull(out, &mut raw, self.rate, settle);
+            if st.finished() {
+                // Back at the original tempo: replay what was buffered,
+                // then read the source directly again.
+                self.flush = std::mem::take(&mut st.rest);
+                self.stretch = None;
+            }
+            if matches!(r, FrameRes::Ok) {
+                self.step_rate();
+            }
+            return r;
         }
         let ch = out.len();
         if !self.primed {
@@ -598,15 +664,7 @@ impl Vari {
             *o = y.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         }
         // Advance the rate ramp.
-        if self.rate != self.tgt {
-            if (self.tgt - self.rate).abs() <= self.step {
-                self.rate = self.tgt;
-            } else if self.rate < self.tgt {
-                self.rate += self.step;
-            } else {
-                self.rate -= self.step;
-            }
-        }
+        self.step_rate();
         // Back at unity: creep forward a hair until the read head lands on
         // a source frame, then hand back to the direct path.
         let settling = self.rate == 1.0 && self.tgt == 1.0;
@@ -628,6 +686,238 @@ impl Vari {
             self.primed = false;
             self.frac = 0.0;
         }
+        FrameRes::Ok
+    }
+}
+
+/// Time stretch without pitch change (WSOLA): overlapping Hann windows of
+/// ~40 ms, read from the source at `rate` × the output hop, each nudged
+/// by up to ~10 ms to the offset that best continues the previous window.
+/// With matching speeds the windows line up exactly and sum back to the
+/// input, which is how it hands back to the direct path cleanly.
+#[derive(Debug)]
+pub struct Stretch {
+    /// Window length and hop (n = 2 × hop), in frames.
+    n: usize,
+    hop: usize,
+    search: usize,
+    win: Vec<f32>,
+    ch: usize,
+    /// Buffered input, interleaved; `base` is the source frame of inp[0].
+    inp: Vec<f32>,
+    base: i64,
+    /// Nominal read position, source frames.
+    pos: f64,
+    /// Start of the last window used (None before the first).
+    prev: Option<i64>,
+    /// Windowed second half of the last window, interleaved.
+    tail: Vec<f32>,
+    out: VecDeque<Vec<i16>>,
+    ended: bool,
+    done: bool,
+    /// Raw frames to play out after handing back (see `Vari::pull`).
+    pub rest: VecDeque<Vec<i16>>,
+}
+
+impl Stretch {
+    pub fn new(sr: u32) -> Self {
+        let hop = ((sr.max(8000) as f32 * 0.02) as usize).max(64);
+        let n = hop * 2;
+        // Periodic Hann: w[i] + w[i + hop] == 1.
+        let win = (0..n)
+            .map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / n as f32).cos())
+            .collect();
+        Self {
+            n,
+            hop,
+            search: hop / 2,
+            win,
+            ch: 0,
+            inp: Vec::new(),
+            base: 0,
+            pos: 0.0,
+            prev: None,
+            tail: Vec::new(),
+            out: VecDeque::new(),
+            ended: false,
+            done: false,
+            rest: VecDeque::new(),
+        }
+    }
+
+    /// Handed back: only the raw `rest` frames remain to be played.
+    pub fn finished(&self) -> bool {
+        self.done && self.out.is_empty()
+    }
+
+    fn have(&self) -> i64 {
+        self.base + (self.inp.len() / self.ch.max(1)) as i64
+    }
+
+    fn at(&self, frame: i64, c: usize) -> f32 {
+        let i = (frame - self.base) as usize * self.ch + c;
+        self.inp.get(i).copied().unwrap_or(0.0)
+    }
+
+    fn mono(&self, frame: i64) -> f32 {
+        let mut m = 0.0;
+        for c in 0..self.ch {
+            m += self.at(frame, c);
+        }
+        m
+    }
+
+    /// Read source frames until `upto` is buffered (or the source ends).
+    fn fill<F>(&mut self, upto: i64, raw: &mut F) -> Option<FrameRes>
+    where
+        F: FnMut(&mut [i16]) -> FrameRes,
+    {
+        let mut f = vec![0i16; self.ch];
+        while self.have() < upto && !self.ended {
+            match raw(&mut f) {
+                FrameRes::Ok => self.inp.extend(f.iter().map(|&v| v as f32)),
+                FrameRes::Ended => self.ended = true,
+                r => return Some(r),
+            }
+        }
+        None
+    }
+
+    /// Best window start near `nominal` to follow the window at `prev`.
+    fn best_offset(&self, nominal: i64, prev: i64) -> i64 {
+        let lo = (nominal - self.search as i64).max(self.base);
+        let hi = nominal + self.search as i64;
+        let reference = prev + self.hop as i64;
+        let score = |k: i64, stride: usize| -> f32 {
+            let (mut xy, mut yy) = (0f32, 1e-9f32);
+            let mut j = 0;
+            while j < self.hop {
+                let x = self.mono(reference + j as i64);
+                let y = self.mono(k + j as i64);
+                xy += x * y;
+                yy += y * y;
+                j += stride;
+            }
+            xy / yy.sqrt()
+        };
+        // Coarse search, then refine around the winner.
+        let mut best = (f32::MIN, nominal.clamp(lo, hi.max(lo)));
+        let mut k = lo;
+        while k <= hi {
+            let v = score(k, 4);
+            if v > best.0 {
+                best = (v, k);
+            }
+            k += 4;
+        }
+        let c = best.1;
+        let mut fine = (f32::MIN, c);
+        for k in (c - 3).max(lo)..=(c + 3).min(hi) {
+            let v = score(k, 1);
+            if v > fine.0 {
+                fine = (v, k);
+            }
+        }
+        fine.1
+    }
+
+    /// Produce the next hop of output.
+    fn step<F>(&mut self, raw: &mut F, rate: f64, settle: bool) -> Option<FrameRes>
+    where
+        F: FnMut(&mut [i16]) -> FrameRes,
+    {
+        let (n, hop) = (self.n as i64, self.hop as i64);
+        let nominal = self.pos.round() as i64;
+        let natural = self.prev.map(|p| p + hop);
+        let need = match natural {
+            Some(nat) => (nominal + self.search as i64 + n).max(nat + n),
+            None => n,
+        };
+        if let Some(r) = self.fill(need, raw) {
+            return Some(r);
+        }
+        if self.ended && self.have() < need {
+            // Out of source: play what is left as-is and finish.
+            let from = natural.unwrap_or(0).max(self.base);
+            for fr in from..self.have() {
+                self.rest
+                    .push_back((0..self.ch).map(|c| self.at(fr, c) as i16).collect());
+            }
+            self.done = true;
+            return None;
+        }
+        let k = match natural {
+            None => 0,
+            // Back at 1× (or no slack): just continue, which reproduces the
+            // input exactly.
+            Some(nat) if settle => nat,
+            Some(nat) => self.best_offset(nominal, nat - hop),
+        };
+        if self.tail.is_empty() {
+            // First window: pretend a window ended right before it, so the
+            // start is the plain input (no fade-in).
+            self.tail = (0..self.hop)
+                .flat_map(|j| (0..self.ch).map(move |c| (j, c)))
+                .map(|(j, c)| self.at(k + j as i64, c) * self.win[j + self.hop])
+                .collect();
+        }
+        for j in 0..self.hop {
+            let mut fr = Vec::with_capacity(self.ch);
+            for c in 0..self.ch {
+                let v = self.tail[j * self.ch + c] + self.at(k + j as i64, c) * self.win[j];
+                fr.push(v.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+            }
+            self.out.push_back(fr);
+        }
+        for j in 0..self.hop {
+            for c in 0..self.ch {
+                self.tail[j * self.ch + c] =
+                    self.at(k + hop + j as i64, c) * self.win[j + self.hop];
+            }
+        }
+        self.prev = Some(k);
+        if settle && natural.is_some() {
+            // The next window would continue exactly; the input from k+hop
+            // on is what plays next.
+            for fr in (k + hop)..self.have() {
+                self.rest
+                    .push_back((0..self.ch).map(|c| self.at(fr, c) as i16).collect());
+            }
+            self.done = true;
+            return None;
+        }
+        self.pos = if natural.is_none() { 0.0 } else { self.pos } + hop as f64 * rate;
+        // Drop input no window can reach any more.
+        let keep_from = (self.pos.round() as i64 - self.search as i64).min(k + hop) - 4;
+        if keep_from > self.base + 4 * n {
+            let drop = (keep_from - self.base) as usize * self.ch;
+            self.inp.drain(..drop);
+            self.base = keep_from;
+        }
+        None
+    }
+
+    pub fn pull<F>(&mut self, out: &mut [i16], raw: &mut F, rate: f64, settle: bool) -> FrameRes
+    where
+        F: FnMut(&mut [i16]) -> FrameRes,
+    {
+        if self.ch == 0 {
+            self.ch = out.len().max(1);
+        }
+        while self.out.is_empty() {
+            if self.done {
+                if let Some(f) = self.rest.pop_front() {
+                    out.copy_from_slice(&f);
+                    return FrameRes::Ok;
+                }
+                return FrameRes::Ended;
+            }
+            if let Some(r) = self.step(raw, rate, settle) {
+                return r;
+            }
+        }
+        let f = self.out.pop_front().unwrap_or_default();
+        out.copy_from_slice(&f);
         FrameRes::Ok
     }
 }
@@ -866,5 +1156,123 @@ mod tests {
             }
         }
         assert!(peak < 0.05, "8 kHz through 300 Hz LP: {peak}");
+    }
+
+    fn sine_source(freq: f32, sr: u32, n: usize) -> impl FnMut(&mut [i16]) -> FrameRes {
+        let mut i = 0usize;
+        move |f: &mut [i16]| {
+            if i >= n {
+                return FrameRes::Ended;
+            }
+            let v = (2.0 * std::f32::consts::PI * freq * i as f32 / sr as f32).sin() * 12000.0;
+            for s in f.iter_mut() {
+                *s = v as i16;
+            }
+            i += 1;
+            FrameRes::Ok
+        }
+    }
+
+    /// Rising zero crossings per second.
+    fn freq_of(x: &[i16], sr: u32) -> f32 {
+        let z = x.windows(2).filter(|w| w[0] < 0 && w[1] >= 0).count();
+        z as f32 * sr as f32 / x.len() as f32
+    }
+
+    #[test]
+    fn keylock_keeps_pitch_and_changes_tempo() {
+        let sr = 44100;
+        for rate in [0.94, 1.06] {
+            let mut v = Vari::keylocked(rate, sr);
+            assert!(v.is_keylocked());
+            let consumed = std::rc::Rc::new(std::cell::Cell::new(0usize));
+            let c2 = consumed.clone();
+            let mut inner = sine_source(440.0, sr, 10 * sr as usize);
+            let mut src = move |f: &mut [i16]| {
+                c2.set(c2.get() + 1);
+                inner(f)
+            };
+            let mut out = [0i16; 2];
+            let mut mono = Vec::new();
+            let n = 2 * sr as usize;
+            for _ in 0..n {
+                assert!(matches!(v.pull(&mut out, &mut src), FrameRes::Ok));
+                mono.push(out[0]);
+            }
+            let f = freq_of(&mono[4410..], sr);
+            assert!((f - 440.0).abs() < 4.0, "rate {rate}: pitch {f}");
+            // Read ahead is bounded by one window + search.
+            let used = consumed.get() as f64;
+            let want = n as f64 * rate;
+            assert!((used - want).abs() < 0.05 * sr as f64, "rate {rate}: used {used} want {want}");
+        }
+    }
+
+    #[test]
+    fn keylock_hands_back_without_gaps() {
+        let mut v = Vari::keylocked(1.05, 44100);
+        let mut src = ramp_source(200_000);
+        let mut out = [0i16; 1];
+        for _ in 0..3000 {
+            assert!(matches!(v.pull(&mut out, &mut src), FrameRes::Ok));
+        }
+        v.ramp_to(1.0, 0.05, 44100);
+        let mut prev: Option<i32> = None;
+        let mut steady = 0;
+        for _ in 0..20_000 {
+            assert!(matches!(v.pull(&mut out, &mut src), FrameRes::Ok));
+            if !v.active() || !v.is_keylocked() {
+                // Handed back: from here frames must be consecutive.
+                if let Some(p) = prev {
+                    if out[0] as i32 == p + 1 {
+                        steady += 1;
+                    } else {
+                        steady = 0;
+                    }
+                }
+            }
+            prev = Some(out[0] as i32);
+        }
+        assert!(!v.is_keylocked() && !v.active(), "should return to bypass");
+        assert!(steady > 10_000, "consecutive frames after hand-back: {steady}");
+    }
+
+    #[test]
+    fn keylock_at_unity_is_plain_bypass() {
+        let mut v = Vari::keylocked(1.0, 44100);
+        assert!(!v.active());
+        let mut src = ramp_source(10);
+        let mut out = [0i16; 1];
+        for i in 0..10 {
+            v.pull(&mut out, &mut src);
+            assert_eq!(out[0], i as i16);
+        }
+    }
+
+    #[test]
+    fn keylock_changes_beat_tempo() {
+        let sr = 44100;
+        let clicks = click_track(120.0, sr, 30.0, 0.0);
+        let mut i = 0usize;
+        let mut src = |f: &mut [i16]| {
+            if i >= clicks.len() {
+                return FrameRes::Ended;
+            }
+            f.fill(clicks[i]);
+            i += 1;
+            FrameRes::Ok
+        };
+        let mut v = Vari::keylocked(1.05, sr);
+        let mut out = [0i16; 2];
+        let mut y = Vec::new();
+        for _ in 0..12 * sr as usize {
+            v.pull(&mut out, &mut src);
+            y.push(out[0]);
+        }
+        let e = env_of(&y, sr);
+        let full: Vec<f32> = e.full.iter().cloned().collect();
+        let low: Vec<f32> = e.low.iter().cloned().collect();
+        let b = analyze(&full, &low, sr).expect("beat");
+        assert!((b.bpm - 126.0).abs() < 1.0, "got {:.2}", b.bpm);
     }
 }

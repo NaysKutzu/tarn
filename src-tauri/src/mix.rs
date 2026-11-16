@@ -29,8 +29,9 @@ pub struct XfPlan {
     pub shape: XfShape,
     /// Playback rate of the incoming track during the overlap (1 = native).
     pub in_rate: f64,
-    /// Outgoing beat grid (period, phase) in the live tap's frame clock;
-    /// the overlap waits for the next beat when set.
+    /// Outgoing beat grid (period, phase) in source frames of the outgoing
+    /// track (see `MixTap::outgoing_clock`); the overlap waits for the next
+    /// beat when set.
     pub out_grid: Option<(f64, f64)>,
     /// Seconds for the new track to glide back to rate 1 after the overlap.
     pub return_secs: f32,
@@ -39,6 +40,11 @@ pub struct XfPlan {
     pub skipped_frames: u64,
     /// Shorten the overlap when the outgoing track has already gone quiet.
     pub smart: bool,
+    /// Change the incoming tempo without changing its pitch.
+    pub keylock: bool,
+    /// Track time (seconds) the incoming decoder was opened at, before
+    /// `skipped_frames`.
+    pub origin_s: f64,
 }
 
 impl XfPlan {
@@ -50,6 +56,8 @@ impl XfPlan {
             return_secs: 8.0,
             skipped_frames: 0,
             smart: false,
+            keylock: false,
+            origin_s: 0.0,
         }
     }
 }
@@ -79,22 +87,36 @@ pub struct MixTap {
 }
 
 impl MixTap {
-    /// Tempo/phase of what the outgoing track has played recently, with the
-    /// phase expressed in the tap's absolute frame clock.
+    /// Tempo/phase of what the outgoing track has played recently. `bpm`
+    /// is the tempo as heard; `period`/`phase` are in source frames of the
+    /// outgoing track (the clock of `outgoing_clock`).
     pub fn outgoing_beat(&self) -> Option<Beat> {
-        let (full, low, start, sr) = {
+        let (full, low, start, tap_now, pos, rate, sr) = {
             let g = self.inner.lock();
             let t = g.tap.as_ref()?;
             (
                 t.full.iter().copied().collect::<Vec<_>>(),
                 t.low.iter().copied().collect::<Vec<_>>(),
                 t.window_start(),
+                t.frames,
+                g.cur_pos,
+                g.cur_vari.rate.max(0.5),
                 g.sr,
             )
         };
         let mut b = crate::transition::analyze(&full, &low, sr)?;
-        b.phase += start as f64;
+        // Tap frames are output frames; map them onto the source clock.
+        let phase_tap = start as f64 + b.phase;
+        b.phase = pos - (tap_now as f64 - phase_tap) * rate;
+        b.period *= rate;
         Some(b)
+    }
+
+    /// (source frames played of the current track since its start,
+    /// playback rate, sample rate).
+    pub fn outgoing_clock(&self) -> (f64, f64, u32) {
+        let g = self.inner.lock();
+        (g.cur_pos, g.cur_vari.rate, g.sr)
     }
 
     pub fn set_analysis(&self, on: bool) {
@@ -141,6 +163,16 @@ struct Inner {
     quiet_run: u32,
     clock_acc: f64,
     eq: Eq,
+    /// Per-deck loudness normalization gain (1 = off / untouched).
+    cur_gain: f32,
+    cur_gain_tgt: f32,
+    cur_gain_step: f32,
+    inc_gain: f32,
+    /// Gain for the next deck that gets loaded.
+    next_gain: f32,
+    /// Source frames since track start for the current / incoming deck.
+    cur_pos: f64,
+    inc_pos: f64,
 }
 
 impl Mixer {
@@ -185,6 +217,13 @@ impl Mixer {
                 tap: None,
                 quiet_run: 0,
                 clock_acc: 0.0,
+                cur_gain: 1.0,
+                cur_gain_tgt: 1.0,
+                cur_gain_step: 0.0,
+                inc_gain: 1.0,
+                next_gain: 1.0,
+                cur_pos: 0.0,
+                inc_pos: 0.0,
                 eq: Eq::new(sr),
             })),
             samples,
@@ -219,6 +258,31 @@ impl Mixer {
 
     /// Load a decoder at the given position and stay silent, paused.
     /// Used when restoring a session so Play is instant.
+    /// Normalization gain for the next deck loaded by `play`, `arm`,
+    /// `crossfade*`, `cut` or `queue_gapless` (seeks keep the current one).
+    pub fn set_next_gain(&self, gain: f32) {
+        self.inner.lock().next_gain = gain;
+    }
+
+    /// Change the gain of what is audible now (the incoming deck during an
+    /// overlap), gliding over `secs` so it doesn't jump.
+    pub fn set_live_gain(&self, gain: f32, secs: f32) {
+        let mut g = self.inner.lock();
+        if g.incoming.is_some() {
+            g.inc_gain = gain;
+        } else {
+            g.cur_gain_tgt = gain;
+            let frames = (secs.max(0.05) * g.sr.max(1) as f32).max(1.0);
+            g.cur_gain_step = ((gain - g.cur_gain).abs() / frames).max(1e-7);
+        }
+    }
+
+    /// Where in the track the current deck was opened (after a seek etc.).
+    pub fn set_origin(&self, secs: f64) {
+        let mut g = self.inner.lock();
+        g.cur_pos = secs.max(0.0) * g.sr as f64;
+    }
+
     pub fn arm(&self, src: AudioSource) {
         let sr = src.sample_rate().max(1);
         let ch = src.channels().max(1);
@@ -235,6 +299,7 @@ impl Mixer {
         g.xf_len = 0;
         g.xf_pos = 0;
         g.new_current();
+        g.take_next_gain();
         g.finished = false;
         g.paused = true;
         g.env = 0.0;
@@ -262,6 +327,7 @@ impl Mixer {
         g.xf_len = 0;
         g.xf_pos = 0;
         g.new_current();
+        g.take_next_gain();
         g.finished = false;
         g.paused = false;
         g.env = 0.0;
@@ -270,11 +336,6 @@ impl Mixer {
         self.has_src.store(true, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
         self.recover.store(false, Ordering::Relaxed);
-    }
-
-    /// Equal-power overlap of the current decoder with `src`.
-    pub fn crossfade(&self, src: AudioSource, secs: f32) {
-        self.crossfade_plan(src, XfPlan::simple(secs));
     }
 
     /// Shaped overlap of the current decoder with `src`.
@@ -299,6 +360,8 @@ impl Mixer {
             // play() zeros the clock; re-apply silence/beat trim so the
             // progress bar matches the audio that already skipped ahead.
             self.apply_skipped_frames(plan.skipped_frames);
+            let mut g = self.inner.lock();
+            g.cur_pos = plan.origin_s * g.sr as f64 + plan.skipped_frames as f64;
             return;
         }
         let mut secs = plan.shape.secs.clamp(0.05, 20.0);
@@ -308,21 +371,26 @@ impl Mixer {
             secs = secs.min(1.0);
         }
         g.incoming = Some(src);
+        g.inc_gain = std::mem::replace(&mut g.next_gain, 1.0);
+        g.inc_pos = plan.origin_s * g.sr as f64 + plan.skipped_frames as f64;
         g.xf_len = (secs * g.sr as f32).round().max(1.0) as u32;
         g.xf_pos = 0;
         g.shape = plan.shape.clone();
         g.shape.secs = secs;
         g.return_secs = plan.return_secs;
-        g.inc_vari = Vari::with_rate(plan.in_rate);
+        g.inc_vari = if plan.keylock {
+            Vari::keylocked(plan.in_rate, sr)
+        } else {
+            Vari::with_rate(plan.in_rate)
+        };
         g.lp_out = vec![Biquad::default(); ch as usize];
         g.hp_in = vec![Biquad::default(); ch as usize];
         g.xf_wait = 0;
-        if let (Some((period, phase)), Some(tap)) = (plan.out_grid, g.tap.as_ref()) {
-            let now = tap.frames as f64;
-            let wait = frames_to_next_beat(now, phase, period);
+        if let Some((period, phase)) = plan.out_grid {
+            let wait = frames_to_next_beat(g.cur_pos, phase, period);
+            let rate = g.cur_vari.rate.max(0.5);
             // Never hold the overlap back by more than a beat (or 1 s).
-            if wait <= period && wait <= g.sr as f64 {
-                let rate = g.cur_vari.rate.max(0.5);
+            if wait <= period && wait / rate <= g.sr as f64 {
                 g.xf_wait = (wait / rate).round() as u32;
             }
         }
@@ -347,13 +415,19 @@ impl Mixer {
     }
 
     /// Short fade-out of the current track, then fade-in of `src` (skip).
-    pub fn cut(&self, src: AudioSource, fade: f32) {
+    pub fn cut(&self, src: AudioSource, fade: f32, origin_s: f64) {
         // Open the incoming source first; the fade-out happens in the
         // mixer and we swap when quiet. For a tight skip we do a brief
         // env dip then swap - implemented as a very short crossfade so
         // both streams stay aligned with equal-power (no pop).
         let fade = fade.clamp(0.05, 0.5);
-        self.crossfade(src, fade);
+        self.crossfade_plan(
+            src,
+            XfPlan {
+                origin_s,
+                ..XfPlan::simple(fade)
+            },
+        );
     }
 
     pub fn pause(&self) {
@@ -447,6 +521,8 @@ impl Mixer {
             return;
         }
         g.incoming = Some(src);
+        g.inc_gain = std::mem::replace(&mut g.next_gain, 1.0);
+        g.inc_pos = 0.0;
         g.xf_len = 0;
         g.xf_pos = 0;
         g.xf_wait = 0;
@@ -467,15 +543,28 @@ impl Inner {
         self.inc_vari = Vari::default();
         self.quiet_run = 0;
         self.clock_acc = 0.0;
+        self.cur_pos = 0.0;
         if let Some(t) = self.tap.as_mut() {
             t.reset();
         }
+    }
+
+    fn take_next_gain(&mut self) {
+        let g = std::mem::replace(&mut self.next_gain, 1.0);
+        self.cur_gain = g;
+        self.cur_gain_tgt = g;
+        self.cur_gain_step = 0.0;
     }
 
     /// The incoming decoder becomes current (end of overlap or gapless).
     fn promote_incoming(&mut self) {
         self.current = self.incoming.take();
         self.cur_vari = std::mem::take(&mut self.inc_vari);
+        self.cur_gain = std::mem::replace(&mut self.inc_gain, 1.0);
+        self.cur_gain_tgt = self.cur_gain;
+        self.cur_gain_step = 0.0;
+        self.cur_pos = self.inc_pos;
+        self.inc_pos = 0.0;
         if self.cur_vari.active() {
             let (secs, sr) = (self.return_secs as f64, self.sr);
             self.cur_vari.ramp_to(1.0, secs, sr);
@@ -514,6 +603,14 @@ pub struct MixerSource {
     buffering: Arc<AtomicBool>,
     recover: Arc<AtomicBool>,
     quiet_ms: Arc<AtomicU32>,
+}
+
+fn apply_gain(frame: &mut [i16], gain: f32) {
+    for s in frame.iter_mut() {
+        *s = (*s as f32 * gain)
+            .round()
+            .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+    }
 }
 
 /// Read one interleaved frame straight from a decoder.
@@ -563,6 +660,7 @@ impl MixerSource {
                     }
                 }
                 if a_alive && !a_buf {
+                    g.cur_pos += g.cur_vari.rate;
                     if let Some(t) = g.tap.as_mut() {
                         t.push_frame(&a);
                     }
@@ -576,6 +674,17 @@ impl MixerSource {
                         let ms = (g.quiet_run as u64 * 1000 / g.sr.max(1) as u64) as u32;
                         self.quiet_ms.store(ms, Ordering::Relaxed);
                     }
+                    if g.cur_gain != g.cur_gain_tgt {
+                        let (cur, tgt, step) = (g.cur_gain, g.cur_gain_tgt, g.cur_gain_step);
+                        g.cur_gain = if (tgt - cur).abs() <= step {
+                            tgt
+                        } else {
+                            cur + step.copysign(tgt - cur)
+                        };
+                    }
+                    if g.cur_gain != 1.0 {
+                        apply_gain(&mut a, g.cur_gain);
+                    }
                 }
             }
             // Only consume the incoming decoder during a crossfade. For
@@ -584,7 +693,12 @@ impl MixerSource {
                 if let Some(src) = g.incoming.as_mut() {
                     b_alive = true;
                     match g.inc_vari.pull(&mut b, |f| pull_raw(src, f)) {
-                        FrameRes::Ok => {}
+                        FrameRes::Ok => {
+                            g.inc_pos += g.inc_vari.rate;
+                            if g.inc_gain != 1.0 {
+                                apply_gain(&mut b, g.inc_gain);
+                            }
+                        }
                         FrameRes::Buffering => b_buf = true,
                         FrameRes::Ended | FrameRes::Stall(_) => b_alive = false,
                     }
