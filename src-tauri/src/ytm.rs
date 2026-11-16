@@ -2444,8 +2444,21 @@ pub fn upgrade_cover(url: &str) -> String {
     url.to_string()
 }
 
+/// googlevideo URLs carry `dur=<seconds>`; use it when the player response
+/// has no duration (long videos often omit it).
+fn url_dur_secs(url: &str) -> Option<f64> {
+    url.split_once('?')?
+        .1
+        .split('&')
+        .find_map(|p| p.strip_prefix("dur="))
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|d| *d > 0.0)
+}
+
 fn normalize_duration(d: u32) -> u32 {
-    if d > 10_000 {
+    // rustypipe reports seconds. Only treat absurd values (> ~11 days) as
+    // milliseconds - the old 10_000 cut-off broke every track over 2h46m.
+    if d > 1_000_000 {
         d / 1000
     } else {
         d
@@ -2833,7 +2846,11 @@ async fn rustypipe_one(rp: &RustyPipe, id: &str, ctype: ClientType) -> Result<St
     let stream = Stream {
         url: audio.url.clone(),
         headers: headers_for(rp, used),
-        duration: audio.duration_ms.map(|ms| ms as f64 / 1000.0),
+        duration: audio
+            .duration_ms
+            .map(|ms| ms as f64 / 1000.0)
+            .filter(|d| *d > 0.0)
+            .or_else(|| url_dur_secs(&audio.url)),
         source: "rustypipe",
         mime: Some(audio.mime.clone()),
         client: used_name,
@@ -3112,7 +3129,11 @@ async fn rustypipe_stream(rp: &RustyPipe, id: &str, skip: &[&str]) -> Result<Str
                 let stream = Stream {
                     url: audio.url.clone(),
                     headers: headers_for(rp, used),
-                    duration: audio.duration_ms.map(|ms| ms as f64 / 1000.0),
+                    duration: audio
+                        .duration_ms
+                        .map(|ms| ms as f64 / 1000.0)
+                        .filter(|d| *d > 0.0)
+                        .or_else(|| url_dur_secs(&audio.url)),
                     source: "rustypipe",
                     mime: Some(audio.mime.clone()),
                     client: used_name,
