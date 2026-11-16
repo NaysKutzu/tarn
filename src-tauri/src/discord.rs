@@ -37,6 +37,8 @@ fn run(app: Arc<crate::App>) -> Result<(), String> {
     let mut enabled_last = true;
     let mut clear_needed = false;
     let mut last_conn_err: Option<String> = None;
+    // Wall-clock start (now - position) we last told Discord about.
+    let mut last_start: Option<f64> = None;
 
     loop {
         let enabled = app.discord_enabled();
@@ -102,18 +104,25 @@ fn run(app: Arc<crate::App>) -> Result<(), String> {
             .as_deref()
             .map(upgrade_cover)
             .filter(|u| u.starts_with("http"));
-        // Bucket position so we don't spam IPC every tick; refresh ~every 2s.
-        let pos_bucket = (snap.position.max(0.0) / 2.0) as u64;
+        // Only re-send when something visible changes. Re-sending on every
+        // position tick makes Discord reload the cover constantly.
         let sig = format!(
-            "{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}",
             track.id,
             snap.playing,
-            pos_bucket,
             cover.as_deref().unwrap_or(""),
             artists
         );
+        let now_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let start_est = now_s - snap.position.max(0.0);
+        // A seek (or a stall) shifts the implied start time.
+        let drifted = snap.playing
+            && last_start.is_some_and(|ls| (ls - start_est).abs() > 3.0);
 
-        if Some(&sig) == last_sig.as_ref() {
+        if Some(&sig) == last_sig.as_ref() && !drifted {
             std::thread::sleep(Duration::from_millis(400));
             continue;
         }
@@ -155,6 +164,7 @@ fn run(app: Arc<crate::App>) -> Result<(), String> {
         match c.set_activity(activity) {
             Ok(()) => {
                 last_sig = Some(sig);
+                last_start = Some(start_est);
                 clear_needed = true;
             }
             Err(e) => {
