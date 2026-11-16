@@ -36,6 +36,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@7731365548f3f81c15d4c49c8f1d29101e02cdcf # v4.0.2
@@ -45,6 +46,13 @@ jobs:
         with:
           toolchain: stable
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: mobile-android
+          cache-on-failure: true
 
       - name: Install Linux dependencies
         run: |
@@ -114,6 +122,13 @@ jobs:
         with:
           toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: mobile-ios
+          cache-on-failure: true
 
       - name: Upgrade npm
         run: npm install -g npm@11
