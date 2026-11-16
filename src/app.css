@@ -2830,7 +2830,16 @@ img, svg { -webkit-user-drag: none; }
   .qp { grid-template-columns: minmax(0, 1fr); }
   .set, .set > * { max-width: 100%; }
 
+  /* Never scroll sideways: only the shelves / chip rows scroll on their own. */
+  html, body, #app { overflow-x: hidden; overscroll-behavior: none; }
+  .app, .main, .page { max-width: 100vw; overflow-x: clip; }
+  .main { overflow-x: hidden; }
+  img, video, canvas { max-width: 100%; }
+
   /* Track tables: drop the album column, keep actions reachable. */
+  .tbl { table-layout: fixed; }
+  .trow td:nth-child(2) { overflow: hidden; }
+  .trow .ta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tbl th.al, .tbl td.al { display: none; }
   .tbl td { padding: 6px 4px; }
   .trow .acts { opacity: 1; }
