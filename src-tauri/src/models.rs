@@ -451,6 +451,11 @@ pub struct PlayerState {
     pub liked: bool,
     pub disliked: bool,
     pub autoplay: bool,
+    /// Periodic updates leave `queue` empty and set this when the queue has not
+    /// changed since the last full one, so a long queue is not re-sent (and
+    /// re-parsed by the UI) five times a second.
+    #[serde(default)]
+    pub queue_same: bool,
 }
 
 impl Default for PlayerState {
@@ -473,6 +478,7 @@ impl Default for PlayerState {
             liked: false,
             disliked: false,
             autoplay: true,
+            queue_same: false,
         }
     }
 }

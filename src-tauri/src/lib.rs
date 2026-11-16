@@ -1656,9 +1656,27 @@ fn ensure_autoplay_buffer(app: &Arc<App>) {
     });
 }
 
+/// Cheap fingerprint of the queue (order, ids and the fields the UI shows).
+fn queue_signature(queue: &[Track]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    queue.len().hash(&mut h);
+    for t in queue {
+        t.id.hash(&mut h);
+        t.title.hash(&mut h);
+        t.cover.hash(&mut h);
+        t.duration.hash(&mut h);
+    }
+    h.finish()
+}
+
 fn emit_loop(handle: AppHandle, app: Arc<App>) {
     std::thread::spawn(move || {
         let mut last_save = std::time::Instant::now();
+        // The queue can be thousands of tracks: send it when it changes (and
+        // now and then, to resync), not with every 200 ms position update.
+        let mut last_queue_sig: Option<u64> = None;
+        let mut last_queue_sent = std::time::Instant::now();
         loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
             if let Some(header) = app.ytm.harvest_cookies() {
@@ -1700,7 +1718,17 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
             if let Some(msg) = app.pending_toast.lock().take() {
                 let _ = handle.emit("toast", msg);
             }
-            let st = app.player.snapshot();
+            let mut st = app.player.snapshot();
+            let sig = queue_signature(&st.queue);
+            if last_queue_sig == Some(sig)
+                && last_queue_sent.elapsed() < std::time::Duration::from_secs(10)
+            {
+                st.queue = Vec::new();
+                st.queue_same = true;
+            } else {
+                last_queue_sig = Some(sig);
+                last_queue_sent = std::time::Instant::now();
+            }
             let _ = handle.emit("player", st);
             if last_save.elapsed() >= std::time::Duration::from_secs(3) {
                 persist::save(&handle);

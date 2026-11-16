@@ -233,6 +233,8 @@ export interface PlayerState {
   liked: boolean;
   disliked: boolean;
   autoplay: boolean;
+  /** Periodic update without the queue: keep the one already shown. */
+  queue_same?: boolean;
 }
 
 export interface GenrePage {
