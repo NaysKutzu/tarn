@@ -2790,7 +2790,7 @@ img, svg { -webkit-user-drag: none; }
   }
   .sidebar.is-hidden { display: none; }
   .brand, .side-scroll, .side-foot .acct { display: none; }
-  .nav { flex: 5 1 0; flex-direction: row; padding: 0; gap: 0; min-width: 0; }
+  .nav { flex: 6 1 0; flex-direction: row; padding: 0; gap: 0; min-width: 0; }
   .side-foot { flex: 1 1 0; border-top: 0; padding: 0; min-width: 0; }
   .nav-item {
     position: relative;

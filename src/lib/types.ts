@@ -213,6 +213,8 @@ export interface Settings {
   bpm_max_change: number;
   bpm_beat_align: boolean;
   bpm_return_seconds: number;
+  /** Keep a local listening history for the Stats page. */
+  listening_stats: boolean;
 }
 
 export interface PlayerState {
@@ -261,7 +263,8 @@ export type View =
   | { id: 'charts' }
   | { id: 'new-releases' }
   | { id: 'history' }
-  | { id: 'downloads' };
+  | { id: 'downloads' }
+  | { id: 'stats' };
 
 import type { IconSvgElement } from '@hugeicons/svelte';
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Stats from './lib/components/Stats.svelte';
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -47,7 +48,7 @@
     Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon,
     Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon,
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
-    Download04Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
+    Download04Icon, ChartColumnIcon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
     PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon,
   } from './lib/icons';
 
@@ -109,7 +110,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], listening_stats: true, ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -291,6 +292,7 @@
           settings.eq_bands = [0, 0, 0, 0, 0];
         }
         settings.eq_enabled = !!settings.eq_enabled;
+        if (settings.listening_stats == null) settings.listening_stats = true;
         if (settings.crossfade_manual == null) settings.crossfade_manual = true;
         if (settings.cache_max_mb == null || Number.isNaN(Number(settings.cache_max_mb))) {
           settings.cache_max_mb = 1024;
@@ -1669,6 +1671,9 @@
         <span class="ic"><Hi icon={Download04Icon} size={24} /></span> Downloads
         {#if dlBusy}<span class="nav-dot" title="Downloading"></span>{/if}
       </button>
+      <button class="nav-item {navOn('stats') ? 'on' : ''}" onclick={() => go({ id: 'stats' })} type="button">
+        <span class="ic"><Hi icon={ChartColumnIcon} size={24} /></span> Stats
+      </button>
     </nav>
     <div class="side-scroll">
       {#if auth.signed_in && !off.offline && !library?.playlists?.length && (libLoading || libPartial || !library)}
@@ -2064,6 +2069,15 @@
           {/if}
         {/if}
 
+      {:else if view.id === 'stats'}
+        <Stats
+          enabled={settings.listening_stats}
+          onPlay={(tracks, i) => playTracks(tracks, i)}
+          onArtist={(id) => go({ id: 'artist', artistId: id })}
+          onAlbum={(id) => go({ id: 'album', albumId: id })}
+          onEnable={() => { settings.listening_stats = true; api.setSettings(settings); }}
+        />
+
       {:else if view.id === 'downloads'}
         <h1 class="page-title">Downloads</h1>
         <p class="dl-sub">
@@ -2400,6 +2414,12 @@
             <Toggle bind:checked={settings.discord_presence} label="Discord presence" onchange={() => api.setSettings(settings)} />
           </div>
           <Scrobbling onChange={() => scrobbler.reload()} />
+          <div class="set-row">
+            <span class="lb">Listening stats
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Keep a private history on this device for the Stats page</span>
+            </span>
+            <Toggle bind:checked={settings.listening_stats} label="Listening stats" onchange={() => api.setSettings(settings)} />
+          </div>
           <div class="set-row">
             <span class="lb"><Hi icon={Radio02Icon} size={20} /> Autoplay
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Continue with similar music when the queue ends</span>
