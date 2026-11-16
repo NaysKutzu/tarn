@@ -6,6 +6,7 @@ use anyhow::{anyhow, Result};
 use parking_lot::Mutex;
 use rodio::{OutputStream, Sink};
 
+use crate::analysis::{Analyzer, TrackAnalysis};
 use crate::models::{PlayerState, Track};
 use crate::transition::XfConfig;
 use crate::ytm::Stream;
@@ -14,7 +15,7 @@ use crate::ytm::Stream;
 enum Cmd {
     Play(Arc<crate::decode::GrowingBody>, f64),
     Arm(Arc<crate::decode::GrowingBody>, f64),
-    Crossfade(Arc<crate::decode::GrowingBody>, f64, Box<XfConfig>),
+    Crossfade(Arc<crate::decode::GrowingBody>, f64, Box<XfConfig>, Box<XfHints>),
     /// Analysis for a crossfade finished off-thread; `u64` is the command
     /// generation it was started for (stale results are dropped).
     XfReady(Box<crate::decode::AudioSource>, Box<crate::mix::XfPlan>, u64),
@@ -26,6 +27,17 @@ enum Cmd {
     Seek(f64),
     Volume(f32),
     Eq([f32; crate::eq::BANDS], bool),
+    /// Loudness gain for the deck loaded by the next play-type command.
+    NextGain(f32),
+    /// Loudness gain for what is audible now (its analysis just finished).
+    LiveGain(f32),
+}
+
+/// Cached analysis of both sides of a crossfade (see `analysis.rs`).
+#[derive(Default)]
+struct XfHints {
+    out: Option<TrackAnalysis>,
+    inc: Option<TrackAnalysis>,
 }
 
 /// How to start a new decoder relative to whatever is already playing.
@@ -87,6 +99,14 @@ pub struct Player {
     pending_adopt: Arc<Mutex<Option<(Track, usize, u64)>>>,
     /// Original playlist order while shuffle is on (for restore + Up next).
     linear_queue: Arc<Mutex<Option<Vec<Track>>>>,
+    /// Per-track loudness / beat cache.
+    analyzer: Arc<Mutex<Option<Arc<Analyzer>>>>,
+    /// Loudness normalization target in LUFS (None = off).
+    normalize: Arc<Mutex<Option<f32>>>,
+    /// Video id of the track the mixer is (about to be) playing.
+    audible: Arc<Mutex<String>>,
+    /// Auto-DJ wants upcoming tracks analysed.
+    auto_dj: Arc<AtomicBool>,
 }
 
 impl Player {
@@ -197,6 +217,10 @@ impl Player {
             play_gen,
             pending_adopt,
             linear_queue,
+            analyzer: Arc::new(Mutex::new(None)),
+            normalize: Arc::new(Mutex::new(None)),
+            audible: Arc::new(Mutex::new(String::new())),
+            auto_dj: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -394,6 +418,21 @@ impl Player {
         }
         self.recovering.store(false, Ordering::Relaxed);
         self.blending.store(blendish, Ordering::Relaxed);
+        // Which track this audio is: a queued blend adopts later, otherwise
+        // the state already shows it.
+        let in_id = match self.pending_adopt.lock().as_ref() {
+            Some((t, _, _)) => t.id.clone(),
+            None => self
+                .state
+                .lock()
+                .track
+                .as_ref()
+                .map(|t| t.id.clone())
+                .unwrap_or_default(),
+        };
+        let out_id = std::mem::replace(&mut *self.audible.lock(), in_id.clone());
+        self.analyze(&in_id, audio.clone());
+        let _ = self.tx.send(Cmd::NextGain(self.gain_for(&in_id)));
         let cmd = match style {
             PlayStyle::Fresh => Cmd::Play(audio, start),
             PlayStyle::Armed => {
@@ -407,7 +446,15 @@ impl Player {
             PlayStyle::Crossfade(s) => {
                 let mut cfg = self.xf_cfg.lock().clone();
                 cfg.shape.secs = s;
-                Cmd::Crossfade(audio, start, Box::new(cfg))
+                let hints = if cfg.bpm_match || cfg.smart {
+                    XfHints {
+                        out: self.cached(&out_id),
+                        inc: self.cached(&in_id),
+                    }
+                } else {
+                    XfHints::default()
+                };
+                Cmd::Crossfade(audio, start, Box::new(cfg), Box::new(hints))
             }
             PlayStyle::Gapless => Cmd::Gapless(audio, start),
         };
@@ -432,6 +479,62 @@ impl Player {
     }
 
     /// Curves, filter sweep, smart start, and BPM matching.
+    pub fn set_analyzer(&self, a: Arc<Analyzer>) {
+        *self.analyzer.lock() = Some(a);
+    }
+
+    /// Loudness normalization on/off and its target level (LUFS).
+    pub fn set_normalize(&self, on: bool, target: f32) {
+        let new = on.then_some(target.clamp(-30.0, -5.0));
+        let old = std::mem::replace(&mut *self.normalize.lock(), new);
+        if old != new {
+            // Re-level the playing track right away.
+            let id = self.audible.lock().clone();
+            let _ = self.tx.send(Cmd::LiveGain(self.gain_for(&id)));
+        }
+    }
+
+    /// True when a feature needs per-track analysis (normalization or BPM
+    /// matching), so nothing is decoded in the background otherwise.
+    pub fn wants_analysis(&self) -> bool {
+        self.normalize.lock().is_some()
+            || self.xf_cfg.lock().bpm_match
+            || self.auto_dj.load(Ordering::Relaxed)
+    }
+
+    pub fn set_auto_dj(&self, on: bool) {
+        self.auto_dj.store(on, Ordering::Relaxed);
+    }
+
+    /// Queue a complete (or downloading) body for analysis when useful.
+    pub fn analyze(&self, id: &str, body: Arc<crate::decode::GrowingBody>) {
+        if !self.wants_analysis() {
+            return;
+        }
+        if let Some(a) = self.analyzer.lock().clone() {
+            a.enqueue(id, body);
+        }
+    }
+
+    fn cached(&self, id: &str) -> Option<TrackAnalysis> {
+        self.analyzer.lock().as_ref()?.get(id)
+    }
+
+    /// Normalization gain for a track (1 = unchanged).
+    fn gain_for(&self, id: &str) -> f32 {
+        let Some(target) = *self.normalize.lock() else {
+            return 1.0;
+        };
+        self.cached(id).map(|a| a.gain_for(target)).unwrap_or(1.0)
+    }
+
+    /// Called by the analyzer when a track has been measured.
+    pub fn analysis_ready(&self, id: &str) {
+        if self.normalize.lock().is_some() && *self.audible.lock() == id {
+            let _ = self.tx.send(Cmd::LiveGain(self.gain_for(id)));
+        }
+    }
+
     pub fn set_transition(&self, cfg: XfConfig) {
         let mut cur = self.xf_cfg.lock();
         let secs = cur.shape.secs;
@@ -984,6 +1087,32 @@ impl Player {
         }
     }
 
+    /// Replace `queue[start..]` (currently `expected`, by id) with the same
+    /// tracks in `new_ids` order. Returns false if the queue changed since
+    /// the caller looked at it.
+    pub fn reorder_window(&self, start: usize, expected: &[String], new_ids: &[String]) -> bool {
+        let mut s = self.state.lock();
+        let end = start + expected.len();
+        if s.shuffle
+            || end > s.queue.len()
+            || start <= s.index
+            || expected.len() != new_ids.len()
+            || !s.queue[start..end].iter().zip(expected).all(|(t, id)| &t.id == id)
+        {
+            return false;
+        }
+        let mut pool: Vec<Option<Track>> = s.queue[start..end].iter().cloned().map(Some).collect();
+        let mut out = Vec::with_capacity(pool.len());
+        for id in new_ids {
+            let Some(t) = pool.iter_mut().find(|t| t.as_ref().is_some_and(|t| &t.id == id)) else {
+                return false;
+            };
+            out.extend(t.take());
+        }
+        s.queue.splice(start..end, out);
+        true
+    }
+
     pub fn move_item(&self, from: usize, to: usize) {
         let mut s = self.state.lock();
         if from >= s.queue.len() || to >= s.queue.len() || from == to {
@@ -1149,6 +1278,10 @@ fn audio_thread(
     // Bumped by every command that changes what should be playing, so a
     // slow crossfade analysis can't land on top of a newer action.
     let mut generation: u64 = 0;
+    // Normalization gain for the next deck, and whether a crossfade is
+    // still being analysed (so a live gain lands on the right deck).
+    let mut next_gain: f32 = 1.0;
+    let mut xf_pending = false;
 
     loop {
         let cmd = rx.recv_timeout(Duration::from_millis(80));
@@ -1166,6 +1299,13 @@ fn audio_thread(
                 | Cmd::Seek(_))
         ) {
             generation = generation.wrapping_add(1);
+            xf_pending = false;
+        }
+        if matches!(
+            cmd,
+            Ok(Cmd::Play(..) | Cmd::Arm(..) | Cmd::Crossfade(..) | Cmd::Gapless(..) | Cmd::Cut(..))
+        ) {
+            mix.set_next_gain(next_gain);
         }
         match cmd {
             Ok(Cmd::Play(audio, start)) => {
@@ -1173,6 +1313,7 @@ fn audio_thread(
                     Ok(src) => {
                         state.lock().position = start;
                         mix.play(src, crate::mix::CLICK_FADE);
+                        mix.set_origin(start);
                     }
                     Err(e) => {
                         eprintln!("decode: {e}");
@@ -1194,6 +1335,7 @@ fn audio_thread(
                         s.playing = false;
                         drop(s);
                         mix.arm(src);
+                        mix.set_origin(start);
                     }
                     Err(e) => {
                         eprintln!("arm: {e}");
@@ -1209,14 +1351,15 @@ fn audio_thread(
                     }
                 }
             }
-            Ok(Cmd::Crossfade(audio, start, cfg)) => {
+            Ok(Cmd::Crossfade(audio, start, cfg, hints)) => {
                 if cfg.needs_analysis() {
                     let tx = extras.tx.clone();
                     let tap = tap.clone();
                     let gen = generation;
+                    xf_pending = true;
                     let spawned = std::thread::Builder::new()
                         .name("tarn-xf-analysis".into())
-                        .spawn(move || match prepare_transition(audio, start, &cfg, &tap) {
+                        .spawn(move || match prepare_transition(audio, start, &cfg, &tap, &hints) {
                             Ok((src, plan)) => {
                                 let _ = tx.send(Cmd::XfReady(Box::new(src), Box::new(plan), gen));
                             }
@@ -1228,7 +1371,11 @@ fn audio_thread(
                 } else {
                     match make_source(audio, start) {
                         Ok(src) => {
-                            mix.crossfade_plan(src, plain_plan(&cfg));
+                            let plan = crate::mix::XfPlan {
+                                origin_s: start,
+                                ..plain_plan(&cfg)
+                            };
+                            mix.crossfade_plan(src, plan);
                             flush_pending_adopt(&extras, &state);
                         }
                         Err(e) => eprintln!("crossfade: {e}"),
@@ -1236,6 +1383,10 @@ fn audio_thread(
                 }
             }
             Ok(Cmd::XfReady(src, plan, gen)) => {
+                if gen == generation {
+                    xf_pending = false;
+                    mix.set_next_gain(next_gain);
+                }
                 if gen != generation {
                     eprintln!("crossfade: analysis superseded, dropping");
                     *extras.pending_adopt.lock() = None;
@@ -1245,6 +1396,8 @@ fn audio_thread(
                     mix.arm(*src);
                     // arm() zeros the clock; keep smart-start / beat trim.
                     mix.apply_skipped_frames(skipped);
+                    let sr = sample_rate.load(Ordering::Relaxed).max(1) as f64;
+                    mix.set_origin(plan.origin_s + skipped as f64 / sr);
                     flush_pending_adopt(&extras, &state);
                 } else {
                     mix.crossfade_plan(*src, *plan);
@@ -1266,7 +1419,7 @@ fn audio_thread(
             Ok(Cmd::Cut(audio, start)) => {
                 match make_source(audio, start) {
                     Ok(src) => {
-                        mix.cut(src, crate::mix::CLICK_FADE);
+                        mix.cut(src, crate::mix::CLICK_FADE, start);
                         flush_pending_adopt(&extras, &state);
                     }
                     Err(e) => eprintln!("cut: {e}"),
@@ -1308,6 +1461,7 @@ fn audio_thread(
                             samples.store(0, Ordering::SeqCst);
                             state.lock().position = secs;
                             mix.seek_swap(src);
+                            mix.set_origin(secs);
                             buffering.store(false, Ordering::Relaxed);
                         }
                         Err(e) => {
@@ -1321,6 +1475,15 @@ fn audio_thread(
             }
             Ok(Cmd::Volume(v)) => sink.set_volume(v),
             Ok(Cmd::Eq(gains, on)) => mix.set_eq(gains, on),
+            Ok(Cmd::NextGain(g)) => next_gain = g,
+            Ok(Cmd::LiveGain(g)) => {
+                if xf_pending {
+                    // The track it belongs to isn't in the mixer yet.
+                    next_gain = g;
+                } else {
+                    mix.set_live_gain(g, 2.0);
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -1377,21 +1540,37 @@ fn prepare_transition(
     start: f64,
     cfg: &XfConfig,
     tap: &crate::mix::MixTap,
+    hints: &XfHints,
 ) -> Result<(crate::decode::AudioSource, crate::mix::XfPlan)> {
     use crate::transition::{analyze, match_rate, EnvBuilder, FrameRes, MIN_CONFIDENCE, SILENCE};
     use rodio::Source;
     let t0 = Instant::now();
     let mut src = make_source(audio.clone(), start)?;
     let sr = src.sample_rate().max(1);
+    let sr_f = sr as f64;
     let ch = src.channels().max(1) as usize;
-    let mut plan = plain_plan(cfg);
+    let mut plan = crate::mix::XfPlan {
+        origin_s: start,
+        ..plain_plan(cfg)
+    };
 
-    // Look at the head of the incoming track with a second decoder so the
-    // playback one stays untouched. Only from the top: a mid-track start
-    // would make the decoder wait for the whole download.
-    let mut env = EnvBuilder::new(sr, 12.0);
+    // Incoming head: (bpm, first beat in frames from `start`, confidence).
+    let mut in_beat: Option<(f64, f64)> = None;
     let mut lead_silence = 0u64;
-    if start <= 0.05 {
+    if let Some(a) = hints.inc.as_ref() {
+        // Cached analysis: no probe decode needed, and it works for
+        // mid-track starts too.
+        if start <= 0.05 {
+            lead_silence = ((a.lead_silence_s as f64 - start).max(0.0) * sr_f) as u64;
+        }
+        if let Some(g) = a.head {
+            in_beat = Some((g.bpm, (g.phase_s - start) * sr_f));
+        }
+    } else if start <= 0.05 {
+        // Look at the head of the incoming track with a second decoder so
+        // the playback one stays untouched. Only from the top: a mid-track
+        // start would make the decoder wait for the whole download.
+        let mut env = EnvBuilder::new(sr, 12.0);
         if let Ok(mut probe) = make_source(audio.clone(), start) {
             let max_frames = 10 * sr as u64;
             let mut f = vec![0i16; ch];
@@ -1414,6 +1593,13 @@ fn prepare_transition(
                 lead_silence = 0;
             }
         }
+        if cfg.bpm_match {
+            let full: Vec<f32> = env.full.iter().copied().collect();
+            let low: Vec<f32> = env.low.iter().copied().collect();
+            in_beat = analyze(&full, &low, sr)
+                .filter(|b| b.confidence >= MIN_CONFIDENCE)
+                .map(|b| (b.bpm, env.window_start() as f64 + b.phase));
+        }
     }
 
     let mut skip = 0u64;
@@ -1421,36 +1607,44 @@ fn prepare_transition(
         skip = lead_silence.min(8 * sr as u64);
     }
     if cfg.bpm_match {
-        let full: Vec<f32> = env.full.iter().copied().collect();
-        let low: Vec<f32> = env.low.iter().copied().collect();
-        let base = env.window_start() as f64;
-        let inb = analyze(&full, &low, sr).filter(|b| b.confidence >= MIN_CONFIDENCE);
-        let outb = tap.outgoing_beat().filter(|b| b.confidence >= MIN_CONFIDENCE);
-        match (outb, inb) {
-            (Some(o), Some(i)) => {
-                if let Some((rate, eff)) = match_rate(o.bpm, i.bpm, cfg.bpm_max_pct as f64) {
+        // Outgoing: the live tap when it heard enough, else the cached
+        // grid of the track's ending (e.g. a skip right after it started).
+        let live = tap
+            .outgoing_beat()
+            .filter(|b| b.confidence >= MIN_CONFIDENCE)
+            .map(|b| (b.bpm, b.period, b.phase));
+        let cached = || {
+            let g = hints.out.as_ref()?.tail?;
+            let (_, rate, out_sr) = tap.outgoing_clock();
+            let out_sr = out_sr.max(1) as f64;
+            Some((g.bpm * rate, g.period_s() * out_sr, g.phase_s * out_sr))
+        };
+        let outb = live.or_else(cached);
+        match (outb, in_beat) {
+            (Some((o_bpm, o_period, o_phase)), Some((i_bpm, i_phase))) => {
+                if let Some((rate, eff)) = match_rate(o_bpm, i_bpm, cfg.bpm_max_pct as f64) {
                     plan.in_rate = rate;
                     eprintln!(
-                        "bpm: out {:.1} / in {:.1} (as {:.1}) → incoming at {:.2}%",
-                        o.bpm,
-                        i.bpm,
+                        "bpm: out {:.1} / in {:.1} (as {:.1}) → incoming at {:.2}%{}",
+                        o_bpm,
+                        i_bpm,
                         eff,
-                        (rate - 1.0) * 100.0
+                        (rate - 1.0) * 100.0,
+                        if hints.inc.is_some() || hints.out.is_some() { " (cached)" } else { "" }
                     );
                     if cfg.beat_align {
-                        let p_in = 60.0 * sr as f64 / eff;
-                        let phase = base + i.phase;
-                        let k = ((skip as f64 - phase) / p_in).ceil().max(0.0);
-                        let first = phase + k * p_in;
+                        let p_in = 60.0 * sr_f / eff;
+                        let k = ((skip as f64 - i_phase) / p_in).ceil().max(0.0);
+                        let first = i_phase + k * p_in;
                         if first >= skip as f64 && first - (skip as f64) <= p_in {
                             skip = first.round() as u64;
                         }
-                        plan.out_grid = Some((o.period, o.phase));
+                        plan.out_grid = Some((o_period, o_phase));
                     }
                 } else {
                     eprintln!(
                         "bpm: out {:.1} / in {:.1} needs more than ±{:.1}%, not matching",
-                        o.bpm, i.bpm, cfg.bpm_max_pct
+                        o_bpm, i_bpm, cfg.bpm_max_pct
                     );
                 }
             }
@@ -1458,7 +1652,7 @@ fn prepare_transition(
         }
     }
     if skip > 0 {
-        let skip_secs = skip as f64 / sr as f64;
+        let skip_secs = skip as f64 / sr_f;
         // Prefer a real seek so the decoder timeline matches the clock.
         // Frame-pulling also works, but a later play()/arm() that forgot
         // skipped_frames left the progress bar at 0 while audio was ahead.
@@ -1485,6 +1679,7 @@ fn prepare_transition(
     }
     Ok((src, plan))
 }
+
 
 
 #[cfg(test)]
@@ -1655,5 +1850,29 @@ mod crossfade_tests {
         assert!(matches!(p.next_choice(false), NextChoice::Play(0)));
         p.set_repeat("one");
         assert!(matches!(p.next_choice(false), NextChoice::Play(2)));
+    }
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::*;
+
+    #[test]
+    fn reorders_only_an_unchanged_window() {
+        let p = Player::start();
+        let q: Vec<Track> = (0..6)
+            .map(|i| Track { id: format!("t{i}"), ..Default::default() })
+            .collect();
+        p.replace_queue(q, 0);
+        let ids = |p: &Player| p.queue_and_index().0.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+        let win: Vec<String> = ["t2", "t3", "t4", "t5"].iter().map(|s| s.to_string()).collect();
+        let new: Vec<String> = ["t4", "t2", "t5", "t3"].iter().map(|s| s.to_string()).collect();
+        assert!(p.reorder_window(2, &win, &new));
+        assert_eq!(ids(&p), ["t0", "t1", "t4", "t2", "t5", "t3"]);
+        // Stale view of the queue: refuse.
+        assert!(!p.reorder_window(2, &win, &new));
+        // Never touches the current track.
+        let w0: Vec<String> = ["t0", "t1"].iter().map(|s| s.to_string()).collect();
+        assert!(!p.reorder_window(0, &w0, &w0));
     }
 }
