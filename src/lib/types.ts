@@ -213,6 +213,10 @@ export interface Settings {
   bpm_max_change: number;
   bpm_beat_align: boolean;
   bpm_return_seconds: number;
+  /** In-app shortcuts changed from the defaults: action → combo ("" = none). */
+  shortcuts: Record<string, string>;
+  /** Desktop global hotkeys: action → accelerator, e.g. "Ctrl+Alt+KeyP". */
+  global_hotkeys: Record<string, string>;
   /** Desktop: icon in the system tray / menu bar. */
   tray_icon: boolean;
   /** Desktop: closing the window hides it to the tray. */

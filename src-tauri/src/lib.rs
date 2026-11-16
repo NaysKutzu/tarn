@@ -1376,6 +1376,10 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
     app.player.set_transition(settings.transition());
     #[cfg(desktop)]
+    if app.settings.lock().global_hotkeys != settings.global_hotkeys {
+        mpris::set_user_hotkeys(settings.global_hotkeys.clone());
+    }
+    #[cfg(desktop)]
     tray::apply(&handle, settings.tray_icon);
     app.player
         .set_normalize(settings.normalize, settings.normalize_target);
@@ -1530,6 +1534,19 @@ fn saved_session(app: State<Arc<App>>) -> Option<persist::SavedSession> {
 #[tauri::command]
 fn save_session_now(handle: AppHandle) {
     persist::save(&handle);
+}
+
+/// Global hotkeys that could not be registered ("action: reason").
+#[tauri::command]
+fn hotkey_errors() -> Vec<String> {
+    #[cfg(desktop)]
+    {
+        mpris::hotkey_errors()
+    }
+    #[cfg(mobile)]
+    {
+        Vec::new()
+    }
 }
 
 #[tauri::command]
@@ -1995,6 +2012,7 @@ pub fn run() {
             analysis_count,
             clear_analysis,
             cache_stats,
+            hotkey_errors,
             remember_ui,
             saved_session,
             save_session_now,
