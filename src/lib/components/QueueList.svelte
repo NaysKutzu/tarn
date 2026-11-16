@@ -205,6 +205,8 @@
     cursor: default;
     outline: none;
   }
+  .qr :global(img), .qr :global(.ph) { border-radius: 8px; flex: 0 0 auto; }
+  .np .qr :global(img), .np .qr :global(.ph) { border-radius: 10px; }
   .qr:hover, .qr:focus-visible { background: var(--bg-hover); }
   .qr.now { background: var(--accent-dim); }
   .qr.played { opacity: 0.55; }

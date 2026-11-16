@@ -1502,6 +1502,8 @@
       return;
     }
     npShow = true;
+    // Phones: keep the controls on screen (no hover to bring them back).
+    if (typeof matchMedia === 'function' && matchMedia('(max-width: 700px)').matches) return;
     if (expanded && !npHoverChrome) {
       npHideTimer = setTimeout(() => {
         if (expanded && !npHoverChrome && winFocused) npShow = false;

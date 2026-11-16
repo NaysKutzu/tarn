@@ -2747,3 +2747,169 @@ html { color-scheme: dark; }
 * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 input, textarea, [contenteditable='true'] { -webkit-user-select: text; user-select: text; }
 img, svg { -webkit-user-drag: none; }
+
+/* ======================================================================
+   Phone layout (Android / iOS via Tauri mobile).
+   Desktop min window is 900px, so <=700px only ever matches a phone.
+   Bottom tab bar + mini-player; the player expands into full-screen
+   Now Playing; queue / lyrics become a full-screen sheet.
+   ====================================================================== */
+@media (max-width: 700px) {
+  :root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --tabbar: 56px;
+    --mini: 64px;
+  }
+  /* Inline custom props on .app are overridden on purpose. */
+  .app {
+    --titlebar: 0px !important;
+    --side: 0px !important;
+    --player: var(--mini) !important;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto auto;
+    grid-template-areas: 'main' 'player' 'side';
+  }
+  .tb-wrap, .titlebar { display: none !important; }
+
+  /* ---- bottom tab bar ---- */
+  .sidebar {
+    flex-direction: row;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    padding-bottom: var(--sab);
+    background: var(--bg-side);
+  }
+  .sidebar.is-hidden { display: none; }
+  .brand, .side-scroll, .side-foot .acct { display: none; }
+  .nav { flex: 5 1 0; flex-direction: row; padding: 0; gap: 0; min-width: 0; }
+  .side-foot { flex: 1 1 0; border-top: 0; padding: 0; min-width: 0; }
+  .nav-item {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    height: var(--tabbar);
+    min-height: var(--tabbar);
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 3px;
+    padding: 0;
+    border-radius: 0;
+    font-size: 10px;
+    line-height: 12px;
+    font-weight: 600;
+    text-align: center;
+  }
+  .nav-item:hover { background: transparent; }
+  .nav-item.on { background: transparent; color: rgb(var(--accent-rgb)); }
+  .nav-item .ic { flex: 0 0 auto; }
+  .nav-dot { position: absolute; top: 9px; left: calc(50% + 8px); margin: 0; }
+
+  /* ---- content ---- */
+  .main { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+  .main.with-panel { margin-right: 0; }
+  .page { padding: calc(var(--sat) + 16px) 16px 24px; }
+  .t-1 { font-size: 20px; line-height: 26px; }
+  .hero {
+    margin: calc(-16px - var(--sat)) -16px 20px;
+    min-height: 220px;
+  }
+  .hero-in { padding: calc(var(--sat) + 16px) 16px 16px; gap: 14px; }
+  .hero-in .cover, .hero-in .cover img, .hero-in .cover .ph { width: 112px; height: 112px; }
+  .hero-meta h1 { font-size: 24px; line-height: 30px; }
+  .hero-acts { margin-top: 12px; }
+  .mood-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  .qp { grid-template-columns: minmax(0, 1fr); }
+  .set, .set > * { max-width: 100%; }
+
+  /* Track tables: drop the album column, keep actions reachable. */
+  .tbl th.al, .tbl td.al { display: none; }
+  .tbl td { padding: 6px 4px; }
+  .trow .acts { opacity: 1; }
+
+  /* ---- mini player ---- */
+  .player {
+    height: var(--mini);
+    min-height: var(--mini);
+    border-top: 1px solid var(--line);
+  }
+  .player-in {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 0 8px 0 10px;
+    gap: 4px;
+  }
+  .now { position: relative; gap: 10px; }
+  .now .cov, .now .cov img, .now .cov .ph { width: 46px; height: 46px; flex-basis: 46px; }
+  /* Whole left side of the bar opens Now Playing. */
+  .now .cov { position: static; overflow: visible; }
+  .now .cov::after { content: ''; position: absolute; inset: 0; }
+  .now .cov img, .now .cov .ph { position: relative; }
+  .now .title { font-size: 14px; }
+  .now .likes, .right-c, .seek, .vol-hud, .player .err { display: none; }
+  .ctrls { width: auto; }
+  .ctrls .row-c { gap: 0; }
+  .ctrls .row-c > :nth-child(1),
+  .ctrls .row-c > :nth-child(2),
+  .ctrls .row-c > :nth-child(5) { display: none; }
+
+  /* ---- full-screen Now Playing: player becomes the control sheet ---- */
+  .app.np-open .player {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: auto;
+    min-height: 0;
+    border-top: 0;
+    padding-bottom: calc(var(--sab) + 12px);
+    background: linear-gradient(to top, rgba(12, 11, 10, 0.92) 55%, rgba(12, 11, 10, 0));
+  }
+  .app.np-open .player-in {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 24px 20px 0;
+    gap: 6px;
+    height: auto;
+  }
+  .app.np-open .now { display: none; }
+  .app.np-open .ctrls { width: 100%; flex-direction: column-reverse; gap: 8px; }
+  .app.np-open .ctrls .row-c { gap: 8px; justify-content: space-between; width: 100%; max-width: 360px; }
+  .app.np-open .ctrls .row-c > * { display: inline-flex !important; }
+  .app.np-open .seek { display: flex; }
+  .app.np-open .right-c { display: flex; justify-content: center; gap: 24px; }
+  .app.np-open .vol { display: none; }
+  .np-in, .app.np-idle .np-in {
+    padding: calc(var(--sat) + 64px) 20px calc(var(--sab) + 230px);
+  }
+  .np-art, .app.np-idle .np-art {
+    width: min(78vw, 42vh);
+    height: min(78vw, 42vh);
+    flex-basis: min(78vw, 42vh);
+  }
+  .np-meta h1 { font-size: 22px; }
+  .np-close { top: calc(var(--sat) + 8px); right: 12px; }
+  .np.has-queue .np-close { right: 12px; top: calc(var(--sat) + 8px); }
+  .np-queue { bottom: calc(var(--sab) + 240px); max-height: 32vh; }
+  .np.has-queue .np-in, .app.np-idle .np.has-queue .np-in {
+    padding: calc(var(--sat) + 64px) 20px calc(var(--sab) + 230px);
+  }
+
+  /* ---- queue / lyrics / related: full-screen sheet ---- */
+  .panel {
+    position: fixed;
+    inset: 0;
+    width: auto;
+    z-index: 60;
+    border-left: 0;
+    padding-top: var(--sat);
+    padding-bottom: var(--sab);
+  }
+  .qr { min-height: 56px; }
+  .ly { font-size: 20px; }
+}
+
+/* Touch screens have no hover: show hover-only controls. */
+@media (hover: none) {
+  .trow .acts, .qr .rm, .dl-rm { opacity: 1; }
+  .qr .grip { opacity: 1; }
+  .qr:hover .dur { display: inline; }
+  .ibtn, .nav-item, .ptab { -webkit-tap-highlight-color: transparent; }
+}
