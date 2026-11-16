@@ -141,9 +141,13 @@ jobs:
 
       - name: Package unsigned IPA (for sideloading)
         run: |
-          APP=$(find src-tauri/gen/apple ~/Library/Developer/Xcode/DerivedData -path '*iphoneos*' -name '*.app' -prune 2>/dev/null | head -1)
+          # Prefer the real build product; the archive intermediates copy can be empty.
+          APP=$(find ~/Library/Developer/Xcode/DerivedData -path '*/Build/Products/*iphoneos*' -name '*.app' -prune 2>/dev/null | head -1)
+          [ -n "$APP" ] || APP=$(find src-tauri/gen/apple ~/Library/Developer/Xcode/DerivedData -path '*iphoneos*' -name '*.app' -prune 2>/dev/null | head -1)
           echo "app bundle: ${APP:-none}"
           if [ -z "$APP" ]; then echo "::error::no .app produced"; exit 1; fi
+          du -sh "$APP"; ls -la "$APP"
+          if [ ! -f "$APP/Info.plist" ] || [ "$(du -sk "$APP" | cut -f1)" -lt 1000 ]; then echo "::error::.app looks empty"; exit 1; fi
           rm -rf ipa-out && mkdir -p ipa-out/Payload
           cp -R "$APP" ipa-out/Payload/
           (cd ipa-out && zip -qry Tarn-unsigned.ipa Payload)
