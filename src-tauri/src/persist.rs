@@ -176,6 +176,7 @@ pub fn save(handle: &AppHandle) {
         }
     }
     write(app.store.data_dir(), &sess);
+    app.analysis.flush_if_due(true);
 }
 
 pub fn apply_player_prefs(app: &App, sess: &SavedSession) {

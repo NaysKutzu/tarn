@@ -89,7 +89,7 @@ pub fn start(app: Arc<crate::App>, handle: AppHandle, hwnd: WindowHandle) {
         .ok();
 }
 
-fn dispatch(app: &Arc<crate::App>, ev: souvlaki::MediaControlEvent) {
+pub(crate) fn dispatch(app: &Arc<crate::App>, ev: souvlaki::MediaControlEvent) {
     use souvlaki::{MediaControlEvent, SeekDirection};
     {
         let snap = app.player.snapshot();

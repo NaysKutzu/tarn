@@ -68,6 +68,7 @@ notify-rust = "4"
 discord-rich-presence = "1.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri = { version = "2", features = ["tray-icon"] }
 
 [profile.release]
 lto = false

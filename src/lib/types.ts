@@ -217,6 +217,16 @@ export interface Settings {
   shortcuts: Record<string, string>;
   /** Desktop global hotkeys: action → accelerator, e.g. "Ctrl+Alt+KeyP". */
   global_hotkeys: Record<string, string>;
+  /** Desktop: icon in the system tray / menu bar. */
+  tray_icon: boolean;
+  /** Desktop: closing the window hides it to the tray. */
+  close_to_tray: boolean;
+  /** Play every track at about the same loudness. */
+  normalize: boolean;
+  /** Normalization target, LUFS (−23…−8). */
+  normalize_target: number;
+  /** Reorder upcoming tracks by tempo (only when shuffle is off). */
+  auto_dj: boolean;
 }
 
 export interface PlayerState {

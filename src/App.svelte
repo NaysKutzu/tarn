@@ -56,6 +56,7 @@
   const isMac =
     typeof navigator !== 'undefined' &&
     (/Mac/i.test(navigator.platform) || /macOS|Macintosh/i.test(navigator.userAgent));
+  const isPhone = typeof navigator !== 'undefined' && /Android|iPhone|iPad/i.test(navigator.userAgent);
   const EQ_LABELS = ['60', '230', '910', '3.6k', '14k'] as const;
   type EqBands = SettingsT['eq_bands'];
   const EQ_PRESETS: { id: string; label: string; bands: EqBands }[] = [
@@ -111,7 +112,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], shortcuts: {}, global_hotkeys: {}, ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], shortcuts: {}, global_hotkeys: {}, tray_icon: false, close_to_tray: false, normalize: false, normalize_target: -14, auto_dj: false, ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -274,9 +275,12 @@
       recents = localRecents();
       try {
         player = await api.state();
-        unsubs.push(await listen<string>('hotkey', (e) => {
-          if (e.payload === 'like' && player.track) void toggleLike();
-        }));
+        // Both the global hotkeys and the tray menu can ask to like the track.
+        for (const ev of ['hotkey', 'tray']) {
+          unsubs.push(await listen<string>(ev, (e) => {
+            if (e.payload === 'like' && player.track) void toggleLike();
+          }));
+        }
         unsubs.push(await listen<string>('toast', (e) => {
           if (e.payload) toast(String(e.payload), 'info', 3600);
         }));
@@ -298,6 +302,8 @@
         settings.eq_enabled = !!settings.eq_enabled;
         settings.shortcuts ??= {};
         settings.global_hotkeys ??= {};
+        settings.normalize = !!settings.normalize;
+        if (settings.normalize_target == null || Number.isNaN(Number(settings.normalize_target))) settings.normalize_target = -14;
         if (settings.crossfade_manual == null) settings.crossfade_manual = true;
         if (settings.cache_max_mb == null || Number.isNaN(Number(settings.cache_max_mb))) {
           settings.cache_max_mb = 1024;
@@ -1578,9 +1584,22 @@
       cacheMax = max;
     } catch {}
   }
+  let analysisCount = $state(0);
+  async function refreshAnalysisCount() {
+    try {
+      analysisCount = await api.analysisCount();
+    } catch {}
+  }
+  async function clearAnalysis() {
+    try {
+      await api.clearAnalysis();
+    } catch {}
+    await refreshAnalysisCount();
+  }
   $effect(() => {
     if (view.id !== 'settings') return;
     void refreshCacheStats();
+    void refreshAnalysisCount();
   });
 
   let navOn = (id: string) => view.id === id;
@@ -2432,6 +2451,22 @@
             </span>
             <Toggle bind:checked={settings.discord_presence} label="Discord presence" onchange={() => api.setSettings(settings)} />
           </div>
+          {#if !isPhone}
+            <div class="set-row">
+              <span class="lb">Tray icon
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Play/pause, next, previous and like from the {isMac ? 'menu bar' : 'system tray'}</span>
+              </span>
+              <Toggle bind:checked={settings.tray_icon} label="Tray icon" onchange={() => { if (!settings.tray_icon) settings.close_to_tray = false; api.setSettings(settings); }} />
+            </div>
+            {#if settings.tray_icon}
+              <div class="set-row">
+                <span class="lb">Close to tray
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Closing the window keeps the music playing; quit from the tray menu</span>
+                </span>
+                <Toggle bind:checked={settings.close_to_tray} label="Close to tray" onchange={() => api.setSettings(settings)} />
+              </div>
+            {/if}
+          {/if}
           <Scrobbling onChange={() => scrobbler.reload()} />
           <Shortcuts
             shortcuts={settings.shortcuts}
@@ -2620,6 +2655,44 @@
             </span>
             <button class="btn ghost" type="button" onclick={resetCrossfade}>Reset</button>
           </div>
+          {/if}
+          <div class="set-row">
+            <span class="lb">Volume normalization
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Measure each track and play them all at about the same loudness</span>
+            </span>
+            <Toggle bind:checked={settings.normalize} label="Volume normalization" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
+          </div>
+          {#if settings.normalize}
+            <div class="set-row">
+              <span class="lb">Target loudness
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{settings.normalize_target} LUFS - lower is quieter with more headroom</span>
+              </span>
+              <div style="width:200px">
+                <Slider
+                  value={settings.normalize_target + 23}
+                  max={15}
+                  live={true}
+                  showTip={true}
+                  format={(v) => `${Math.round(v - 23)} LUFS`}
+                  oninput={(v) => { settings.normalize_target = Math.round(v - 23); }}
+                  onchange={(v) => { settings.normalize_target = Math.round(v - 23); api.setSettings(settings); }}
+                />
+              </div>
+            </div>
+          {/if}
+          <div class="set-row">
+            <span class="lb">Auto-DJ
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Reorder upcoming songs by tempo so transitions flow{player.shuffle ? ' (paused while shuffle is on)' : ''}. Works best with BPM matching</span>
+            </span>
+            <Toggle bind:checked={settings.auto_dj} label="Auto-DJ" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
+          </div>
+          {#if settings.normalize || settings.bpm_match || settings.auto_dj}
+            <div class="set-row">
+              <span class="lb">Track analysis
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Loudness and tempo saved for {analysisCount} {analysisCount === 1 ? 'track' : 'tracks'}</span>
+              </span>
+              <button class="btn ghost" type="button" onclick={clearAnalysis} disabled={analysisCount === 0}>Clear</button>
+            </div>
           {/if}
           <div class="set-row set-eq">
             <div class="set-eq-head">

@@ -63,6 +63,9 @@ export const api = {
   cacheStats: () => invoke<[number, number]>('cache_stats'),
   /** Global hotkeys that failed to register ("action: reason"). */
   hotkeyErrors: () => invoke<string[]>('hotkey_errors'),
+  /** Tracks with cached loudness / tempo analysis. */
+  analysisCount: () => invoke<number>('analysis_count'),
+  clearAnalysis: () => invoke<void>('clear_analysis'),
   savedSession: () => invoke<SavedSession | null>('saved_session'),
   rememberUi: (ui: UiSession) => invoke<void>('remember_ui', { ui }),
   netState: () => invoke<NetState>('net_state'),
