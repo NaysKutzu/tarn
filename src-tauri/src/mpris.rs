@@ -86,7 +86,13 @@ pub fn start(app: Arc<crate::App>, handle: AppHandle, hwnd: WindowHandle) {
 
 fn dispatch(app: &Arc<crate::App>, ev: souvlaki::MediaControlEvent) {
     use souvlaki::{MediaControlEvent, SeekDirection};
-    eprintln!("media key: {ev:?}");
+    {
+        let snap = app.player.snapshot();
+        crate::diag::log(format!(
+            "media key: {ev:?} (playing={}, pos={:.1})",
+            snap.playing, snap.position
+        ));
+    }
     match ev {
         MediaControlEvent::Toggle => app.player.toggle(),
         MediaControlEvent::Play => app.player.resume(),
