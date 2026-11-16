@@ -375,6 +375,12 @@ fn pick_aac(v: &Value, kind: Kind) -> Option<Stream> {
                 .and_then(|s| s.parse::<f64>().ok())
                 .filter(|d| *d > 0.0)
         })
+        // The player response always states the video length.
+        .or_else(|| {
+            v.pointer("/videoDetails/lengthSeconds")
+                .and_then(|x| x.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| x.as_f64()))
+                .filter(|d| *d > 0.0)
+        })
         .or_else(|| {
             let clen = url_query(&url, "clen")?.parse::<f64>().ok()?;
             (clen > 0.0 && br > 0).then(|| clen * 8.0 / br as f64)
@@ -477,11 +483,10 @@ impl ResolveCache {
 
     pub fn get(&self, video_id: &str, client: Option<&str>) -> Option<Stream> {
         let g = self.map.lock().unwrap();
-        let find = |c: &str| {
-            g.get(&key(video_id, c))
-                .filter(|s| still_fresh(s.expire))
-                .map(to_stream)
-        };
+        // Entries saved without a length (older builds) would leave the seek
+        // bar at 0:00; skip them so the track is resolved again.
+        let usable = |s: &DiskStream| still_fresh(s.expire) && s.duration.is_some_and(|d| d > 0.0);
+        let find = |c: &str| g.get(&key(video_id, c)).filter(|s| usable(s)).map(to_stream);
         if let Some(c) = client {
             return find(c);
         }
@@ -489,7 +494,7 @@ impl ResolveCache {
         find("visionos")
             .or_else(|| find("android"))
             .or_else(|| find("ios"))
-            .or_else(|| g.values().find(|s| s.video_id == video_id && still_fresh(s.expire)).map(to_stream))
+            .or_else(|| g.values().find(|s| s.video_id == video_id && usable(s)).map(to_stream))
     }
 
     pub fn put(&self, video_id: &str, stream: &Stream) {

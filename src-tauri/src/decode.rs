@@ -842,6 +842,28 @@ pub fn open(audio: Arc<GrowingBody>, start: f64) -> Result<AudioSource> {
     Ok(src)
 }
 
+/// Length in seconds of a complete audio file on disk (container header only).
+pub fn file_duration(path: &std::path::Path) -> Option<f64> {
+    let file = std::fs::File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension("m4a");
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .ok()?;
+    let track = probed.format.default_track()?;
+    let p = &track.codec_params;
+    let n = p.n_frames?;
+    let secs = match p.time_base {
+        Some(tb) => {
+            let t = tb.calc_time(n);
+            t.seconds as f64 + t.frac
+        }
+        None => n as f64 / p.sample_rate? as f64,
+    };
+    (secs > 0.0).then_some(secs)
+}
+
 /// Decode a few samples from a complete buffer (diagnostics).
 pub fn decode_head(audio: &[u8], n: usize) -> Result<(u32, u16, usize)> {
     decode_head_body(GrowingBody::from_complete(audio.to_vec()), n)

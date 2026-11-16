@@ -1416,7 +1416,7 @@ html { color-scheme: dark; }
   font-size: clamp(20px, 2.4vw, 26px);
 }
 .np-lyrics {
-  flex: 1 1 56%;
+  flex: 0 1 min(680px, 52vw);
   min-width: 0;
   max-width: min(680px, 52vw);
   height: 100%;
@@ -1456,10 +1456,10 @@ html { color-scheme: dark; }
   margin: 0 0 14px;
   cursor: pointer;
   transition:
-    color 0.28s var(--ease),
-    transform 0.35s var(--ease),
-    font-size 0.28s var(--ease),
-    opacity 0.28s var(--ease);
+    color 0.6s var(--ease),
+    transform 0.7s var(--ease),
+    filter 0.7s var(--ease),
+    opacity 0.6s var(--ease);
 }
 .np-lyrics .ly.past {
   color: rgba(245, 243, 240, 0.42);
@@ -1467,8 +1467,6 @@ html { color-scheme: dark; }
 .np-lyrics .ly.on {
   color: var(--text);
   font-weight: 700;
-  font-size: clamp(28px, 3.6vw, 42px);
-  transform: translateX(6px);
 }
 .np-lyrics .ly.static {
   cursor: default;
@@ -1623,6 +1621,7 @@ html { color-scheme: dark; }
   padding-right: min(360px, 38vw);
 }
 .np.has-lyrics.has-queue .np-lyrics {
+  flex-basis: min(480px, 40vw);
   max-width: min(480px, 40vw);
 }
 .np.has-lyrics.has-queue .np-main {
@@ -2992,4 +2991,79 @@ img, svg { -webkit-user-drag: none; }
   .qr .grip { opacity: 1; }
   .qr:hover .dur { display: inline; }
   .ibtn, .nav-item, .ptab { -webkit-tap-highlight-color: transparent; }
+}
+
+/* ---------- karaoke letter fill (synced lyrics) ---------- */
+/* One --p per line; each letter derives its own fill from its index --i. */
+.kword { display: inline-block; white-space: nowrap; }
+.kc {
+  --c: clamp(0, calc((var(--p, 0) * (var(--n, 1) + 5) - var(--i, 0)) / 5), 1);
+  display: inline-block;
+  color: color-mix(in srgb, var(--text) calc(var(--c) * 100%), var(--text-3));
+  transform: translateY(calc((1 - var(--c)) * 2px));
+  text-shadow: 0 0 calc(var(--c) * (1 - var(--c)) * 56px) rgba(var(--accent-rgb), 0.9);
+}
+.np-lyrics .kc {
+  color: color-mix(in srgb, #fff calc(var(--c) * 100%), rgba(245, 243, 240, 0.38));
+  transform: translateY(calc((1 - var(--c)) * 3px)) scale(calc(1 + var(--c) * (1 - var(--c)) * 0.4));
+  text-shadow: 0 0 calc(var(--c) * (1 - var(--c)) * 88px) rgba(var(--accent-rgb), 0.95);
+}
+.no-glow .kc { text-shadow: none; }
+/* Text size */
+.np-lyrics .ly { font-size: calc(clamp(24px, 3vw, 36px) * var(--ly-scale, 1)); }
+.lyrics .ly { font-size: calc(18px * var(--ly-scale, 1)); line-height: calc(32px * var(--ly-scale, 1)); }
+.lyrics .ly.on { font-size: calc(20px * var(--ly-scale, 1)); }
+/* Fullscreen: depth-of-field on the lines around the one being sung. */
+.np-lyrics .ly {
+  --d: 3;
+  width: 90%;
+  will-change: transform, filter, opacity;
+  filter: blur(calc(var(--d) * 0.55px));
+  opacity: calc(1 - var(--d) * 0.12);
+  transform-origin: left center;
+}
+.np-lyrics.no-blur .ly { filter: none; }
+.np-lyrics .ly.on {
+  --d: 0;
+  filter: none;
+  opacity: 1;
+  transform: translateX(4px) scale(1.1);
+}
+.np-lyrics .ly.past { --d: 1; }
+/* Instrumental gap dots: always take their space so nothing jumps. */
+.ly-gap {
+  display: flex;
+  gap: 10px;
+  height: 34px;
+  align-items: center;
+  padding-left: 6px;
+  opacity: 0;
+  transform: scale(0.6);
+  transform-origin: left center;
+  transition: opacity 0.5s var(--ease), transform 0.5s var(--ease);
+}
+.ly-gap.on { opacity: 1; transform: scale(1); animation: gap-breathe 2.4s ease-in-out infinite; }
+.ly-gap i {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text);
+  opacity: calc(0.25 + clamp(0, calc(var(--gp, 0) * 3 - var(--k, 0)), 1) * 0.75);
+}
+.ly-gap i:nth-child(2) { --k: 1; }
+.ly-gap i:nth-child(3) { --k: 2; }
+@keyframes gap-breathe { 50% { transform: scale(1.12); } }
+/* Fullscreen background pulse */
+.np-pulse {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  --beat: 0;
+  opacity: calc(var(--beat) * 0.5);
+  background: radial-gradient(ellipse at 50% 55%, rgba(var(--accent-rgb), 0.5), transparent 68%);
+  mix-blend-mode: screen;
+}
+@media (prefers-reduced-motion: reduce) {
+  .np-lyrics .ly { filter: none; }
+  .kc { transform: none !important; }
+  .ly-gap.on { animation: none; }
+  .np-pulse { display: none; }
 }

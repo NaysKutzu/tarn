@@ -5,7 +5,7 @@
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { api } from './lib/api';
+  import { api, type BeatGrid } from './lib/api';
   import type {
     ArtistPage, AuthStatus, Collection, Explore, GenrePage, Home, Library,
     Lyrics, PlayerState, PlaylistCard, Related, SearchResults, Settings as SettingsT,
@@ -114,7 +114,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], listening_stats: true, shortcuts: {}, global_hotkeys: {}, tray_icon: false, close_to_tray: false, normalize: false, normalize_target: -14, auto_dj: false, dj_mode: false, ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], listening_stats: true, shortcuts: {}, global_hotkeys: {}, tray_icon: false, close_to_tray: false, normalize: false, normalize_target: -14, auto_dj: false, lyrics_karaoke: true, lyrics_glow: true, lyrics_blur: true, lyrics_dots: true, lyrics_size: 100, bg_pulse: true, ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -1487,15 +1487,140 @@
     else if (name) { searchQ = name; runSearch(name); }
   }
 
+  // Smooth playback clock (ms) for lyrics: the backend position ticks
+  // coarsely, so extrapolate between ticks with rAF while lyrics are visible.
+  let lyMs = $state(0);
+  let lyAnchor = { pos: 0, t: 0 };
+  $effect(() => {
+    const pos = player.position;
+    const now = performance.now();
+    const est = lyAnchor.pos + (player.playing ? (now - lyAnchor.t) / 1000 : 0);
+    const err = pos - est;
+    if (!player.playing || Math.abs(err) > 0.35) {
+      // Seek, pause or big drift: snap.
+      lyAnchor = { pos, t: now };
+      lyMs = pos * 1000;
+    } else {
+      // Normal tick: absorb a fraction of the error so the fill never jumps.
+      lyAnchor = { pos: est + err * 0.2, t: now };
+    }
+  });
+  $effect(() => {
+    if (!lyricsOn || !lyrics?.synced || !player.playing) return;
+    let raf = 0;
+    const tick = () => {
+      lyMs = (lyAnchor.pos + (performance.now() - lyAnchor.t) / 1000) * 1000;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  });
   let activeLyric = $derived.by(() => {
     if (!lyrics?.synced) return -1;
-    const ms = player.position * 1000;
+    const ms = lyMs;
     let idx = -1;
     for (let i = 0; i < lyrics.lines.length; i++) {
       const s = lyrics.lines[i].start_ms;
       if (s != null && s <= ms) idx = i;
     }
     return idx;
+  });
+  /** People sing ~12 letters/s; don't stretch the fill across long pauses. */
+  const sungMs = (ln: { text: string }) => Math.max(900, ln.text.length * 85);
+  /** Long instrumental gaps: [startMs, endMs] before line i (null = none). */
+  let lyGaps = $derived.by(() => {
+    const out: ({ a: number; b: number } | null)[] = [];
+    const ls = lyrics?.synced ? lyrics.lines : [];
+    let prevEnd = 0;
+    for (let i = 0; i < ls.length; i++) {
+      const st = ls[i].start_ms;
+      if (st == null) { out.push(null); continue; }
+      const gapStart = i === 0 ? 0 : prevEnd + 400;
+      out.push(st - gapStart >= (i === 0 ? 5000 : 4500) ? { a: gapStart, b: st } : null);
+      prevEnd = st + sungMs(ls[i]);
+    }
+    return out;
+  });
+  /** Index of the line a gap is currently waiting for, or -1. */
+  let gapNow = $derived.by(() => {
+    if (!settings.lyrics_dots) return -1;
+    for (let i = 0; i < lyGaps.length; i++) {
+      const g = lyGaps[i];
+      if (g && lyMs >= g.a && lyMs < g.b) return i;
+    }
+    return -1;
+  });
+  let gapP = $derived(gapNow < 0 ? 0 : (lyMs - lyGaps[gapNow]!.a) / (lyGaps[gapNow]!.b - lyGaps[gapNow]!.a));
+
+  // ---- beat pulse (fullscreen background) ----
+  let beat: { grids: BeatGrid[]; dur: number } | null = null;
+  $effect(() => {
+    const id = player.track?.id;
+    beat = null;
+    if (!id || !settings.bg_pulse) return;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      const r = await api.trackBeat(id).catch(() => null);
+      if (id !== player.track?.id) return;
+      if (r) {
+        const grids = [r[0], r[1]].filter((g): g is BeatGrid => !!g && g.confidence >= 1.6 && g.bpm > 40);
+        if (grids.length) { beat = { grids, dur: r[2] }; return; }
+      }
+      // Analysis may still be running (needs the full download first).
+      if (++tries < 8) timer = setTimeout(load, 3000 + tries * 2000);
+    };
+    timer = setTimeout(load, 600);
+    return () => clearTimeout(timer);
+  });
+  $effect(() => {
+    if (!expanded || !settings.bg_pulse) return;
+    let raf = 0;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const el = document.querySelector('.np-pulse') as HTMLElement | null;
+      if (!el) return;
+      let v = 0;
+      if (beat && player.playing) {
+        const t = lyAnchor.pos + (performance.now() - lyAnchor.t) / 1000;
+        const g = beat.grids.length > 1 && t < beat.dur / 2 ? beat.grids[0] : beat.grids[beat.grids.length - 1];
+        const per = 60 / g.bpm;
+        let ph = ((t - g.phase_s) / per) % 1;
+        if (ph < 0) ph += 1;
+        v = Math.exp(-ph * 5);
+      }
+      el.style.setProperty('--beat', v.toFixed(3));
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  });
+
+  /** 0..1 progress through the active line, estimated from its length. */
+  let lineProgress = $derived.by(() => {
+    if (!lyrics?.synced || activeLyric < 0) return 0;
+    const ln = lyrics.lines[activeLyric];
+    const start = ln.start_ms ?? 0;
+    let nextStart = Infinity;
+    for (let j = activeLyric + 1; j < lyrics.lines.length; j++) {
+      const n = lyrics.lines[j].start_ms;
+      if (n != null) { nextStart = n; break; }
+    }
+    const dur = Math.min(nextStart - start, sungMs(ln));
+    if (!isFinite(dur) || dur <= 0) return 1;
+    return Math.min(1, Math.max(0, (lyMs - start) / dur));
+  });
+  /** Words of the active line with each letter's global index. */
+  let activeWords = $derived.by(() => {
+    if (activeLyric < 0 || !lyrics) return { words: [] as { chars: string[]; off: number }[], n: 0 };
+    const text = lyrics.lines[activeLyric].text.trim();
+    let off = 0;
+    const words = text.split(/\s+/).filter(Boolean).map((w) => {
+      const chars = Array.from(w);
+      const o = off;
+      off += chars.length + 1;
+      return { chars, off: o };
+    });
+    return { words, n: Math.max(1, off - 1) };
   });
   /** Lyrics panel is active on fullscreen (kept across track changes). */
   let npLyricsMode = $derived(expanded && lyricsOn);
@@ -1506,18 +1631,55 @@
   let npQueueOn = $derived(expanded && queueOn);
   let npLyricsEl: HTMLDivElement | null = $state(null);
 
+  let scrollRaf = 0;
+  /** The element to keep centred: the gap dots during a gap, else the active line. */
+  function focusEl(root: ParentNode): HTMLElement | null {
+    return (gapNow >= 0
+      ? root.querySelector(`.ly-gap[data-g="${gapNow}"]`)
+      : root.querySelector(`.ly[data-i="${activeLyric}"]`)) as HTMLElement | null;
+  }
+  // While the fullscreen chrome opens/closes the column resizes for 0.6s;
+  // keep the active line pinned to the centre instead of chasing it.
   $effect(() => {
-    if (!lyrics?.synced || activeLyric < 0) return;
+    const el = npLyricsEl;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      const line = focusEl(el);
+      if (!line) return;
+      cancelAnimationFrame(scrollRaf);
+      el.scrollTop = Math.max(0, line.offsetTop - el.clientHeight / 2 + line.offsetHeight / 2);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  function easeScroll(el: HTMLElement, to: number) {
+    cancelAnimationFrame(scrollRaf);
+    const from = el.scrollTop;
+    const dist = to - from;
+    if (Math.abs(dist) < 1) return;
+    const dur = Math.min(900, 450 + Math.abs(dist) * 0.5);
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / dur);
+      el.scrollTop = from + dist * (1 - Math.pow(1 - k, 4));
+      if (k < 1) scrollRaf = requestAnimationFrame(step);
+    };
+    scrollRaf = requestAnimationFrame(step);
+  }
+
+  $effect(() => {
+    if (!lyrics?.synced || (activeLyric < 0 && gapNow < 0)) return;
     const i = activeLyric;
+    void gapNow;
     if (npLyricsOn && npLyricsEl) {
-      const line = npLyricsEl.querySelector(`.ly[data-i="${i}"]`) as HTMLElement | null;
+      const line = focusEl(npLyricsEl);
       if (!line) return;
       const top = line.offsetTop - npLyricsEl.clientHeight / 2 + line.offsetHeight / 2;
-      npLyricsEl.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+      easeScroll(npLyricsEl, Math.max(0, top));
       return;
     }
     if (!expanded) {
-      const el = document.querySelector(`.panel .lyrics .ly[data-i="${i}"]`);
+      const el = focusEl(document.querySelector('.panel .lyrics') ?? document);
       el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
   });
@@ -1707,6 +1869,19 @@
     npPrevIndex = idx;
   });
 </script>
+
+{#snippet karaoke()}
+  <span class="kw" style:--p={lineProgress} style:--n={activeWords.n}>
+    {#each activeWords.words as w}<span class="kword">{#each w.chars as ch, ci}<span class="kc" style:--i={w.off + ci}>{ch}</span>{/each}</span>{' '}{/each}
+  </span>
+{/snippet}
+
+{#snippet gapDots(i: number)}
+  {#if lyGaps[i] && settings.lyrics_dots}
+    <div class="ly-gap" class:on={gapNow === i} data-g={i} style:--gp={gapNow === i ? gapP : 0} aria-hidden="true"><i></i><i></i><i></i></div>
+  {/if}
+{/snippet}
+
 
 <div
   class="app"
@@ -2471,7 +2646,7 @@
             <p class="set-none">No settings match “{setQuery}”.</p>
           {/if}
           <nav class="set-nav" aria-label="Settings sections">
-            {#each [['general','General'],['playback','Playback'],['transitions','Transitions'],['sound','Sound'],['storage','Storage'],['connect','Connections'],['system','System'],['about','About']] as [sid, sl]}
+            {#each [['general','General'],['playback','Playback'],['transitions','Transitions'],['sound','Sound'],['lyrics','Lyrics & visuals'],['storage','Storage'],['connect','Connections'],['system','System'],['about','About']] as [sid, sl]}
               <button type="button" class="set-chip" onclick={() => document.getElementById('set-' + sid)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>{sl}</button>
             {/each}
           </nav>
@@ -2690,18 +2865,12 @@
           </div>
           {/if}
           <div class="set-row">
-            <span class="lb">DJ mode
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Long beat-matched mixes with bass-swap filter sweeps, keylocked tempo matching and tempo-ordered queue. Overrides the crossfade options above</span>
-            </span>
-            <Toggle bind:checked={settings.dj_mode} label="DJ mode" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
-          </div>
-          <div class="set-row">
             <span class="lb">Auto-DJ
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Reorder upcoming songs by tempo so transitions flow{player.shuffle ? ' (paused while shuffle is on)' : ''}. Works best with BPM matching</span>
             </span>
             <Toggle bind:checked={settings.auto_dj} label="Auto-DJ" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
           </div>
-          {#if settings.normalize || settings.bpm_match || settings.auto_dj || settings.dj_mode}
+          {#if settings.normalize || settings.bpm_match || settings.auto_dj || settings.bg_pulse}
             <div class="set-row">
               <span class="lb">Track analysis
                 <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Loudness and tempo saved for {analysisCount} {analysisCount === 1 ? 'track' : 'tracks'}</span>
@@ -2782,6 +2951,57 @@
               {/each}
             </div>
           </div>
+            </div>
+          </section>
+          <section class="set-sec" id="set-lyrics">
+            <div class="set-h"><h2>Lyrics & visuals</h2><p>Synced lyrics and the fullscreen player</p></div>
+            <div class="set-card">
+              <div class="set-row">
+                <span class="lb">Letter-by-letter fill
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Shows where in the line the singer is</span>
+                </span>
+                <Toggle bind:checked={settings.lyrics_karaoke} label="Letter-by-letter fill" onchange={() => api.setSettings(settings)} />
+              </div>
+              <div class="set-row">
+                <span class="lb">Glow
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Soft light on the letters being sung</span>
+                </span>
+                <Toggle bind:checked={settings.lyrics_glow} label="Glow" onchange={() => api.setSettings(settings)} />
+              </div>
+              <div class="set-row">
+                <span class="lb">Blur distant lines
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Fullscreen only: lines fade out of focus the further they are</span>
+                </span>
+                <Toggle bind:checked={settings.lyrics_blur} label="Blur distant lines" onchange={() => api.setSettings(settings)} />
+              </div>
+              <div class="set-row">
+                <span class="lb">Instrumental dots
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Three dots fill up during long gaps between lines</span>
+                </span>
+                <Toggle bind:checked={settings.lyrics_dots} label="Instrumental dots" onchange={() => api.setSettings(settings)} />
+              </div>
+              <div class="set-row">
+                <span class="lb">Text size
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{Math.round(settings.lyrics_size)}%</span>
+                </span>
+                <div style="width:200px">
+                  <Slider
+                    value={settings.lyrics_size - 70}
+                    max={80}
+                    live={true}
+                    showTip={true}
+                    format={(v) => `${Math.round(v) + 70}%`}
+                    oninput={(v) => { settings.lyrics_size = Math.round(v) + 70; }}
+                    onchange={(v) => { settings.lyrics_size = Math.round(v) + 70; api.setSettings(settings); }}
+                  />
+                </div>
+              </div>
+              <div class="set-row">
+                <span class="lb">Pulse on the beat
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Fullscreen background throbs with the rhythm when the tempo is known. Needs background track analysis</span>
+                </span>
+                <Toggle bind:checked={settings.bg_pulse} label="Pulse on the beat" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
+              </div>
             </div>
           </section>
           <section class="set-sec" id="set-storage">
@@ -2954,19 +3174,20 @@
             onHover={(t) => t.id && api.prefetch(t.id)}
           />
         {:else if sidePanelView === 'lyrics'}
-          <div class="lyrics">
+          <div class="lyrics" class:no-glow={!settings.lyrics_glow} style:--ly-scale={settings.lyrics_size / 100}>
             {#if lyrics && lyrics.lines.length}
               {#if !lyrics.synced}
                 <div class="ly-note">Lyrics for this aren't synced yet</div>
               {/if}
               {#each lyrics.lines as ln, i}
+                {@render gapDots(i)}
                 <button
                   type="button"
-                  class="ly {i === activeLyric ? 'on' : ''}"
+                  class="ly {i === activeLyric && gapNow < 0 ? 'on' : ''}"
                   class:static={!lyrics.synced || ln.start_ms == null}
                   data-i={i}
                   onclick={() => lyrics?.synced && ln.start_ms != null && api.seek(ln.start_ms / 1000)}
-                >{ln.text}</button>
+                >{#if i === activeLyric && gapNow < 0 && settings.lyrics_karaoke}{@render karaoke()}{:else}{ln.text}{/if}</button>
               {/each}
               {#if lyrics.source}<div class="ly-src">{lyrics.source}</div>{/if}
             {:else}
@@ -3024,6 +3245,7 @@
           >
             <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" alt="" />
             <div class="np-shade"></div>
+            {#if settings.bg_pulse}<div class="np-pulse"></div>{/if}
             <div class="np-in">
               <div class="np-main">
                 <div class="np-art">
@@ -3047,20 +3269,25 @@
               {#if npLyricsOn && lyrics}
                 <div
                   class="np-lyrics"
+                  class:no-glow={!settings.lyrics_glow}
+                  class:no-blur={!settings.lyrics_blur}
+                  style:--ly-scale={settings.lyrics_size / 100}
                   aria-label="Lyrics"
                   bind:this={npLyricsEl}
                   onwheel={(e) => e.stopPropagation()}
                 >
                   {#each lyrics.lines as ln, i}
+                    {@render gapDots(i)}
                     <button
                       type="button"
                       class="ly"
-                      class:on={i === activeLyric}
-                      class:past={activeLyric >= 0 && i < activeLyric}
+                      class:on={i === activeLyric && gapNow < 0}
+                      class:past={activeLyric >= 0 && (i < activeLyric || (i === activeLyric && gapNow >= 0))}
                       class:static={ln.start_ms == null}
                       data-i={i}
+                      style:--d={activeLyric < 0 ? 3 : Math.min(4, Math.abs(i - activeLyric))}
                       onclick={() => ln.start_ms != null && api.seek(ln.start_ms / 1000)}
-                    >{ln.text || ' '}</button>
+                    >{#if i === activeLyric && gapNow < 0 && settings.lyrics_karaoke}{@render karaoke()}{:else}{ln.text || ' '}{/if}</button>
                   {/each}
                 </div>
               {:else if npLyricsMode && lyricsReady && !npLyricsOn}

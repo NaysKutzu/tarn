@@ -4,6 +4,8 @@ import type {
   LikeState, Lyrics, PlayerState, Related, SearchResults, Settings, Track, SavedSession, UiSession,
 } from './types';
 
+export interface BeatGrid { bpm: number; phase_s: number; confidence: number }
+
 export const api = {
   searchAll: (query: string) => invoke<SearchResults>('search_all', { query }),
   searchTracks: (query: string) => invoke<Track[]>('search_tracks', { query }),
@@ -68,6 +70,7 @@ export const api = {
   hotkeyErrors: () => invoke<string[]>('hotkey_errors'),
   /** Tracks with cached loudness / tempo analysis. */
   analysisCount: () => invoke<number>('analysis_count'),
+  trackBeat: (id: string) => invoke<[BeatGrid | null, BeatGrid | null, number] | null>('track_beat', { id }),
   clearAnalysis: () => invoke<void>('clear_analysis'),
   savedSession: () => invoke<SavedSession | null>('saved_session'),
   rememberUi: (ui: UiSession) => invoke<void>('remember_ui', { ui }),

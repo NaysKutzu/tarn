@@ -375,6 +375,27 @@ impl Player {
         s.error = Some(msg);
     }
 
+    /// Remember a track's length once it's known, so lists (Up next) that
+    /// were given a track without one can show it. Matched by id.
+    pub fn fill_track_duration(&self, id: &str, d: f64) {
+        if d <= 0.0 {
+            return;
+        }
+        let secs = d.round() as u32;
+        let mut s = self.state.lock();
+        let fill = |t: &mut Track| {
+            if t.id == id && t.duration.map_or(true, |x| x == 0) {
+                t.duration = Some(secs);
+            }
+        };
+        if let Some(t) = s.track.as_mut() {
+            fill(t);
+        }
+        for t in s.queue.iter_mut() {
+            fill(t);
+        }
+    }
+
     pub fn set_duration(&self, d: f64) {
         let mut s = self.state.lock();
         if d > 0.0 {

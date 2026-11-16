@@ -1589,7 +1589,11 @@ impl Ytm {
     pub async fn stream(&self, video_id: &str) -> Result<Stream> {
         // A finished download needs no network at all - start instantly.
         if self.cache.has_complete(video_id) {
-            return Ok(Stream::from_disk(video_id));
+            let mut s = Stream::from_disk(video_id);
+            // No network to ask, so read the length from the file itself;
+            // without it the seek bar stays at 0:00.
+            s.duration = crate::decode::file_duration(&self.cache.final_path(video_id));
+            return Ok(s);
         }
         if self.is_offline() {
             return Err(anyhow!("Not downloaded - available when you're back online"));
@@ -1606,7 +1610,7 @@ impl Ytm {
         {
             let mut g = self.streams.lock().unwrap();
             if let Some(c) = g.get(id) {
-                if stream_is_fresh(&c.stream, c.at) {
+                if stream_is_fresh(&c.stream, c.at) && c.stream.duration.is_some_and(|d| d > 0.0) {
                     return Some(c.stream.clone());
                 }
             }
@@ -2850,7 +2854,10 @@ async fn rustypipe_one(rp: &RustyPipe, id: &str, ctype: ClientType) -> Result<St
             .duration_ms
             .map(|ms| ms as f64 / 1000.0)
             .filter(|d| *d > 0.0)
-            .or_else(|| url_dur_secs(&audio.url)),
+            .or_else(|| url_dur_secs(&audio.url))
+            // Videos (not songs) often carry no per-format duration; the
+            // video details always have the length.
+            .or_else(|| Some(player.details.duration as f64).filter(|d| *d > 0.0)),
         source: "rustypipe",
         mime: Some(audio.mime.clone()),
         client: used_name,
@@ -3133,7 +3140,8 @@ async fn rustypipe_stream(rp: &RustyPipe, id: &str, skip: &[&str]) -> Result<Str
                         .duration_ms
                         .map(|ms| ms as f64 / 1000.0)
                         .filter(|d| *d > 0.0)
-                        .or_else(|| url_dur_secs(&audio.url)),
+                        .or_else(|| url_dur_secs(&audio.url))
+                        .or_else(|| Some(player.details.duration as f64).filter(|d| *d > 0.0)),
                     source: "rustypipe",
                     mime: Some(audio.mime.clone()),
                     client: used_name,

@@ -231,8 +231,14 @@ export interface Settings {
   normalize_target: number;
   /** Reorder upcoming tracks by tempo (only when shuffle is off). */
   auto_dj: boolean;
-  /** DJ mode: long beat-matched blends with filter sweeps. */
-  dj_mode: boolean;
+  lyrics_karaoke: boolean;
+  lyrics_glow: boolean;
+  lyrics_blur: boolean;
+  lyrics_dots: boolean;
+  /** Lyrics text size, percent. */
+  lyrics_size: number;
+  /** Fullscreen background pulses on the beat. */
+  bg_pulse: boolean;
 }
 
 export interface PlayerState {

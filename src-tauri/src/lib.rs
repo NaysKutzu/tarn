@@ -150,7 +150,8 @@ impl App {
             analysis.on_done(Box::new(move |id, _| p.analysis_ready(id)));
         }
         player.set_normalize(settings.normalize, settings.normalize_target);
-        player.set_auto_dj(settings.auto_dj || settings.dj_mode);
+        // Beat-pulse background needs tempo analysis too.
+        player.set_auto_dj(settings.auto_dj || settings.bg_pulse);
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata - audio is armed later.
             player.set_volume(sess.volume);
@@ -635,6 +636,7 @@ pub(crate) async fn start_playback_at(
             }
             if let Some(d) = stream.duration {
                 app.player.set_duration(d);
+                app.player.fill_track_duration(&id, d);
             }
             match app.ytm.start_audio(&id, &stream).await {
                 Ok(audio) => {
@@ -846,6 +848,12 @@ pub(crate) fn analyze_prefetched(ytm: &std::sync::Arc<Ytm>, player: &Player, id:
             player.analyze(&id, crate::decode::GrowingBody::from_complete(bytes));
         }
     });
+}
+
+/// Cached beat grids of a track (None until it has been analysed).
+#[tauri::command]
+fn track_beat(app: State<Arc<App>>, id: String) -> Option<(Option<analysis::Grid>, Option<analysis::Grid>, f32)> {
+    app.analysis.get(&id).map(|a| (a.head, a.tail, a.duration_s))
 }
 
 #[tauri::command]
@@ -1389,7 +1397,7 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     tray::apply(&handle, settings.tray_icon);
     app.player
         .set_normalize(settings.normalize, settings.normalize_target);
-    app.player.set_auto_dj(settings.auto_dj || settings.dj_mode);
+    app.player.set_auto_dj(settings.auto_dj || settings.bg_pulse);
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
     if app.refresh_offline() {
@@ -1676,6 +1684,7 @@ fn maybe_blend(app: &Arc<App>) {
             if let Some(d) = next_dur {
                 // If adopt already flushed, keep duration in sync.
                 app.player.set_duration(d);
+                app.player.fill_track_duration(&id, d);
             }
             let (q, _) = app.player.queue_and_index();
             prefetch_ahead(&app, &q, index);
@@ -2031,6 +2040,7 @@ pub fn run() {
             extract_cookie_names,
             prefetch,
             analysis_count,
+            track_beat,
             clear_analysis,
             cache_stats,
             get_listens,

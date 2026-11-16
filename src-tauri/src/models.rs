@@ -365,11 +365,24 @@ pub struct Settings {
     /// Reorder upcoming tracks by tempo so transitions flow (no shuffle).
     #[serde(default)]
     pub auto_dj: bool,
-    /// DJ mode: long beat-matched blends with filter sweeps (bass swap),
-    /// keylocked tempo matching and tempo-ordered queue. Overrides the
-    /// individual crossfade options while on.
-    #[serde(default)]
-    pub dj_mode: bool,
+    /// Lyrics: fill the line being sung letter by letter.
+    #[serde(default = "default_true")]
+    pub lyrics_karaoke: bool,
+    /// Lyrics: soft glow on the letters being sung.
+    #[serde(default = "default_true")]
+    pub lyrics_glow: bool,
+    /// Lyrics (fullscreen): blur lines the further they are from the current one.
+    #[serde(default = "default_true")]
+    pub lyrics_blur: bool,
+    /// Lyrics: animated dots during long instrumental gaps.
+    #[serde(default = "default_true")]
+    pub lyrics_dots: bool,
+    /// Lyrics text size, percent (70..=150).
+    #[serde(default = "default_pct")]
+    pub lyrics_size: f64,
+    /// Fullscreen background pulses on the beat when the tempo is known.
+    #[serde(default = "default_true")]
+    pub bg_pulse: bool,
 }
 
 impl Default for Settings {
@@ -410,7 +423,12 @@ impl Default for Settings {
             normalize: false,
             normalize_target: default_normalize_target(),
             auto_dj: false,
-            dj_mode: false,
+            lyrics_karaoke: true,
+            lyrics_glow: true,
+            lyrics_blur: true,
+            lyrics_dots: true,
+            lyrics_size: 100.0,
+            bg_pulse: true,
         }
     }
 }
@@ -419,24 +437,6 @@ impl Settings {
     /// The crossfade configuration the player uses, clamped to sane ranges.
     pub fn transition(&self) -> crate::transition::XfConfig {
         use crate::transition::{Curve, FilterSweep, XfConfig, XfShape};
-        if self.dj_mode {
-            return XfConfig {
-                shape: XfShape {
-                    secs: 14.0,
-                    curve_out: Curve::Smooth,
-                    curve_in: Curve::Smooth,
-                    out_len: 0.7,
-                    in_len: 0.7,
-                    filter: FilterSweep::Sweep,
-                },
-                smart: true,
-                bpm_match: true,
-                bpm_max_pct: 8.0,
-                beat_align: true,
-                bpm_return_secs: 10.0,
-                keylock: true,
-            };
-        }
         XfConfig {
             shape: XfShape {
                 secs: self.crossfade_seconds.clamp(0.0, 20.0) as f32,
