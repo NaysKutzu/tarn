@@ -103,10 +103,19 @@ impl Analyzer {
         let _ = std::thread::Builder::new()
             .name("tarn-analysis".into())
             .spawn(move || {
-                while let Ok((id, body)) = rx.recv() {
-                    let Some(me) = weak.upgrade() else { break };
-                    me.run_one(&id, body);
-                    me.flush_if_due(false);
+                loop {
+                    match rx.recv_timeout(Duration::from_secs(6)) {
+                        Ok((id, body)) => {
+                            let Some(me) = weak.upgrade() else { break };
+                            me.run_one(&id, body);
+                            me.flush_if_due(false);
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            let Some(me) = weak.upgrade() else { break };
+                            me.flush_if_due(false);
+                        }
+                        Err(_) => break,
+                    }
                 }
             });
         me

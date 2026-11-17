@@ -4,7 +4,6 @@ import type {
   LikeState, Lyrics, PlayerState, Related, SearchResults, Settings, Track, SavedSession, UiSession,
 } from './types';
 
-export interface BeatGrid { bpm: number; phase_s: number; confidence: number }
 
 export const api = {
   searchAll: (query: string) => invoke<SearchResults>('search_all', { query }),
@@ -18,6 +17,7 @@ export const api = {
   artist: (id: string) => invoke<ArtistPage>('get_artist', { id }),
   album: (id: string) => invoke<Collection>('get_album', { id }),
   playlist: (id: string) => invoke<Collection>('get_playlist', { id }),
+  playlistHead: (id: string) => invoke<Collection>('get_playlist_head', { id }),
   lyrics: (id: string) => invoke<Lyrics>('get_lyrics', { id }),
   related: (id: string) => invoke<Related>('get_related', { id }),
   play: (track: Track, queue: Track[], index: number) =>
@@ -70,7 +70,6 @@ export const api = {
   hotkeyErrors: () => invoke<string[]>('hotkey_errors'),
   /** Tracks with cached loudness / tempo analysis. */
   analysisCount: () => invoke<number>('analysis_count'),
-  trackBeat: (id: string) => invoke<[BeatGrid | null, BeatGrid | null, number] | null>('track_beat', { id }),
   clearAnalysis: () => invoke<void>('clear_analysis'),
   savedSession: () => invoke<SavedSession | null>('saved_session'),
   rememberUi: (ui: UiSession) => invoke<void>('remember_ui', { ui }),

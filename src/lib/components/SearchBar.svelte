@@ -14,6 +14,7 @@
     onSubmit,
     onPlay,
     onOpen,
+    onContext,
   }: {
     value?: string;
     autofocus?: boolean;
@@ -21,7 +22,17 @@
     onSubmit: (q: string) => void;
     onPlay: (track: Track, queue: Track[]) => void;
     onOpen: (item: ShelfItem) => void;
+    onContext?: (e: MouseEvent, item: ShelfItem) => void;
   } = $props();
+
+  function songItem(t: Track): ShelfItem {
+    return {
+      kind: t.is_video ? 'video' : 'track', id: t.id, title: t.title, subtitle: null, cover: t.cover,
+      artists: t.artists, artist_ids: t.artist_ids ?? [], album: t.album ?? null, album_id: t.album_id ?? null,
+      duration: t.duration ?? null, playlist_id: null, color: null, browse_id: null, params: null,
+      year: null, album_type: null, track_count: null, is_video: !!t.is_video,
+    };
+  }
 
   let open = $state(false);
   let suggestions = $state<string[]>([]);
@@ -291,6 +302,7 @@
               data-hit={idx}
               aria-selected={isOn('top')}
               onclick={(e) => openItem(top, e)}
+              oncontextmenu={(e) => onContext?.(e, top)}
             >
               <span class="sug-cov top">
                 <Cover src={top.cover} size={80} round={top.kind === 'artist'} alt="" />
@@ -319,6 +331,7 @@
                 data-hit={idx}
                 aria-selected={isOn('song', i)}
                 onclick={(e) => playSong(t, e)}
+                oncontextmenu={(e) => onContext?.(e, songItem(t))}
               >
                 <span class="sug-cov">
                   <Cover src={t.cover} size={48} alt="" />
@@ -348,6 +361,7 @@
                 data-hit={idx}
                 aria-selected={isOn('artist', i)}
                 onclick={() => { open = false; onOpen(asArtist(a)); }}
+                oncontextmenu={(e) => onContext?.(e, asArtist(a))}
               >
                 <span class="sug-cov round">
                   <Cover src={a.cover} size={48} round alt="" />
@@ -373,6 +387,7 @@
                 data-hit={idx}
                 aria-selected={isOn('album', i)}
                 onclick={() => { open = false; onOpen(asAlbum(a)); }}
+                oncontextmenu={(e) => onContext?.(e, asAlbum(a))}
               >
                 <span class="sug-cov">
                   <Cover src={a.cover} size={48} alt="" />

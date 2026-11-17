@@ -994,14 +994,18 @@ fn parse_responsive(r: &Value) -> Option<ShelfItem> {
     } else if page.as_deref() == Some("MUSIC_PAGE_TYPE_ALBUM") {
         ("album", browse_id.clone().unwrap_or_default())
     } else {
+        // The card's play button carries a watch-playlist id (often an `RD…`
+        // mix built from the playlist), which queues different songs than the
+        // playlist page shows. The `VL…` browseId is the playlist itself, so
+        // Play from Home and opening the card give the same tracks.
         (
             "playlist",
-            playlist_id_of(r)
-                .or_else(|| {
-                    browse_id
-                        .as_ref()
-                        .map(|b| b.trim_start_matches("VL").to_string())
-                })
+            browse_id
+                .as_deref()
+                .filter(|b| b.starts_with("VL"))
+                .map(|b| b.trim_start_matches("VL").to_string())
+                .or_else(|| playlist_id_of(r))
+                .or_else(|| browse_id.as_ref().map(|b| b.trim_start_matches("VL").to_string()))
                 .unwrap_or_default(),
         )
     };
@@ -1770,7 +1774,17 @@ impl InnerTube {
                 break;
             }
             prev_tok = Some(token.clone());
-            match self.browse_continuation(&token).await {
+            // A single transient failure (rate limit, dropped connection)
+            // used to end the paging here and leave only the first 100 tracks.
+            let mut page = self.browse_continuation(&token).await;
+            for attempt in 1..=3u64 {
+                if page.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(400 * attempt)).await;
+                page = self.browse_continuation(&token).await;
+            }
+            match page {
                 Ok(more) => {
                     let before = tracks.len() + cards.len() + artists.len();
                     let (tr, pl, ar) = parse_library_page(&more);

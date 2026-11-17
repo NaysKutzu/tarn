@@ -237,8 +237,6 @@ export interface Settings {
   lyrics_dots: boolean;
   /** Lyrics text size, percent. */
   lyrics_size: number;
-  /** Fullscreen background pulses on the beat. */
-  bg_pulse: boolean;
 }
 
 export interface PlayerState {

@@ -380,9 +380,6 @@ pub struct Settings {
     /// Lyrics text size, percent (70..=150).
     #[serde(default = "default_pct")]
     pub lyrics_size: f64,
-    /// Fullscreen background pulses on the beat when the tempo is known.
-    #[serde(default = "default_true")]
-    pub bg_pulse: bool,
 }
 
 impl Default for Settings {
@@ -428,7 +425,6 @@ impl Default for Settings {
             lyrics_blur: true,
             lyrics_dots: true,
             lyrics_size: 100.0,
-            bg_pulse: true,
         }
     }
 }

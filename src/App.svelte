@@ -5,7 +5,7 @@
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { api, type BeatGrid } from './lib/api';
+  import { api } from './lib/api';
   import type {
     ArtistPage, AuthStatus, Collection, Explore, GenrePage, Home, Library,
     Lyrics, PlayerState, PlaylistCard, Related, SearchResults, Settings as SettingsT,
@@ -114,7 +114,7 @@
     { value: 'logarithmic', label: 'Logarithmic' },
     { value: 'exponential', label: 'Exponential' },
   ];
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], listening_stats: true, shortcuts: {}, global_hotkeys: {}, tray_icon: false, close_to_tray: false, normalize: false, normalize_target: -14, auto_dj: false, lyrics_karaoke: true, lyrics_glow: true, lyrics_blur: true, lyrics_dots: true, lyrics_size: 100, bg_pulse: true, ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], listening_stats: true, shortcuts: {}, global_hotkeys: {}, tray_icon: false, close_to_tray: false, normalize: false, normalize_target: -14, auto_dj: false, lyrics_karaoke: true, lyrics_glow: true, lyrics_blur: true, lyrics_dots: true, lyrics_size: 100, ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -757,12 +757,47 @@
     try { dlTracks = await api.offlineTracks(); } catch { dlTracks = []; }
   }
   async function loadAlbum(id: string) {
+    playlistSeq++; // an unfinished playlist load must not overwrite this album
     loading = true; collection = null;
     try { collection = await openCollection('album', id); } catch (e) { fail(e, "Couldn't load this album"); } finally { loading = false; }
   }
+  // A newer open (or leaving the page) makes the slower, older load drop its result.
+  let playlistSeq = 0;
+  const HEAD_TRACKS = 100;
   async function loadPlaylist(id: string) {
+    const seq = ++playlistSeq;
+    const stale = () => seq !== playlistSeq;
     loading = true; collection = null;
-    try { collection = await openCollection('playlist', id); } catch (e) { fail(e, "Couldn't load this playlist"); } finally { loading = false; }
+    try {
+      const isLiked = id === 'LM' || id === 'VLLM';
+      if (isLiked && library?.liked?.length) {
+        // Paint the first batch from the cached library at once; the whole
+        // list replaces it when the load below finishes.
+        const all = library.liked;
+        collection = {
+          kind: 'playlist', id: 'LM', playlist_id: 'LM', name: 'Liked Music',
+          cover: all[0]?.cover ?? null, artists: [], artist_ids: [], author: null,
+          year: null, description: null, track_count: all.length, album_type: null,
+          tracks: all.slice(0, HEAD_TRACKS), related: [], owned: true, saved: true,
+        };
+        loading = false;
+      } else if (!isLiked && !off.offline) {
+        // First page now, the rest right after, so a big playlist opens instantly.
+        const head = await api.playlistHead(id);
+        if (stale()) return;
+        collection = head;
+        loading = false;
+      }
+      const full = await openCollection('playlist', id);
+      if (stale()) return;
+      collection = full;
+    } catch (e) {
+      if (stale()) return;
+      // Keep whatever is already on screen if only the full load failed.
+      if (!collection) fail(e, "Couldn't load this playlist");
+    } finally {
+      if (!stale()) loading = false;
+    }
   }
   async function loadGenre(id: string) {
     loading = true; genre = null;
@@ -1569,55 +1604,6 @@
   });
   let gapP = $derived(gapNow < 0 ? 0 : (lyMs - lyGaps[gapNow]!.a) / (lyGaps[gapNow]!.b - lyGaps[gapNow]!.a));
 
-  // ---- beat pulse (fullscreen background) ----
-  let beat: { grids: BeatGrid[]; dur: number } | null = null;
-  $effect(() => {
-    const id = player.track?.id;
-    beat = null;
-    if (!id || !settings.bg_pulse) return;
-    let tries = 0;
-    let timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
-      const r = await api.trackBeat(id).catch(() => null);
-      if (id !== player.track?.id) return;
-      if (r) {
-        const grids = [r[0], r[1]].filter((g): g is BeatGrid => !!g && g.confidence >= 1.6 && g.bpm > 40);
-        if (grids.length) {
-          beat = { grids, dur: r[2] };
-          api.diagNote(`pulse: ${id} ok bpm=${grids.map((g) => g.bpm.toFixed(1)).join('/')} after ${tries} tries`).catch(() => {});
-          return;
-        }
-      }
-      // Analysis may still be running (needs the full download first).
-      if (++tries < 40) timer = setTimeout(load, 2500);
-      else api.diagNote(`pulse: ${id} no usable beat grid (r=${JSON.stringify(r)})`).catch(() => {});
-    };
-    timer = setTimeout(load, 600);
-    return () => clearTimeout(timer);
-  });
-  $effect(() => {
-    if (!expanded || !settings.bg_pulse) return;
-    let raf = 0;
-    const tick = () => {
-      raf = requestAnimationFrame(tick);
-      const el = document.querySelector('.np-pulse') as HTMLElement | null;
-      if (!el) return;
-      let v = 0;
-      if (beat && player.playing) {
-        const t = lyAnchor.pos + (performance.now() - lyAnchor.t) / 1000;
-        const g = beat.grids.length > 1 && t < beat.dur / 2 ? beat.grids[0] : beat.grids[beat.grids.length - 1];
-        const per = 60 / g.bpm;
-        let ph = ((t - g.phase_s) / per) % 1;
-        if (ph < 0) ph += 1;
-        v = Math.exp(-ph * 5);
-      }
-      el.style.setProperty('--beat', v.toFixed(3));
-      el.parentElement?.style.setProperty('--beat-s', v.toFixed(3));
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  });
-
   /** 0..1 progress through the active line, estimated from its length. */
   let lineProgress = $derived.by(() => {
     if (!lyrics?.synced || activeLyric < 0) return 0;
@@ -2049,6 +2035,7 @@
           onSubmit={(q) => runSearch(q)}
           onPlay={(t, queue) => playTracks(queue, Math.max(0, queue.findIndex((x) => x.id === t.id)))}
           onOpen={openItem}
+          onContext={contextItem}
         />
         <h1 class="page-title">Explore</h1>
         <div class="explore-links">
@@ -2085,6 +2072,7 @@
           onSubmit={(q) => runSearch(q)}
           onPlay={(t, queue) => playTracks(queue, Math.max(0, queue.findIndex((x) => x.id === t.id)))}
           onOpen={openItem}
+          onContext={contextItem}
         />
         {#if loading && !results}<Skeleton kind="search" />{/if}
         {#if results}
@@ -2667,8 +2655,8 @@
         {/each}
 
       {:else if view.id === 'settings'}
-        <h1 class="page-title">Settings</h1>
         <div class="set" bind:this={setEl}>
+          <h1 class="page-title">Settings</h1>
           <div class="set-search">
             <Hi icon={Search01Icon} size={18} />
             <input type="search" placeholder="Search settings" aria-label="Search settings" bind:value={setQuery} />
@@ -2904,7 +2892,7 @@
             </span>
             <Toggle bind:checked={settings.auto_dj} label="Auto-DJ" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
           </div>
-          {#if settings.normalize || settings.bpm_match || settings.auto_dj || settings.bg_pulse}
+          {#if settings.normalize || settings.bpm_match || settings.auto_dj}
             <div class="set-row">
               <span class="lb">Track analysis
                 <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Loudness and tempo saved for {analysisCount} {analysisCount === 1 ? 'track' : 'tracks'}</span>
@@ -3029,12 +3017,6 @@
                     onchange={(v) => { settings.lyrics_size = Math.round(v) + 70; api.setSettings(settings); }}
                   />
                 </div>
-              </div>
-              <div class="set-row">
-                <span class="lb">Pulse on the beat
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Fullscreen background throbs with the rhythm when the tempo is known. Needs background track analysis</span>
-                </span>
-                <Toggle bind:checked={settings.bg_pulse} label="Pulse on the beat" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
               </div>
             </div>
           </section>
@@ -3279,7 +3261,6 @@
           >
             <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" alt="" />
             <div class="np-shade"></div>
-            {#if settings.bg_pulse}<div class="np-pulse"></div>{/if}
             <div class="np-in">
               <div class="np-main" role="presentation" oncontextmenu={(e) => { if (player.track) contextTrack(e, player.track); }}>
                 <div class="np-art">

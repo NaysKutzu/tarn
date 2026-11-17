@@ -150,8 +150,7 @@ impl App {
             analysis.on_done(Box::new(move |id, _| p.analysis_ready(id)));
         }
         player.set_normalize(settings.normalize, settings.normalize_target);
-        // Beat-pulse background needs tempo analysis too.
-        player.set_auto_dj(settings.auto_dj || settings.bg_pulse);
+        player.set_auto_dj(settings.auto_dj);
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata - audio is armed later.
             player.set_volume(sess.volume);
@@ -463,8 +462,26 @@ async fn get_artist(app: State<'_, Arc<App>>, id: String) -> Result<ArtistPage, 
     app.ytm.artist(&id).await.map_err(|e| e.to_string())
 }
 
+/// Session restore runs in the background after launch. A page restored from
+/// the last session asks before it finishes, so the request goes out without
+/// the account: Liked Music comes back as a 100-track public list and private
+/// playlists fail or come back partial. Wait for the cookies (up to 10s) when
+/// a saved session exists; a signed-out user does not wait.
+async fn wait_for_session(app: &App) {
+    if app.ytm.cookie_header().is_some() || !matches!(app.store.load(), Ok(Some(_))) {
+        return;
+    }
+    for _ in 0..100 {
+        if app.ytm.cookie_header().is_some() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 #[tauri::command]
 async fn get_album(app: State<'_, Arc<App>>, id: String) -> Result<Collection, String> {
+    wait_for_session(&app).await;
     app.ytm.album(&id).await.map_err(|e| e.to_string())
 }
 
@@ -475,8 +492,55 @@ async fn get_playlist(app: State<'_, Arc<App>>, id: String) -> Result<Collection
         if let Some(c) = app.liked_music_snapshot() {
             return Ok(c);
         }
+        wait_for_session(&app).await;
+        // The full library load holds this lock while it runs; wait for it
+        // instead of paging Liked Music a second time in parallel, which has
+        // returned only the first 100 tracks.
+        // If nobody has started loading it yet (this page was asked first,
+        // e.g. restored from the last session), load it here and share it.
+        let ticket = app
+            .library_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut slot = app.library_slot.lock().await;
+        let lib = match &slot.1 {
+            Some(l) if slot.0 > ticket => Some(l.clone()),
+            _ => match app.ytm.library().await {
+                Ok(l) => {
+                    if l.signed_in {
+                        slot.0 = app
+                            .library_calls
+                            .load(std::sync::atomic::Ordering::SeqCst);
+                        slot.1 = Some(l.clone());
+                    }
+                    Some(l)
+                }
+                Err(_) => None,
+            },
+        };
+        drop(slot);
+        if let Some(lib) = lib {
+            if lib.signed_in && !lib.liked.is_empty() {
+                app.remember_liked_tracks(lib.liked);
+                if let Some(c) = app.liked_music_snapshot() {
+                    return Ok(c);
+                }
+            }
+        }
     }
+    wait_for_session(&app).await;
     app.ytm.playlist(&id).await.map_err(|e| e.to_string())
+}
+
+/// First page of a playlist for an instant paint; `get_playlist` follows with
+/// the whole list. Liked Music is already cached whole, so it is not split.
+#[tauri::command]
+async fn get_playlist_head(app: State<'_, Arc<App>>, id: String) -> Result<Collection, String> {
+    let bare = id.strip_prefix("VL").unwrap_or(&id);
+    if bare == "LM" {
+        return get_playlist(app, id).await;
+    }
+    wait_for_session(&app).await;
+    app.ytm.playlist_head(&id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1397,7 +1461,7 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     tray::apply(&handle, settings.tray_icon);
     app.player
         .set_normalize(settings.normalize, settings.normalize_target);
-    app.player.set_auto_dj(settings.auto_dj || settings.bg_pulse);
+    app.player.set_auto_dj(settings.auto_dj);
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
     if app.refresh_offline() {
@@ -1994,6 +2058,7 @@ pub fn run() {
             get_artist,
             get_album,
             get_playlist,
+            get_playlist_head,
             get_lyrics,
             get_related,
             start_radio,

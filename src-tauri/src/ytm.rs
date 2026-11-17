@@ -872,6 +872,17 @@ impl Ytm {
     }
 
     pub async fn playlist(&self, id: &str) -> Result<Collection> {
+        self.playlist_opt(id, true).await
+    }
+
+    /// First page only (~100 tracks) so a playlist can paint at once; the
+    /// caller loads the rest with `playlist`. Liked Music, Episodes and
+    /// auto mixes are already served whole, so they take the full path.
+    pub async fn playlist_head(&self, id: &str) -> Result<Collection> {
+        self.playlist_opt(id, false).await
+    }
+
+    async fn playlist_opt(&self, id: &str, all: bool) -> Result<Collection> {
         let bare = id.strip_prefix("VL").unwrap_or(id);
         // Liked Music / Episodes: rustypipe's music_playlist("LM") can panic
         // inside visitor-data fetch (302). Use the dedicated liked endpoints.
@@ -911,8 +922,10 @@ impl Ytm {
         };
         // music_playlist only returns the first page (~50-100 tracks).
         // Follow the continuations so the whole playlist shows up.
-        if let Err(e) = p.tracks.extend_all(self.rp.query()).await {
-            crate::diag::log(format!("playlist {id}: pagination stopped early: {e}"));
+        if all {
+            if let Err(e) = p.tracks.extend_all(self.rp.query()).await {
+                crate::diag::log(format!("playlist {id}: pagination stopped early: {e}"));
+            }
         }
         let mut c = Collection {
             kind: "playlist".into(),
