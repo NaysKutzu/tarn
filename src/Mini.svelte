@@ -11,15 +11,28 @@
 
   let player = $state<PlayerState | null>(null);
 
+  // Opened from the tray: behave like a popup and go away when it loses focus.
+  const popup = new URLSearchParams(location.search).has('pop');
+
   onMount(() => {
     let un: (() => void) | undefined;
+    let unFocus: (() => void) | undefined;
+    if (popup) {
+      const w = getCurrentWindow();
+      // Ignore the blur that can arrive before the window is first focused.
+      let seenFocus = false;
+      w.onFocusChanged(({ payload }) => {
+        if (payload) seenFocus = true;
+        else if (seenFocus) w.close().catch(() => {});
+      }).then((u) => { unFocus = u; }).catch(() => {});
+    }
     api.state().then((s) => { player = s; }).catch(() => {});
     listen<PlayerState>('player', (e) => {
       const next = e.payload;
       // Unchanged updates come without the queue; this window does not need it.
       player = next;
     }).then((u) => { un = u; });
-    return () => un?.();
+    return () => { un?.(); unFocus?.(); };
   });
 
   let pct = $derived(

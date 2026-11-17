@@ -62,10 +62,11 @@ fn build(h: &AppHandle) -> tauri::Result<()> {
     let next = MenuItem::with_id(h, "next", "Next", true, None::<&str>)?;
     let prev = MenuItem::with_id(h, "prev", "Previous", true, None::<&str>)?;
     let like = MenuItem::with_id(h, "like", "Like", true, None::<&str>)?;
+    let mini = MenuItem::with_id(h, "mini", "Mini player", true, None::<&str>)?;
     let quit = MenuItem::with_id(h, "quit", "Quit Tarn", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(h)?;
     let sep2 = PredefinedMenuItem::separator(h)?;
-    let menu = Menu::with_items(h, &[&show, &sep1, &play, &next, &prev, &like, &sep2, &quit])?;
+    let menu = Menu::with_items(h, &[&show, &mini, &sep1, &play, &next, &prev, &like, &sep2, &quit])?;
     let mut b = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("Tarn")
@@ -78,7 +79,9 @@ fn build(h: &AppHandle) -> tauri::Result<()> {
                 ..
             } = ev
             {
-                toggle_window(tray.app_handle());
+                // Left click pops the mini player (not delivered on Linux
+                // appindicator; the menu entry covers that).
+                toggle_mini(tray.app_handle());
             }
         });
     if let Some(icon) = h.default_window_icon() {
@@ -100,6 +103,7 @@ fn app_state(h: &AppHandle) -> Option<Arc<crate::App>> {
 fn on_menu(h: &AppHandle, id: &str) {
     match id {
         "show" => toggle_window(h),
+        "mini" => toggle_mini(h),
         "quit" => h.exit(0),
         "like" => {
             // The frontend owns like state (optimistic UI, local likes for
@@ -118,6 +122,16 @@ fn on_menu(h: &AppHandle, id: &str) {
         }
         _ => {}
     }
+}
+
+/// Ask the app to show / hide the mini player next to the tray (cursor).
+/// The page owns the window so it can reuse the one in-app mini player.
+fn toggle_mini(h: &AppHandle) {
+    let (x, y) = h
+        .cursor_position()
+        .map(|p| (p.x, p.y))
+        .unwrap_or((-1.0, -1.0));
+    let _ = h.emit("tray-mini", serde_json::json!({ "x": x, "y": y }));
 }
 
 pub fn show_window(h: &AppHandle) {

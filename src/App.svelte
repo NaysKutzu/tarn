@@ -1427,15 +1427,27 @@
   let importOpen = $state(false);
 
   // Small always-on-top player window (same page, ?mini=1).
-  async function openMini() {
+  async function openMini(at?: { x: number; y: number }) {
     try {
       const existing = await WebviewWindow.getByLabel('mini');
       if (existing) {
-        await existing.setFocus();
+        // Opened from the tray: a second click closes the popup.
+        if (at) await existing.close();
+        else await existing.setFocus();
         return;
       }
+      // Tray popup: appear next to the cursor (physical px -> css px).
+      let pos: { x?: number; y?: number } = {};
+      if (at && at.x >= 0) {
+        const d = window.devicePixelRatio || 1;
+        const cx = at.x / d, cy = at.y / d;
+        const x = Math.max(8, Math.min(window.screen.width - 360 - 8, cx - 180));
+        const y = cy > window.screen.height / 2 ? cy - 110 - 14 : cy + 14;
+        pos = { x: Math.round(x), y: Math.round(Math.max(8, y)) };
+      }
       const w = new WebviewWindow('mini', {
-        url: '/?mini=1',
+        url: at ? '/?mini=1&pop=1' : '/?mini=1',
+        ...pos,
         title: 'Tarn',
         width: 360,
         height: 110,
@@ -1851,6 +1863,9 @@
   onMount(() => {
     const win = getCurrentWindow();
     const unsubs: Array<() => void> = [];
+    listen<{ x: number; y: number }>('tray-mini', (e) => void openMini(e.payload))
+      .then((u) => unsubs.push(u))
+      .catch(() => {});
     win
       .onFocusChanged(({ payload: focused }) => {
         winFocused = focused;
