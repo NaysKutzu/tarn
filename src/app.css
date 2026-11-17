@@ -2016,6 +2016,7 @@ html { color-scheme: dark; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 2px 8px 8px; font-size: 12px; color: var(--text-2);
 }
+.q-bar > span { margin-right: auto; }
 .q-clear {
   font-size: 12px; font-weight: 600; color: var(--text-2);
   padding: 4px 10px; border-radius: 999px;

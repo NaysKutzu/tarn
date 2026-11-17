@@ -183,6 +183,19 @@
   let chip = $state<string | null>(null);
   let mainEl: HTMLElement | undefined = $state();
   let likes = $state<Track[]>(localLikes());
+  // Disliked song ids, remembered here so the thumbs-down stays lit when the
+  // song comes up again (the player state only knows the current track).
+  const DISLIKE_KEY = 'tarn.disliked.v1';
+  let dislikedIds = $state<string[]>((() => {
+    try { const v = JSON.parse(localStorage.getItem(DISLIKE_KEY) ?? '[]'); return Array.isArray(v) ? v.slice(-2000) : []; } catch { return []; }
+  })());
+  function isDisliked(id: string) { return dislikedIds.includes(id); }
+  function setDisliked(id: string, on: boolean) {
+    const has = dislikedIds.includes(id);
+    if (on === has) return;
+    dislikedIds = on ? [...dislikedIds, id].slice(-2000) : dislikedIds.filter((x) => x !== id);
+    try { localStorage.setItem(DISLIKE_KEY, JSON.stringify(dislikedIds)); } catch {}
+  }
   let recents = $state<Track[]>(localRecents());
   type HistEntry = { view: View; scroll: number; searchQ: string; results: SearchResults | null; searchTab: typeof searchTab };
   let backStack = $state<HistEntry[]>([]);
@@ -365,6 +378,7 @@
           next.disliked = false;
         }
       }
+      if (next.track && !next.liked && isDisliked(next.track.id)) next.disliked = true;
       // A like/dislike still in flight: keep showing what the user just chose.
       if (pendingRating && next.track?.id === pendingRating.id) {
         next.liked = pendingRating.liked;
@@ -653,7 +667,14 @@
       diagText = text;
     }
   }
-  async function loadHome(params?: string | null) {
+  let homeInflight: Promise<void> | null = null;
+  /** Startup triggers Home from several places; share one request. */
+  function loadHome(params?: string | null): Promise<void> {
+    if (params) return loadHomeNow(params);
+    homeInflight ??= loadHomeNow(params).finally(() => { homeInflight = null; });
+    return homeInflight;
+  }
+  async function loadHomeNow(params?: string | null) {
     if (off.offline) {
       loading = false;
       if (view.id === 'home') go({ id: 'downloads' }, { replace: true });
@@ -1069,6 +1090,22 @@
   let pendingRating: { id: string; liked: boolean; disliked: boolean } | null = null;
   const likeSeq = new Map<string, number>();
 
+  let homeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  /** YouTube learns from the dislike: hide the song now, re-pull the feed shortly. */
+  function refreshHomeAfterDislike(id: string) {
+    if (home) {
+      home = {
+        ...home,
+        shelves: home.shelves.map((s) => ({
+          ...s,
+          items: s.items.filter((it) => !(it.kind === 'track' && it.id === id)),
+        })),
+      };
+    }
+    clearHomeCaches();
+    clearTimeout(homeRefreshTimer);
+    homeRefreshTimer = setTimeout(() => { if (!off.offline && auth.signed_in) void loadHome(); }, 2500);
+  }
   async function likeTrack(track: Track | undefined, action: string) {
     if (!track?.id) return;
     if (!auth.signed_in) {
@@ -1086,8 +1123,10 @@
     const current = player.track?.id === id;
     const was = {
       liked: current ? player.liked : isLocalLiked(id) || !!library?.liked?.some((t) => t.id === id),
-      disliked: current ? player.disliked : false,
+      disliked: current ? player.disliked : isDisliked(id),
     };
+    setDisliked(id, want.disliked);
+    if (action === 'dislike') toast('Disliked', 'info', 2200);
     const seq = (likeSeq.get(id) ?? 0) + 1;
     likeSeq.set(id, seq);
 
@@ -1109,6 +1148,7 @@
       const st = await api.like(id, action, track);
       if (likeSeq.get(id) !== seq) return; // a newer tap on this song wins
       if (player.track?.id === id) { player.liked = st.liked; player.disliked = st.disliked; }
+      if (action === 'dislike') refreshHomeAfterDislike(id);
       if (st.liked !== want.liked) {
         likes = setLocalLiked(track, st.liked);
         syncLikedViews(track, st.liked);
@@ -1117,6 +1157,7 @@
       if (likeSeq.get(id) === seq) {
         // Roll it back, then say why.
         if (player.track?.id === id) { player.liked = was.liked; player.disliked = was.disliked; }
+        setDisliked(id, was.disliked);
         likes = setLocalLiked(track, was.liked);
         syncLikedViews(track, was.liked);
       }
@@ -1402,7 +1443,8 @@
       if (online) {
         sep();
         out.push({ label: 'Like', icon: FavouriteIcon, onclick: () => likeTrack(t, 'like') });
-        out.push({ label: 'Dislike', icon: ThumbsDownIcon, onclick: () => likeTrack(t, 'dislike') });
+        if (isDisliked(t.id)) out.push({ label: 'Remove dislike', icon: ThumbsDownIcon, onclick: () => likeTrack(t, 'removelike') });
+        else out.push({ label: 'Dislike', icon: ThumbsDownIcon, onclick: () => likeTrack(t, 'dislike') });
         if (auth.signed_in) {
           out.push({
             label: 'Add to playlist', icon: Add01Icon,
@@ -1532,6 +1574,22 @@
     const name = library?.playlists?.find((p) => p.id === pid)?.name;
     toast(name ? `Added to ${name}` : 'Added to playlist', 'info', 2000);
     try { await api.playlistAdd(pid, vid); } catch (e) { fail(e, "Couldn't add to this playlist", 'playlist'); }
+  }
+
+  /** Turn the current queue into a new playlist on the account. */
+  async function saveQueueAsPlaylist() {
+    const ids = [...new Set(player.queue.map((t) => t.id).filter(Boolean))];
+    if (!ids.length) return;
+    if (needAccount('playlist')) return;
+    const title = prompt('Playlist name', 'Queue');
+    if (!title) return;
+    toast(`Saving ${ids.length} songs…`, 'info', 2000);
+    try {
+      const pid = await api.playlistCreate(title);
+      for (const id of ids) await api.playlistAdd(pid, id);
+      toast(`Saved “${title}” (${ids.length} songs)`, 'info', 2800);
+      loadLibrary();
+    } catch (e) { fail(e, "Couldn't save the queue", 'playlist'); }
   }
 
   function goArtist(id: string, name?: string) {
@@ -3175,6 +3233,7 @@
           {#if player.queue.length}
             <div class="q-bar">
               <span>{Math.max(0, player.queue.length - player.index - 1)} up next</span>
+              <button class="q-clear" type="button" onclick={saveQueueAsPlaylist}>Save as playlist</button>
               {#if player.queue.length - player.index > 1}
                 <button class="q-clear" type="button" onclick={() => api.queueClear()}>Clear</button>
               {/if}
