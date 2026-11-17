@@ -1453,8 +1453,10 @@
         height: 110,
         resizable: false,
         decorations: false,
+        // Transparent so the rounded card has no square window corners behind it.
+        transparent: true,
         alwaysOnTop: true,
-        shadow: true,
+        shadow: false,
       });
       w.once('tauri://error', (e) => fail(e.payload, "Couldn't open the mini player"));
     } catch (e) { fail(e, "Couldn't open the mini player"); }
@@ -3279,7 +3281,7 @@
             <div class="np-shade"></div>
             {#if settings.bg_pulse}<div class="np-pulse"></div>{/if}
             <div class="np-in">
-              <div class="np-main">
+              <div class="np-main" role="presentation" oncontextmenu={(e) => { if (player.track) contextTrack(e, player.track); }}>
                 <div class="np-art">
                   <!-- Same size the player bar already loaded: shows instantly while the big art streams in. -->
                   <Cover src={nowCover} videoId={player.track?.id} size={64} class="np-art-lo" alt="" />
@@ -3367,7 +3369,7 @@
     onpointerleave={() => { if (expanded) { npHoverChrome = false; armNpHide(); } }}
   >
     <div class="player-in">
-      <div class="now" onwheel={nudgeVolume}>
+      <div class="now" role="presentation" onwheel={nudgeVolume} oncontextmenu={(e) => { if (player.track) contextTrack(e, player.track); }}>
         {#if player.track}
           <button class="cov" type="button" onclick={() => (expanded = !expanded)} title="Now playing">
             <Cover src={nowCover} videoId={player.track?.id} size={64} alt="" />
@@ -3455,7 +3457,7 @@
         <IconBtn icon={Queue02Icon} size={22} on={queueOn} onclick={() => openPanel('queue')} title="Queue" btnSize="lg" />
         <IconBtn icon={Radio02Icon} size={22} onclick={() => startRadio()} title="Radio" btnSize="lg" />
         {#if !/Android|iPhone|iPad/i.test(navigator.userAgent)}
-          <IconBtn icon={MiniPlayerIcon} size={22} onclick={openMini} title="Mini player" btnSize="lg" />
+          <IconBtn icon={MiniPlayerIcon} size={22} onclick={() => openMini()} title="Mini player" btnSize="lg" />
         {/if}
         <SleepTimer
           trackId={player.track?.id ?? null}

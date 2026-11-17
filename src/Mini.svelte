@@ -15,6 +15,9 @@
   const popup = new URLSearchParams(location.search).has('pop');
 
   onMount(() => {
+    for (const el of [document.documentElement, document.body, document.getElementById('app')]) {
+      if (el) el.style.background = 'transparent';
+    }
     let un: (() => void) | undefined;
     let unFocus: (() => void) | undefined;
     if (popup) {

@@ -453,6 +453,17 @@ html { color-scheme: dark; }
   scrollbar-width: none;
 }
 .chips::-webkit-scrollbar { display: none; }
+/* Desktop: wrap so every category is visible on a small window (phones keep
+   the horizontal swipe row). */
+@media (min-width: 701px) {
+  .chips {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    margin: 0;
+    padding: 0 0 20px;
+    row-gap: 8px;
+  }
+}
 .chip {
   flex: 0 0 auto;
   min-height: 40px;
@@ -953,13 +964,16 @@ html { color-scheme: dark; }
 /* ---------- player ---------- */
 .player-in {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(360px, 1.3fr) minmax(220px, 1fr);
+  /* Right group takes what its buttons need, so it can never be drawn over
+     the transport controls; the track info absorbs the shortage (ellipsis). */
+  grid-template-columns: minmax(140px, 1fr) minmax(280px, 1.3fr) auto;
   align-items: center;
   height: 100%;
   padding: 8px 16px 0;
   gap: 12px;
   position: relative;
 }
+.player-in > * { min-width: 0; }
 .seek {
   display: flex;
   align-items: center;
@@ -1170,6 +1184,19 @@ html { color-scheme: dark; }
   width: 100%;
   min-width: 72px;
   overflow: visible;
+}
+/* Smaller windows: drop the least important bits instead of overlapping. */
+@media (max-width: 1100px) {
+  .vol { width: 96px; flex-basis: 96px; }
+}
+@media (max-width: 980px) {
+  .vol { width: 76px; flex-basis: 76px; gap: 6px; }
+  .vol .sbar { min-width: 40px; }
+}
+@media (max-width: 800px) and (min-width: 701px) {
+  .player-in { grid-template-columns: minmax(110px, 1fr) minmax(260px, 1.2fr) auto; padding: 8px 10px 0; gap: 8px; }
+  .vol { width: 68px; flex-basis: 68px; }
+  .right-c [title="Radio"], .right-c [title="Mini player"], .now .likes > :nth-child(2) { display: none; }
 }
 
 /* ---------- panels (queue / lyrics / related) ---------- */
