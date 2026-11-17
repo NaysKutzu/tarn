@@ -64,7 +64,35 @@ impl InnerTube {
         ctx
     }
 
-    pub async fn post(&self, endpoint: &str, mut body: Value) -> Result<Value> {
+    /// POST with retries on transient failures (network errors, 429, 5xx).
+    /// A single 503 used to abort a whole playlist / liked-songs pagination.
+    pub async fn post(&self, endpoint: &str, body: Value) -> Result<Value> {
+        let mut last = None;
+        for attempt in 0..4u64 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(400 * attempt)).await;
+            }
+            match self.post_once(endpoint, body.clone()).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    let m = e.to_string();
+                    let transient = m.contains("HTTP 5")
+                        || m.contains("HTTP 429")
+                        || m.contains("error sending request")
+                        || m.contains("timed out")
+                        || m.contains("connection")
+                        || m.contains("innertube json");
+                    if !transient {
+                        return Err(e);
+                    }
+                    last = Some(e);
+                }
+            }
+        }
+        Err(last.unwrap_or_else(|| anyhow!("innertube {endpoint}: failed")))
+    }
+
+    async fn post_once(&self, endpoint: &str, mut body: Value) -> Result<Value> {
         if body.get("context").is_none() {
             body["context"] = self.context();
         }

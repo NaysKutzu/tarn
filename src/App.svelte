@@ -459,6 +459,9 @@
         api.next();
       } else if (e.code === 'MediaTrackPrevious') {
         api.prev();
+      } else if (e.key === 'F11') {
+        e.preventDefault();
+        void toggleWindowFullscreen();
       } else if (e.key === 'Escape') {
         if (expanded) expanded = false;
         else if (sidePanelOn) closePanels();
@@ -1565,10 +1568,15 @@
       if (id !== player.track?.id) return;
       if (r) {
         const grids = [r[0], r[1]].filter((g): g is BeatGrid => !!g && g.confidence >= 1.6 && g.bpm > 40);
-        if (grids.length) { beat = { grids, dur: r[2] }; return; }
+        if (grids.length) {
+          beat = { grids, dur: r[2] };
+          api.diagNote(`pulse: ${id} ok bpm=${grids.map((g) => g.bpm.toFixed(1)).join('/')} after ${tries} tries`).catch(() => {});
+          return;
+        }
       }
       // Analysis may still be running (needs the full download first).
-      if (++tries < 8) timer = setTimeout(load, 3000 + tries * 2000);
+      if (++tries < 40) timer = setTimeout(load, 2500);
+      else api.diagNote(`pulse: ${id} no usable beat grid (r=${JSON.stringify(r)})`).catch(() => {});
     };
     timer = setTimeout(load, 600);
     return () => clearTimeout(timer);
@@ -1590,6 +1598,7 @@
         v = Math.exp(-ph * 5);
       }
       el.style.setProperty('--beat', v.toFixed(3));
+      el.parentElement?.style.setProperty('--beat-s', v.toFixed(3));
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -1830,6 +1839,14 @@
       if (npHideTimer) clearTimeout(npHideTimer);
     }
   });
+
+  /** Real OS fullscreen for the whole window (F11). */
+  async function toggleWindowFullscreen() {
+    try {
+      const w = getCurrentWindow();
+      await w.setFullscreen(!(await w.isFullscreen()));
+    } catch { /* not permitted / unsupported */ }
+  }
 
   onMount(() => {
     const win = getCurrentWindow();

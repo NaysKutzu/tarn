@@ -890,7 +890,7 @@ impl Ytm {
                 }
             }
         }
-        let p = match self.rp.query().music_playlist(id).await {
+        let mut p = match self.rp.query().music_playlist(id).await {
             Ok(p) => p,
             Err(e) => {
                 // Auto mixes (New Release Mix, Replay Mix, ...) are radio
@@ -909,6 +909,11 @@ impl Ytm {
                 return Err(anyhow!("{e}"));
             }
         };
+        // music_playlist only returns the first page (~50-100 tracks).
+        // Follow the continuations so the whole playlist shows up.
+        if let Err(e) = p.tracks.extend_all(self.rp.query()).await {
+            crate::diag::log(format!("playlist {id}: pagination stopped early: {e}"));
+        }
         let mut c = Collection {
             kind: "playlist".into(),
             id: p.id,
@@ -1208,7 +1213,13 @@ impl Ytm {
             it.library_browse("VLLM"),
             it.library_browse("FEmusic_liked_videos")
         );
-        let a = a.map(|(t, _, _)| t).unwrap_or_default();
+        let a = match a {
+            Ok((t, _, _)) => t,
+            Err(e) => {
+                crate::diag::log(format!("liked: VLLM failed: {e}"));
+                Vec::new()
+            }
+        };
         let b = match b {
             Ok((t, _, _)) => t,
             Err(e) => {

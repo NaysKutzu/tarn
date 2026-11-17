@@ -33,11 +33,82 @@
   let limit = $state(PAGE);
   let back = $state(0); // extra already-played rows revealed above the current one
 
-  // The fullscreen rail only shows what is left; the side panel starts just
-  // above the current track and can reveal earlier ones.
+  // The side panel starts just above the current track and can reveal earlier
+  // ones. The fullscreen rail keeps the played rows above (scrolled out of
+  // view) in chunks of 10, so the window only shifts every few tracks and the
+  // list can glide to the next song instead of re-rendering.
   let first = $derived(
-    variant === 'np' ? Math.max(0, index) : Math.max(0, index - 3 - back),
+    variant === 'np'
+      ? Math.max(0, Math.floor(index / 10) * 10 - 10)
+      : Math.max(0, index - 3 - back),
   );
+
+  // Fullscreen rail: keep the current song at the top, easing to the next one.
+  // Own rAF tween: native smooth scrolling is off whenever the desktop has
+  // animations disabled, and a user wheel / drag must be able to interrupt it.
+  let lastIdx = -1;
+  let lastFirst = -1;
+  let glideRaf = 0;
+  function stopGlide() {
+    cancelAnimationFrame(glideRaf);
+    glideRaf = 0;
+  }
+  function glideTo(sc: HTMLElement, to: number, ms: number) {
+    stopGlide();
+    const from = sc.scrollTop;
+    if (ms <= 0 || Math.abs(to - from) < 1) {
+      sc.scrollTop = to;
+      return;
+    }
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const p = Math.min(1, (now - t0) / ms);
+      const e = 1 - Math.pow(1 - p, 3);
+      sc.scrollTop = from + (to - from) * e;
+      glideRaf = p < 1 ? requestAnimationFrame(step) : 0;
+    };
+    glideRaf = requestAnimationFrame(step);
+  }
+  // A highlight "pill" that glides from one row to the next (fullscreen rail).
+  let pill = $state<{ y: number; h: number } | null>(null);
+  let pillAnim = $state(false);
+  $effect(() => {
+    const idx = index;
+    void first;
+    void rows.length;
+    if (variant !== 'np' || !listEl) return;
+    const row = listEl.querySelector<HTMLElement>(`[data-qi="${idx}"]`);
+    if (!row) { pill = null; return; }
+    pill = { y: row.offsetTop, h: row.offsetHeight };
+    if (!pillAnim) requestAnimationFrame(() => requestAnimationFrame(() => (pillAnim = true)));
+  });
+
+  $effect(() => {
+    const idx = index;
+    const f = first;
+    if (variant !== 'np' || !listEl || searching) return;
+    const sc = listEl.closest<HTMLElement>('.np-queue-list');
+    const row = listEl.querySelector<HTMLElement>(`[data-qi="${idx}"]`);
+    if (!sc || !row) return;
+    // Only follow the song when it actually changed: any other re-run
+    // (state ticks, list refresh) must not yank the list back while the
+    // user is scrolling it.
+    if (idx === lastIdx && f === lastFirst) return;
+    const smooth = lastIdx >= 0 && f === lastFirst && Math.abs(idx - lastIdx) === 1;
+    lastIdx = idx;
+    lastFirst = f;
+    const top = row.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 4;
+    glideTo(sc, Math.max(0, top), smooth ? 550 : 0);
+    const stop = () => stopGlide();
+    sc.addEventListener('wheel', stop, { passive: true });
+    sc.addEventListener('pointerdown', stop, { passive: true });
+    sc.addEventListener('touchstart', stop, { passive: true });
+    return () => {
+      sc.removeEventListener('wheel', stop);
+      sc.removeEventListener('pointerdown', stop);
+      sc.removeEventListener('touchstart', stop);
+    };
+  });
 
   // Optimistic order while a drop is in flight, so rows don't snap back.
   let local = $state<Track[] | null>(null);
@@ -182,7 +253,10 @@
     bind:value={q}
   />
 {/if}
-<div class="ql" class:np={variant === 'np'} class:dragging={!!drag} bind:this={listEl}>
+<div class="ql" class:npq={variant === 'np'} class:dragging={!!drag} bind:this={listEl}>
+  {#if variant === 'np' && pill}
+    <div class="pill" class:anim={pillAnim} style="height:{pill.h}px;transform:translateY({pill.y}px)"></div>
+  {/if}
   {#if searching && !hits.length}
     <div class="qnone">No songs match “{q}”</div>
   {/if}
@@ -196,7 +270,7 @@
     <div
       class="qr"
       class:now={i === index}
-      class:played={variant === 'panel' && i < index}
+      class:played={i < index}
       class:lifted={drag?.from === i}
       class:drop-before={drag && drag.over === i && drag.from !== i && drag.from + 1 !== i}
       class:gone
@@ -292,7 +366,7 @@
     outline: none;
   }
   .qr :global(img), .qr :global(.ph) { border-radius: 8px; flex: 0 0 auto; }
-  .np .qr :global(img), .np .qr :global(.ph) { border-radius: 10px; }
+  .npq .qr :global(img), .npq .qr :global(.ph) { border-radius: 12px; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4); }
   .qr:hover, .qr:focus-visible { background: var(--bg-hover); }
   .qr.now { background: var(--accent-dim); }
   .qr.played { opacity: 0.55; }
@@ -356,13 +430,24 @@
   .qr:hover .dur { display: none; }
 
   /* Fullscreen rail: light-on-dark like the rest of the now-playing screen. */
-  .np .qr { padding: 6px 10px 6px 22px; border-radius: 10px; }
-  .np .dl { color: rgba(245, 243, 240, 0.55); }
-  .np .qr:hover, .np .qr:focus-visible { background: rgba(245, 243, 240, 0.08); }
-  .np .qr.now { background: rgba(245, 243, 240, 0.1); }
-  .np .tn { font-size: 13px; }
-  .np .ta, .np .dur, .np .rm { color: rgba(245, 243, 240, 0.55); }
-  .np .now-tag { color: rgba(245, 243, 240, 0.8); }
-  .np .rm:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
-  .np .grip { color: rgba(245, 243, 240, 0.45); }
+  .npq .qr { padding: 7px 12px 7px 22px; border-radius: 18px; background-clip: padding-box; transition: background 0.5s var(--ease, ease), opacity 0.5s var(--ease, ease); }
+  .npq .dl { color: rgba(245, 243, 240, 0.55); }
+  .npq .qr:hover, .npq .qr:focus-visible { background: rgba(245, 243, 240, 0.08); }
+  .npq .qr.now { background: transparent; }
+  .pill {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    border-radius: 18px;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(245, 243, 240, 0.16), rgba(245, 243, 240, 0.08));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -10px 18px rgba(0, 0, 0, 0.14);
+  }
+  .pill.anim { transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1), height 0.3s ease; }
+  .npq .tn { font-size: 13px; }
+  .npq .ta, .npq .dur, .npq .rm { color: rgba(245, 243, 240, 0.55); }
+  .npq .now-tag { color: rgba(245, 243, 240, 0.8); }
+  .npq .rm:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+  .npq .grip { color: rgba(245, 243, 240, 0.45); }
 </style>
