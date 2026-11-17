@@ -1890,6 +1890,12 @@ pub fn run() {
     #[cfg(desktop)]
     {
         builder = builder
+            // Must be the first plugin: a second launch hands over to the
+            // running instance (brings its window back, even from the tray)
+            // and exits instead of opening another copy.
+            .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+                tray::show_window(app);
+            }))
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init());
     }
