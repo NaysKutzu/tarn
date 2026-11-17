@@ -112,6 +112,11 @@ if [[ -z "$MOUNT" || ! -d "$MOUNT" ]]; then
   exit 1
 fi
 
+# Keep Spotlight / fseventsd off the temporary volume: they can hold the image
+# open and make the later `hdiutil convert` fail with "Resource temporarily
+# unavailable".
+mdutil -i off "$MOUNT" >/dev/null 2>&1 || true
+
 # Custom volume icon bit (hasCustomIcon).
 if [[ -f "$MOUNT/.VolumeIcon.icns" ]] && command -v SetFile >/dev/null 2>&1; then
   SetFile -a C "$MOUNT" || true
@@ -172,7 +177,40 @@ detach_mount() {
 }
 detach_mount
 MOUNT=""
-# Give diskimages a moment to release the image before converting it.
+
+# Whole-disk device nodes (/dev/diskN) that still have the RW image attached.
+# Matched by "<stage dir>/rw.dmg" because hdiutil may print /private/var/...
+# where mktemp gave /var/....
+attached_devices() {
+  local key
+  key="$(basename "$STAGE")/rw.dmg"
+  hdiutil info 2>/dev/null | awk -v key="$key" '
+    /^====/ {
+      if (hit) for (d in devs) print d
+      delete devs; hit = 0; next
+    }
+    /^image-path[ \t]*:/ { if (index($0, key) > 0) hit = 1 }
+    $1 ~ /^\/dev\/disk[0-9]+$/ { devs[$1] = 1 }
+    END { if (hit) for (d in devs) print d }
+  '
+}
+
+# Detach by device (the mount path alone is not enough: the image can stay
+# attached after its volume is gone) and wait until nothing holds it.
+release_image() {
+  local i dev devs
+  for i in 1 2 3 4 5 6 7 8; do
+    devs="$(attached_devices)"
+    [[ -z "$devs" ]] && return 0
+    for dev in $devs; do
+      hdiutil detach "$dev" -quiet 2>/dev/null \
+        || { sleep 2; hdiutil detach "$dev" -force -quiet 2>/dev/null || true; }
+    done
+    sleep "$i"
+  done
+  [[ -z "$(attached_devices)" ]]
+}
+release_image || echo "warning: RW image may still be attached" >&2
 sleep 1
 
 # Compress to final UDZO.
@@ -186,7 +224,8 @@ until hdiutil convert "$RW_DMG" \
     exit 1
   fi
   echo "hdiutil convert busy; retry ${attempt}/6…" >&2
-  sleep $(( attempt * 2 ))
+  release_image || true
+  sleep $(( attempt * 3 ))
   attempt=$(( attempt + 1 ))
 done
 
