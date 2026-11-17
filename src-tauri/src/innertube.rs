@@ -811,12 +811,36 @@ fn primary_browse(r: &Value) -> (Option<String>, Option<String>, Option<String>)
     (b, p, page_type(r))
 }
 
+/// `playlistId` of the card's own `navigationEndpoint.watchPlaylistEndpoint`
+/// (how auto mixes and some playlist cards open), without the leading "VL".
+fn own_watch_playlist_id(r: &Value) -> Option<String> {
+    r.pointer("/navigationEndpoint/watchPlaylistEndpoint/playlistId")
+        .and_then(|x| x.as_str())
+        .filter(|s| s.len() > 4)
+        .map(|s| s.trim_start_matches("VL").to_string())
+}
+
 fn parse_two_row(r: &Value) -> Option<ShelfItem> {
     let title = yt_text(&r["title"])?;
     let subtitle = yt_text(&r["subtitle"]);
     let cover = thumb_of(r);
-    let video_id = video_id_of(r);
     let (browse_id, params, page) = primary_browse(r);
+    // What the card itself opens. Everything else inside the renderer (the
+    // play overlay, the "Start radio" / "Add to playlist" menu entries) also
+    // carries videoIds and playlistIds that are NOT this card's identity.
+    let own_playlist = own_watch_playlist_id(r);
+    let is_collection = matches!(
+        page.as_deref(),
+        Some("MUSIC_PAGE_TYPE_PLAYLIST")
+            | Some("MUSIC_PAGE_TYPE_ALBUM")
+            | Some("MUSIC_PAGE_TYPE_ARTIST")
+    ) && r
+        .get("navigationEndpoint")
+        .is_some_and(|n| n.get("browseEndpoint").is_some())
+        || own_playlist.is_some();
+    // A playlist/album/artist card must stay one, even though its play
+    // overlay and menu contain videoIds (it used to become a single "track").
+    let video_id = if is_collection { None } else { video_id_of(r) };
     let playlist_id = playlist_id_of(r);
     let (artists, artist_ids) = artists_of(r);
     let (kind, id) = if let Some(vid) = video_id.clone() {
@@ -851,11 +875,25 @@ fn parse_two_row(r: &Value) -> Option<ShelfItem> {
                 .or(playlist_id.clone())
                 .unwrap_or_default(),
         )
-    } else if page.as_deref() == Some("MUSIC_PAGE_TYPE_PLAYLIST") || playlist_id.is_some() {
+    } else if page.as_deref() == Some("MUSIC_PAGE_TYPE_PLAYLIST")
+        || own_playlist.is_some()
+        || playlist_id.is_some()
+    {
+        // Prefer the card's own destination (its browse id / watch-playlist
+        // id) over the first playlistId found anywhere, which is often the
+        // radio (RDAMPL...) from the menu.
+        let own_browse = if page.as_deref() == Some("MUSIC_PAGE_TYPE_PLAYLIST") {
+            browse_id
+                .as_ref()
+                .map(|b| b.trim_start_matches("VL").to_string())
+        } else {
+            None
+        };
         (
             "playlist",
-            playlist_id
-                .clone()
+            own_browse
+                .or(own_playlist.clone())
+                .or_else(|| playlist_id.clone())
                 .or_else(|| {
                     browse_id
                         .as_ref()
