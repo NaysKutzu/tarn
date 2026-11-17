@@ -154,9 +154,26 @@ EOF
 sync
 sleep 1
 
-# Eject cleanly before compress.
-hdiutil detach "$MOUNT" -quiet || hdiutil detach "$MOUNT" -force
+# Eject cleanly before compress. On CI runners the volume can vanish (Finder
+# closes it, or an earlier detach finishes late) between attempts, which made a
+# plain `hdiutil detach` fail with "No such file or directory" and abort the
+# whole script. Retry, and treat "already gone" as success.
+detach_mount() {
+  local i
+  for i in 1 2 3 4 5 6; do
+    [[ -d "$MOUNT" ]] || return 0
+    if hdiutil detach "$MOUNT" -quiet 2>/dev/null; then
+      return 0
+    fi
+    sleep $(( i * 2 ))
+  done
+  [[ -d "$MOUNT" ]] || return 0
+  hdiutil detach "$MOUNT" -force 2>/dev/null || [[ ! -d "$MOUNT" ]]
+}
+detach_mount
 MOUNT=""
+# Give diskimages a moment to release the image before converting it.
+sleep 1
 
 # Compress to final UDZO.
 attempt=1
