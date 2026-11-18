@@ -20,6 +20,7 @@ export const api = {
   playlistHead: (id: string) => invoke<Collection>('get_playlist_head', { id }),
   lyrics: (id: string) => invoke<Lyrics>('get_lyrics', { id }),
   related: (id: string) => invoke<Related>('get_related', { id }),
+  outputDevices: () => invoke<{ devices: string[]; default: string | null; current: string | null }>('output_devices'),
   play: (track: Track, queue: Track[], index: number) =>
     invoke<void>('play', { track, queue, index }),
   radio: (id: string) => invoke<void>('start_radio', { id }),

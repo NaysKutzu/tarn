@@ -304,6 +304,13 @@ pub struct Settings {
     pub eq_enabled: bool,
     #[serde(default = "default_eq_bands")]
     pub eq_bands: [f32; 5],
+    /// Output device name (None = system default).
+    #[serde(default)]
+    pub output_device: Option<String>,
+    /// Follow output devices as they come and go: back to the chosen
+    /// device when it reconnects, or to a new system default.
+    #[serde(default)]
+    pub output_auto_switch: bool,
     /// Fade-out shape of the outgoing track: "equal_power" | "linear" |
     /// "logarithmic" | "exponential" | "s_curve".
     #[serde(default = "default_curve")]
@@ -401,6 +408,8 @@ impl Default for Settings {
             crossfade_manual: true,
             eq_enabled: false,
             eq_bands: default_eq_bands(),
+            output_device: None,
+            output_auto_switch: false,
             crossfade_curve_out: default_curve(),
             crossfade_curve_in: default_curve(),
             crossfade_out_len: default_pct(),

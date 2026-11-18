@@ -5,6 +5,7 @@ mod offline;
 mod color;
 pub mod decode;
 mod eq;
+mod output;
 mod innertube;
 mod player_client;
 mod login;
@@ -142,6 +143,10 @@ impl App {
             settings.crossfade_manual,
         );
         player.set_eq(settings.eq_bands, settings.eq_enabled);
+        output::set_prefs(settings.output_device.clone(), settings.output_auto_switch);
+        if settings.output_device.is_some() {
+            player.set_output_device(settings.output_device.clone());
+        }
         player.set_transition(settings.transition());
         let analysis = analysis::Analyzer::open(store.data_dir());
         player.set_analyzer(analysis.clone());
@@ -920,6 +925,12 @@ fn track_beat(app: State<Arc<App>>, id: String) -> Option<(Option<analysis::Grid
     app.analysis.get(&id).map(|a| (a.head, a.tail, a.duration_s))
 }
 
+/// Output devices for the settings picker.
+#[tauri::command]
+fn output_devices() -> output::Devices {
+    output::list()
+}
+
 #[tauri::command]
 fn analysis_count(app: State<Arc<App>>) -> usize {
     app.analysis.len()
@@ -1451,6 +1462,14 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     }
     settings.eq_bands = bands;
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
+    {
+        let before = output::prefs().0;
+        output::set_prefs(settings.output_device.clone(), settings.output_auto_switch);
+        let now = output::prefs().0;
+        if before != now {
+            app.player.set_output_device(now);
+        }
+    }
     app.player.set_transition(settings.transition());
     app.stats.set_enabled(settings.listening_stats);
     #[cfg(desktop)]
@@ -2026,6 +2045,7 @@ pub fn run() {
             });
             emit_loop(handle.clone(), app.clone());
             autodj::start(app.clone());
+            output::watch(app.player.clone());
             net_loop(handle.clone(), app.clone());
             {
                 let h = handle.clone();
@@ -2112,6 +2132,7 @@ pub fn run() {
             prefetch,
             analysis_count,
             track_beat,
+            output_devices,
             clear_analysis,
             cache_stats,
             get_listens,
