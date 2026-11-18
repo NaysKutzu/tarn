@@ -13,6 +13,7 @@ mod transition;
 mod stats;
 mod analysis;
 mod autodj;
+mod sponsorblock;
 #[cfg(desktop)]
 mod mpris;
 #[cfg(desktop)]
@@ -107,6 +108,8 @@ pub struct App {
     pub stats: stats::Stats,
     /// Per-track loudness / beat-grid cache.
     pub analysis: std::sync::Arc<analysis::Analyzer>,
+    /// SponsorBlock "music_offtopic" segments (used when the setting is on).
+    sponsorblock: std::sync::Arc<sponsorblock::SponsorBlock>,
 }
 
 impl App {
@@ -182,6 +185,7 @@ impl App {
             blend_retry: Mutex::new(None),
             stats,
             analysis,
+            sponsorblock: sponsorblock::SponsorBlock::new(),
         })
     }
 
@@ -1825,6 +1829,35 @@ fn queue_signature(queue: &[Track]) -> u64 {
     h.finish()
 }
 
+/// Skip a music video's off-topic intro / outro when SponsorBlock is on.
+fn sponsorblock_tick(app: &Arc<App>, handle: &AppHandle) {
+    if !app.settings.lock().sponsorblock || app.is_offline() {
+        return;
+    }
+    let st = app.player.snapshot();
+    let Some(track) = st.track.as_ref() else { return };
+    if !st.playing || st.loading {
+        return;
+    }
+    match app.sponsorblock.check(&app.http, &track.id, st.position, st.duration) {
+        Some(sponsorblock::Action::Seek(to)) => {
+            diag::log(format!("sponsorblock: skip {:.1}s -> {to:.1}s", st.position));
+            app.player.seek(to);
+            let _ = handle.emit("toast", "Skipped non-music section");
+        }
+        Some(sponsorblock::Action::Next) => {
+            diag::log("sponsorblock: skip off-topic outro");
+            let app2 = app.clone();
+            let handle2 = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = advance(&app2, false).await;
+                let _ = handle2.emit("player", app2.player.snapshot());
+            });
+        }
+        None => {}
+    }
+}
+
 fn emit_loop(handle: AppHandle, app: Arc<App>) {
     std::thread::spawn(move || {
         let mut last_save = std::time::Instant::now();
@@ -1870,6 +1903,7 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
                     let _ = handle2.emit("player", app2.player.snapshot());
                 });
             }
+            sponsorblock_tick(&app, &handle);
             if let Some(msg) = app.pending_toast.lock().take() {
                 let _ = handle.emit("toast", msg);
             }
