@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import { liveSearch, peekSearch, cacheKey } from '../search-cache';
   import type { SearchResults, ShelfItem, Track, ArtistCard, PlaylistCard } from '../types';
   import { itemToTrack } from '../cover';
@@ -291,7 +292,7 @@
 
           {#if top}
             {@const idx = hitIndex('top')}
-            <div class="sug-label">Top result</div>
+            <div class="sug-label">{tr('Top result')}</div>
             <button
               class="sug-top"
               class:on={isOn('top')}
@@ -319,7 +320,7 @@
           {/if}
 
           {#if songList.length}
-            <div class="sug-label">Songs</div>
+            <div class="sug-label">{tr('Songs')}</div>
             {#each songList as t, i}
               {@const idx = hitIndex('song', i)}
               <button
@@ -349,7 +350,7 @@
           {/if}
 
           {#if artistList.length}
-            <div class="sug-label">Artists</div>
+            <div class="sug-label">{tr('Artists')}</div>
             {#each artistList as a, i}
               {@const idx = hitIndex('artist', i)}
               <button
@@ -368,14 +369,14 @@
                 </span>
                 <span class="sug-meta">
                   <span class="sug-t">{a.name}</span>
-                  <span class="sug-s">Artist</span>
+                  <span class="sug-s">{tr('Artist')}</span>
                 </span>
               </button>
             {/each}
           {/if}
 
           {#if albumList.length}
-            <div class="sug-label">Albums</div>
+            <div class="sug-label">{tr('Albums')}</div>
             {#each albumList as a, i}
               {@const idx = hitIndex('album', i)}
               <button
@@ -411,7 +412,7 @@
           aria-selected={isOn('all')}
           onclick={() => submit()}
         >
-          See all results <Hi icon={ArrowRight01Icon} size={16} />
+          {tr('See all results')} <Hi icon={ArrowRight01Icon} size={16} />
         </button>
       </div>
     {/if}

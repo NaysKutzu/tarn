@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import type { Shelf, ShelfItem, Track } from '../types';
   import { itemToTrack } from '../cover';
   import Cover from './Cover.svelte';
@@ -115,7 +116,7 @@
           <button
             class="art"
             type="button"
-            title="Play"
+            title={tr('Play')}
             onclick={() => playItem(item, i)}
           >
             <Cover

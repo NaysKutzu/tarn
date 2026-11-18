@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from './lib/i18n.svelte';
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -52,17 +53,17 @@
     <Cover src={player?.track?.cover ?? null} videoId={player?.track?.id ?? null} size={72} alt="" />
   </div>
   <div class="mid" data-tauri-drag-region>
-    <div class="tn" data-tauri-drag-region>{player?.track?.title ?? 'Nothing playing'}</div>
+    <div class="tn" data-tauri-drag-region>{player?.track?.title ?? tr('Nothing playing')}</div>
     <div class="ta" data-tauri-drag-region>{player?.track ? artistsLine(player.track.artists) : ''}</div>
     <div class="ctl">
-      <button type="button" title="Previous" onclick={() => api.prev().catch(() => {})}><Hi icon={PreviousIcon} size={20} /></button>
-      <button type="button" class="pp" title={player?.playing ? 'Pause' : 'Play'} onclick={() => api.toggle().catch(() => {})}>
+      <button type="button" title={tr('Previous')} onclick={() => api.prev().catch(() => {})}><Hi icon={PreviousIcon} size={20} /></button>
+      <button type="button" class="pp" title={player?.playing ? tr('Pause') : tr('Play')} onclick={() => api.toggle().catch(() => {})}>
         <Hi icon={player?.playing ? PauseIcon : PlayIcon} size={20} />
       </button>
-      <button type="button" title="Next" onclick={() => api.next().catch(() => {})}><Hi icon={NextIcon} size={20} /></button>
+      <button type="button" title={tr('Next')} onclick={() => api.next().catch(() => {})}><Hi icon={NextIcon} size={20} /></button>
     </div>
   </div>
-  <button type="button" class="x" title="Close" onclick={close}><Hi icon={Cancel01Icon} size={16} /></button>
+  <button type="button" class="x" title={tr('Close')} onclick={close}><Hi icon={Cancel01Icon} size={16} /></button>
   <div class="bar" data-tauri-drag-region><div class="fill" style="width:{pct}%"></div></div>
 </div>
 

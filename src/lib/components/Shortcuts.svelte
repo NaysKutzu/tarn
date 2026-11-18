@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import {
     ACTION_LABELS, APP_ACTIONS, APP_DEFAULTS, GLOBAL_ACTIONS,
     appCombo, globalCombo, prettyCombo, appShortcuts, type ShortcutAction,
@@ -58,42 +59,42 @@
   function clearGlobal() {
     onChange(shortcuts, {});
   }
-  const label = (a: ShortcutAction) => ACTION_LABELS[a];
+  const label = (a: ShortcutAction) => tr(ACTION_LABELS[a]);
 </script>
 
 <svelte:window onkeydowncapture={onKey} />
 
 <div class="set-row" style="flex-direction:column;align-items:stretch;gap:10px">
-  <span class="lb">Keyboard shortcuts
+  <span class="lb">{tr('Keyboard shortcuts')}
     <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">
-      Click a shortcut, then press the keys. Backspace clears it, Esc cancels.
+      {tr('Click a shortcut, then press the keys. Backspace clears it, Esc cancels.')}
     </span>
   </span>
   <div class="sc-grid">
     {#each APP_ACTIONS as a}
       <span class="sc-name">{label(a)}</span>
       <button class="sc-key" class:rec={recording === `app:${a}`} class:unset={!appMap[a]} type="button" onclick={() => start(`app:${a}`)}>
-        {recording === `app:${a}` ? 'Press keys…' : prettyCombo(appMap[a], mac)}
+        {recording === `app:${a}` ? tr('Press keys…') : prettyCombo(appMap[a], mac)}
       </button>
     {/each}
   </div>
-  <div><button class="btn ghost sm" type="button" onclick={resetApp} disabled={Object.keys(shortcuts).length === 0}>Reset to defaults</button></div>
+  <div><button class="btn ghost sm" type="button" onclick={resetApp} disabled={Object.keys(shortcuts).length === 0}>{tr('Reset to defaults')}</button></div>
 
   {#if desktop}
-    <span class="lb" style="margin-top:8px">Global hotkeys
+    <span class="lb" style="margin-top:8px">{tr('Global hotkeys')}
       <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">
-        Work even when Tarn is in the background. Pick combos other apps don't use.
+        {tr('Work even when Tarn is in the background. Pick combos other apps don\'t use.')}
       </span>
     </span>
     <div class="sc-grid">
       {#each GLOBAL_ACTIONS as a}
         <span class="sc-name">{label(a)}</span>
         <button class="sc-key" class:rec={recording === `global:${a}`} class:unset={!globalHotkeys[a]} type="button" onclick={() => start(`global:${a}`)}>
-          {recording === `global:${a}` ? 'Press keys…' : prettyCombo(globalHotkeys[a] ?? '', mac)}
+          {recording === `global:${a}` ? tr('Press keys…') : prettyCombo(globalHotkeys[a] ?? '', mac)}
         </button>
       {/each}
     </div>
-    <div><button class="btn ghost sm" type="button" onclick={clearGlobal} disabled={Object.keys(globalHotkeys).length === 0}>Clear all</button></div>
+    <div><button class="btn ghost sm" type="button" onclick={clearGlobal} disabled={Object.keys(globalHotkeys).length === 0}>{tr('Clear all')}</button></div>
   {/if}
 </div>
 

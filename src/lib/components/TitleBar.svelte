@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { onMount } from 'svelte';
   import Hi from './Hi.svelte';
@@ -58,8 +59,8 @@
     <button
       class="tb-nav-btn"
       type="button"
-      title="Back"
-      aria-label="Back"
+      title={tr('Back')}
+      aria-label={tr('Back')}
       disabled={!canBack}
       onclick={() => onBack?.()}
     >
@@ -68,8 +69,8 @@
     <button
       class="tb-nav-btn"
       type="button"
-      title="Forward"
-      aria-label="Forward"
+      title={tr('Forward')}
+      aria-label={tr('Forward')}
       disabled={!canFwd}
       onclick={() => onFwd?.()}
     >
@@ -80,10 +81,10 @@
   <div class="tb-drag"></div>
   {#if !isMac}
     <div class="tb-btns">
-      <button class="tb-btn min" type="button" title="Minimize" onclick={minimize} aria-label="Minimize">
+      <button class="tb-btn min" type="button" title={tr('Minimize')} onclick={minimize} aria-label={tr('Minimize')}>
         <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1.5 6h9" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" fill="none"/></svg>
       </button>
-      <button class="tb-btn max" type="button" title={maximized ? 'Restore' : 'Maximize'} onclick={toggleMax} aria-label={maximized ? 'Restore' : 'Maximize'}>
+      <button class="tb-btn max" type="button" title={maximized ? tr('Restore') : tr('Maximize')} onclick={toggleMax} aria-label={maximized ? tr('Restore') : tr('Maximize')}>
         {#if maximized}
           <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
             <path d="M3.5 3h6v6H8.5" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" fill="none"/>
@@ -95,7 +96,7 @@
           </svg>
         {/if}
       </button>
-      <button class="tb-btn close" type="button" title="Close" onclick={close} aria-label="Close">
+      <button class="tb-btn close" type="button" title={tr('Close')} onclick={close} aria-label={tr('Close')}>
         <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
           <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" fill="none"/>
         </svg>

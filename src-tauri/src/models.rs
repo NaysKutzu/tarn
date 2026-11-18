@@ -267,6 +267,10 @@ pub struct Settings {
     pub quality: String,
     pub language: String,
     pub region: String,
+    /// Language of Tarn's own menus and buttons ("system" | "en" | "ro"). Separate
+    /// from `language`, which is what YouTube Music answers in.
+    #[serde(default = "default_ui_language")]
+    pub ui_language: String,
     /// Desktop track-change notifications. Off by default.
     #[serde(default)]
     pub notifications: bool,
@@ -387,6 +391,7 @@ impl Default for Settings {
         Self {
             quality: "high".into(),
             language: "en".into(),
+            ui_language: default_ui_language(),
             region: "US".into(),
             notifications: false,
             discord_presence: true,
@@ -479,6 +484,10 @@ fn default_normalize_target() -> f32 {
 fn default_bpm_return() -> f64 {
     8.0
 }
+fn default_ui_language() -> String {
+    "system".into()
+}
+
 fn default_eq_bands() -> [f32; 5] {
     [0.0; 5]
 }

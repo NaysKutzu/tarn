@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import type { Track } from '../types';
   import { fmtTime, artistsLine } from '../format';
   import Cover from './Cover.svelte';
@@ -124,20 +125,20 @@
       {#if numbered}<th style="width:36px">#</th>{/if}
       {#if sortable}
         <th aria-sort={sort?.key === 'title' ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'}>
-          <button class="sort" type="button" onclick={() => toggleSort('title')}>Title{arrow('title')}</button>
-          <button class="sort" type="button" onclick={() => toggleSort('artist')}>Artist{arrow('artist')}</button>
+          <button class="sort" type="button" onclick={() => toggleSort('title')}>{tr('Title')}{arrow('title')}</button>
+          <button class="sort" type="button" onclick={() => toggleSort('artist')}>{tr('Artist')}{arrow('artist')}</button>
         </th>
         {#if showAlbum}
           <th class="al" aria-sort={sort?.key === 'album' ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'}>
-            <button class="sort" type="button" onclick={() => toggleSort('album')}>Album{arrow('album')}</button>
+            <button class="sort" type="button" onclick={() => toggleSort('album')}>{tr('Album')}{arrow('album')}</button>
           </th>
         {/if}
         <th style="width:72px">
-          <button class="sort" type="button" onclick={() => toggleSort('duration')}>Time{arrow('duration')}</button>
+          <button class="sort" type="button" onclick={() => toggleSort('duration')}>{tr('Time')}{arrow('duration')}</button>
         </th>
       {:else}
-        <th>Title</th>
-        {#if showAlbum}<th class="al">Album</th>{/if}
+        <th>{tr('Title')}</th>
+        {#if showAlbum}<th class="al">{tr('Album')}</th>{/if}
         <th style="width:56px"></th>
       {/if}
       <th style="width:48px"></th>
@@ -164,7 +165,7 @@
         <td>
           <div style="display:flex;align-items:center;gap:12px;min-width:0">
             {#if showCover}
-              <button class="cov" onclick={() => onPlay(t, i, ordered)} title="Play" type="button">
+              <button class="cov" onclick={() => onPlay(t, i, ordered)} title={tr('Play')} type="button">
                 <Cover src={t.cover || fallbackCover} size={40} alt="" />
                 <span class="play-ov"><Hi icon={PlayIcon} size={16} /></span>
               </button>
@@ -196,7 +197,7 @@
           </td>
         {/if}
         <td class="dur">
-          {#if off.downloaded.has(t.id)}<span class="dl" title="Downloaded"><Hi icon={Download04Icon} size={13} /></span>{/if}
+          {#if off.downloaded.has(t.id)}<span class="dl" title={tr('Downloaded')}><Hi icon={Download04Icon} size={13} /></span>{/if}
           {t.duration ? fmtTime(t.duration) : ''}
         </td>
         <td class="acts">
@@ -205,7 +206,7 @@
             style="width:36px;height:36px;min-width:36px;min-height:36px"
             type="button"
             onclick={(e) => onMore?.(e, t, i) ?? onContext(e, t, i)}
-            title="More"
+            title={tr('More')}
           >
             <Hi icon={MoreHorizontalIcon} size={18} />
           </button>

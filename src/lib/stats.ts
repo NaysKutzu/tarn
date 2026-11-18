@@ -1,6 +1,7 @@
 // Turns the raw local listen log into "Wrapped"-style numbers. Everything
 // is computed in local time, on the device.
 import type { Track } from './types';
+import { t } from './i18n.svelte';
 
 export interface Listen {
   /** Unix seconds when the track started. */
@@ -145,5 +146,5 @@ export function listenerType(byHour: number[]): string {
     const s = hours.reduce((a, h) => a + byHour[h], 0) / hours.length;
     if (s > max) { max = s; best = name; }
   }
-  return best;
+  return t(best);
 }
