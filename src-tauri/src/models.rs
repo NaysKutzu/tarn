@@ -282,6 +282,9 @@ pub struct Settings {
     /// (instead of arming paused).
     #[serde(default)]
     pub resume_on_start: bool,
+    /// Draw the track's waveform in the seek bar (analyses each track).
+    #[serde(default)]
+    pub seek_waveform: bool,
     /// Disk cache cap for prefetched audio, in mebibytes. 0 disables it.
     #[serde(default = "default_cache_mb")]
     pub cache_max_mb: u64,
@@ -393,6 +396,7 @@ impl Default for Settings {
             notifications_migrated: true,
             autoplay: true,
             resume_on_start: false,
+            seek_waveform: false,
             cache_max_mb: default_cache_mb(),
             offline_mode: false,
             crossfade: true,

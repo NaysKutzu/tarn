@@ -18,7 +18,11 @@ use crate::decode::GrowingBody;
 use crate::transition::{analyze, Biquad, EnvBuilder, FrameRes, MIN_CONFIDENCE, SILENCE};
 
 /// Bumped when the measurement changes so stale entries are recomputed.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+/// Bars in the stored waveform overview.
+pub const WAVE_BINS: usize = 240;
+/// Waveform resolution while decoding, in blocks per second.
+const WAVE_RATE: u32 = 20;
 /// Entries kept on disk before the oldest are dropped.
 const MAX_ENTRIES: usize = 4000;
 /// Seconds analysed at each end of the track for the beat grids.
@@ -57,6 +61,10 @@ pub struct TrackAnalysis {
     /// Unix seconds when measured (oldest entries are evicted first).
     #[serde(default)]
     pub at: u64,
+    /// RMS-envelope overview for the seek bar: `WAVE_BINS` values 0..=255,
+    /// scaled to the loudest bin.
+    #[serde(default)]
+    pub wave: Vec<u8>,
 }
 
 impl TrackAnalysis {
@@ -143,6 +151,11 @@ impl Analyzer {
     pub fn clear(&self) {
         self.db.lock().clear();
         let _ = std::fs::remove_file(&self.path);
+    }
+
+    /// True while `id` is queued or being measured.
+    pub fn busy(&self, id: &str) -> bool {
+        self.pending.lock().contains(id)
     }
 
     /// Queue a body for analysis (no-op if cached or already queued).
@@ -320,9 +333,17 @@ pub fn measure_body(body: Arc<GrowingBody>) -> Option<TrackAnalysis> {
     let mut frames = 0u64;
     let mut first_sound: Option<u64> = None;
     let mut last_sound = 0u64;
+    let block = (sr / WAVE_RATE).max(1) as u64;
+    let mut blocks: Vec<u16> = Vec::new();
+    let mut block_sq = 0f64;
     while let FrameRes::Ok = crate::mix::pull_raw(&mut src, &mut f) {
         meter.push_frame(&f);
         let peak = f.iter().map(|&v| (v as i32).abs()).max().unwrap_or(0);
+        block_sq += (peak as f64) * (peak as f64);
+        if (frames + 1).is_multiple_of(block) {
+            blocks.push((block_sq / block as f64).sqrt().min(u16::MAX as f64) as u16);
+            block_sq = 0.0;
+        }
         if peak >= SILENCE {
             first_sound.get_or_insert(frames);
             last_sound = frames;
@@ -357,7 +378,32 @@ pub fn measure_body(body: Arc<GrowingBody>) -> Option<TrackAnalysis> {
         head: grid(&head),
         tail: grid(&tail),
         at: 0,
+        wave: overview(&blocks, WAVE_BINS),
     })
+}
+
+/// Downsample per-block levels to `bins` bars scaled to 0..=255 (mean of
+/// each bin's blocks, relative to the loudest bin, slightly expanded so
+/// verses and drops read apart on compressed masters).
+pub fn overview(blocks: &[u16], bins: usize) -> Vec<u8> {
+    if blocks.is_empty() || bins == 0 {
+        return Vec::new();
+    }
+    let raw: Vec<f32> = (0..bins)
+        .map(|i| {
+            let a = i * blocks.len() / bins;
+            let b = ((i + 1) * blocks.len() / bins).max(a + 1).min(blocks.len());
+            let s = &blocks[a.min(blocks.len() - 1)..b];
+            s.iter().map(|&v| v as f32).sum::<f32>() / s.len() as f32
+        })
+        .collect();
+    let top = raw.iter().copied().fold(0.0f32, f32::max);
+    if top <= 0.0 {
+        return vec![0; bins];
+    }
+    raw.iter()
+        .map(|v| ((v / top).powf(1.6) * 255.0).round() as u8)
+        .collect()
 }
 
 #[cfg(test)]
@@ -394,6 +440,20 @@ mod tests {
     }
 
     #[test]
+    fn overview_scales_and_resamples() {
+        let blocks: Vec<u16> = (0..1000).map(|i| if i < 500 { 1000 } else { 4000 }).collect();
+        let w = overview(&blocks, 10);
+        assert_eq!(w.len(), 10);
+        assert_eq!(w[9], 255);
+        assert!(w[0] > 0 && w[0] < 255);
+        assert!(w[..5].iter().all(|&v| v == w[0]));
+        // Fewer blocks than bins still fills every bar.
+        assert_eq!(overview(&[10, 20], 6).len(), 6);
+        assert!(overview(&[], 6).is_empty());
+        assert_eq!(overview(&[0, 0], 3), vec![0, 0, 0]);
+    }
+
+    #[test]
     fn silence_has_no_loudness() {
         assert!(meter_of(&vec![0i16; 48000 * 2], 48000).lufs().is_none());
     }
@@ -410,6 +470,7 @@ mod tests {
             head: None,
             tail: None,
             at: 0,
+            wave: Vec::new(),
         };
         // Wants +6 dB, but the peak (−6 dBFS) only allows +5 dB.
         let g = a.gain_for(-14.0);
@@ -446,6 +507,7 @@ mod tests {
             }),
             tail: None,
             at: 1,
+            wave: vec![0, 128, 255],
         };
         {
             let an = Analyzer::open(&dir);

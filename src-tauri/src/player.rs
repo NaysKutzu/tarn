@@ -107,6 +107,7 @@ pub struct Player {
     audible: Arc<Mutex<String>>,
     /// Auto-DJ wants upcoming tracks analysed.
     auto_dj: Arc<AtomicBool>,
+    waveform: Arc<AtomicBool>,
 }
 
 impl Player {
@@ -221,6 +222,7 @@ impl Player {
             normalize: Arc::new(Mutex::new(None)),
             audible: Arc::new(Mutex::new(String::new())),
             auto_dj: Arc::new(AtomicBool::new(false)),
+            waveform: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -521,6 +523,12 @@ impl Player {
         self.normalize.lock().is_some()
             || self.xf_cfg.lock().bpm_match
             || self.auto_dj.load(Ordering::Relaxed)
+            || self.waveform.load(Ordering::Relaxed)
+    }
+
+    /// Analyse tracks so the seek bar can show their waveform.
+    pub fn set_waveform(&self, on: bool) {
+        self.waveform.store(on, Ordering::Relaxed);
     }
 
     pub fn set_auto_dj(&self, on: bool) {

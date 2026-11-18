@@ -10,6 +10,7 @@
     step = 0,
     format = (v: number) => String(v),
     buffered = 0,
+    wave = null,
     oninput,
     onchange,
     onpreview,
@@ -25,6 +26,8 @@
     format?: (v: number) => string;
     /** Seconds (or same unit as max) already downloaded ahead. */
     buffered?: number;
+    /** Optional waveform overview (0..255 per bar) drawn instead of the track. */
+    wave?: number[] | null;
     oninput?: (v: number) => void;
     onchange?: (v: number) => void;
     onpreview?: (v: number | null) => void;
@@ -53,6 +56,18 @@
   let bufPct = $derived.by(() => {
     if (!max || max <= 0 || !isFinite(max) || !buffered) return 0;
     return Math.max(0, Math.min(100, (buffered / max) * 100));
+  });
+
+  // Mirrored bars as one SVG path in a 0..N x 0..20 box.
+  let wavePath = $derived.by(() => {
+    if (!wave || !wave.length) return '';
+    const n = wave.length;
+    let d = '';
+    for (let i = 0; i < n; i++) {
+      const h = Math.max(0.8, (wave[i] / 255) * 9);
+      d += `M${i + 0.15} ${10 - h}h0.7v${h * 2}h-0.7z`;
+    }
+    return d;
   });
 
   function armTipHold() {
@@ -161,6 +176,7 @@
   class:dragging
   class:hovering
   class:disabled
+  class:has-wave={!!wavePath}
   role="slider"
   aria-valuemin={0}
   aria-valuemax={max}
@@ -174,6 +190,15 @@
   onwheel={onWheel}
   onkeydown={onKey}
 >
+  {#if wavePath}
+    <svg class="sbar-wave" viewBox="0 0 {wave?.length ?? 1} 20" preserveAspectRatio="none" aria-hidden="true">
+      <path class="rest" d={wavePath} />
+      <path class="played" d={wavePath} style="clip-path: inset(0 {100 - fillPct}% 0 0)" />
+      {#if bufPct > fillPct}
+        <path class="buf" d={wavePath} style="clip-path: inset(0 {100 - bufPct}% 0 {fillPct}%)" />
+      {/if}
+    </svg>
+  {/if}
   <div class="sbar-track">
     {#if bufPct > 0}
       <div class="sbar-buf" style="width:{bufPct}%"></div>
