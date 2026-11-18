@@ -187,6 +187,10 @@ export interface Settings {
   autoplay: boolean;
   /** Resume and play the last session when the app starts. */
   resume_on_start: boolean;
+  /** Colour theme. */
+  theme?: 'dark' | 'light' | 'oled' | 'system';
+  /** Fixed accent "#rrggbb"; null = from the cover art. */
+  accent_color?: string | null;
   cache_max_mb: number;
   /** Only downloaded / cached songs play; nothing touches the network. */
   offline_mode: boolean;

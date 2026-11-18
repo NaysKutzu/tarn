@@ -52,7 +52,9 @@
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
     Download04Icon, ChartColumnIcon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
     PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon,
+    PaintBoardIcon,
   } from './lib/icons';
+  import { applyTheme, ACCENTS, hexRgb, type Theme } from './lib/theme';
 
   const isMac =
     typeof navigator !== 'undefined' &&
@@ -269,17 +271,30 @@
     return list.filter((t) => t.id && !seen.has(t.id) && (seen.add(t.id), true));
   }
 
+  let accentWasFixed = false;
   $effect(() => {
-    if (player.accent) {
-      const [r, g, b] = player.accent;
+    // A fixed accent from settings wins over the colour of the cover art.
+    const fixed = hexRgb(settings.accent_color);
+    const rgb = fixed ?? player.accent;
+    const root = document.documentElement.style;
+    if (!rgb && accentWasFixed) {
+      // Fixed accent turned off with nothing playing: back to the default.
+      for (const p of ['--accent-rgb', '--accent', '--accent-dim', '--accent-fg', '--accent-fg-rgb']) root.removeProperty(p);
+    }
+    accentWasFixed = !!fixed;
+    if (rgb) {
+      const [r, g, b] = rgb;
       const paint = paintAccent(r, g, b);
-      const root = document.documentElement.style;
       root.setProperty('--accent-rgb', paint.rgb);
       root.setProperty('--accent', paint.css);
       root.setProperty('--accent-dim', paint.dim);
       root.setProperty('--accent-fg', paint.fg);
       root.setProperty('--accent-fg-rgb', paint.fgRgb);
     }
+  });
+  $effect(() => {
+    // Undefined until the saved settings arrive (main.ts painted the last theme).
+    if (settings.theme !== undefined) applyTheme(settings.theme);
   });
 
   onMount(() => {
@@ -2800,6 +2815,33 @@
               { value: 'medium', label: 'Medium' },
               { value: 'low', label: 'Low' },
             ]} onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
+            <span class="lb"><Hi icon={PaintBoardIcon} size={20} /> Theme</span>
+            <Dropdown value={settings.theme ?? 'dark'} options={[
+              { value: 'dark', label: 'Dark' },
+              { value: 'light', label: 'Light' },
+              { value: 'oled', label: 'OLED black' },
+              { value: 'system', label: 'Match system' },
+            ]} onchange={(v) => { settings.theme = v as Theme; api.setSettings(settings); }} />
+          </div>
+          <div class="set-row">
+            <span class="lb">Accent colour
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{settings.accent_color ? 'Fixed colour' : 'From the cover of the song playing'}</span>
+            </span>
+            <div class="accent-pick" role="radiogroup" aria-label="Accent colour">
+              <button class="acc-sw auto" class:on={!settings.accent_color} title="From cover art" aria-label="From cover art"
+                onclick={() => { settings.accent_color = null; api.setSettings(settings); }}></button>
+              {#each ACCENTS as c (c)}
+                <button class="acc-sw" class:on={settings.accent_color === c} style:background={c} title={c} aria-label={c}
+                  onclick={() => { settings.accent_color = c; api.setSettings(settings); }}></button>
+              {/each}
+              <label class="acc-sw custom" class:on={!!settings.accent_color && !ACCENTS.includes(settings.accent_color)} title="Custom colour"
+                style:background={settings.accent_color && !ACCENTS.includes(settings.accent_color) ? settings.accent_color : null}>
+                <input type="color" value={settings.accent_color ?? '#e0a45a'}
+                  onchange={(e) => { settings.accent_color = (e.currentTarget as HTMLInputElement).value; api.setSettings(settings); }} />
+              </label>
+            </div>
           </div>
           <div class="set-row">
             <span class="lb"><Hi icon={Notification01Icon} size={20} /> Notifications</span>
