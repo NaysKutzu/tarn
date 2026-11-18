@@ -11,7 +11,7 @@
     Lyrics, PlayerState, PlaylistCard, Related, SearchResults, Settings as SettingsT,
     Shelf, ShelfItem, Track, View, CtxTarget,
   } from './lib/types';
-  import { coverFor, itemToTrack } from './lib/cover';
+  import { coverFor, itemToTrack, preloadNowCover } from './lib/cover';
   import { artistsLine, fmtCount, fmtTime, shareUrl } from './lib/format';
   import type { MenuEntry, CollTarget } from './lib/types';
   import { paintAccent } from './lib/contrast';
@@ -785,6 +785,30 @@
   // A newer open (or leaving the page) makes the slower, older load drop its result.
   let playlistSeq = 0;
   const HEAD_TRACKS = 100;
+  // Playlists already opened: painted at once next time (like Liked), then
+  // refreshed. Whole lists live in memory; the first batch also survives a
+  // restart via localStorage.
+  const PL_CACHE_KEY = 'tarn.plcache.v1';
+  const plMem = new Map<string, Collection>();
+  function plDisk(): Record<string, Collection> {
+    try { return JSON.parse(localStorage.getItem(PL_CACHE_KEY) || '{}'); } catch { return {}; }
+  }
+  function plCached(id: string): Collection | null {
+    const bare = id.replace(/^VL/, '');
+    return plMem.get(bare) ?? plDisk()[bare] ?? null;
+  }
+  function plRemember(id: string, c: Collection) {
+    const bare = id.replace(/^VL/, '');
+    plMem.set(bare, c);
+    try {
+      const all = plDisk();
+      delete all[bare]; // re-insert last so the newest stay when trimming
+      all[bare] = { ...c, tracks: c.tracks.slice(0, HEAD_TRACKS) };
+      const keys = Object.keys(all);
+      for (const k of keys.slice(0, Math.max(0, keys.length - 25))) delete all[k];
+      localStorage.setItem(PL_CACHE_KEY, JSON.stringify(all));
+    } catch {}
+  }
   async function loadPlaylist(id: string) {
     const seq = ++playlistSeq;
     const stale = () => seq !== playlistSeq;
@@ -802,6 +826,10 @@
           tracks: all.slice(0, HEAD_TRACKS), related: [], owned: true, saved: true,
         };
         loading = false;
+      } else if (!isLiked && plCached(id)) {
+        // Seen before: show it instantly, refresh below.
+        collection = plCached(id);
+        loading = false;
       } else if (!isLiked && !off.offline) {
         // First page now, the rest right after, so a big playlist opens instantly.
         const head = await api.playlistHead(id);
@@ -812,6 +840,7 @@
       const full = await openCollection('playlist', id);
       if (stale()) return;
       collection = full;
+      if (!isLiked) plRemember(id, full);
     } catch (e) {
       if (stale()) return;
       // Keep whatever is already on screen if only the full load failed.
@@ -930,6 +959,18 @@
       return coverFor({ id: t.id, cover: collection.cover });
     }
     return coverFor(t);
+  });
+
+  // Skipping with the fullscreen player (lyrics / up next) remounts the art;
+  // load the neighbours' covers ahead so it paints at once instead of
+  // flickering while it streams in.
+  $effect(() => {
+    const q = player.queue;
+    const i = player.index;
+    if (!q?.length) return;
+    for (const t of [q[i], q[i + 1], q[i + 2], q[i - 1]]) {
+      if (t) preloadNowCover(coverFor(t));
+    }
   });
 
   async function playTracks(tracks: Track[], index: number, fallbackCover?: string | null) {
@@ -3318,14 +3359,14 @@
             class:slide-next={npSlide === 'next'}
             class:slide-prev={npSlide === 'prev'}
           >
-            <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" alt="" />
+            <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" eager alt="" />
             <div class="np-shade"></div>
             <div class="np-in">
               <div class="np-main" role="presentation" oncontextmenu={(e) => { if (player.track) contextTrack(e, player.track); }}>
                 <div class="np-art">
                   <!-- Same size the player bar already loaded: shows instantly while the big art streams in. -->
-                  <Cover src={nowCover} videoId={player.track?.id} size={64} class="np-art-lo" alt="" />
-                  <Cover src={nowCover} videoId={player.track?.id} size={560} alt="" />
+                  <Cover src={nowCover} videoId={player.track?.id} size={64} class="np-art-lo" eager alt="" />
+                  <Cover src={nowCover} videoId={player.track?.id} size={560} eager alt="" />
                   {#if volHud != null}
                     <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
                   {/if}

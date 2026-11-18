@@ -3092,3 +3092,37 @@ img, svg { -webkit-user-drag: none; }
   .kc { transform: none !important; }
   .ly-gap.on { animation: none; }
 }
+
+/* ---- Easter egg: type "iamasecurityengineer" ---- */
+html.egg-spin body {
+  animation: egg-spin 2.6s cubic-bezier(.5, 0, .2, 1) both;
+  transform-origin: 50% 50%;
+  overflow: hidden;
+}
+@keyframes egg-spin {
+  0%   { transform: rotate(0) scale(1);        filter: hue-rotate(0); }
+  35%  { transform: rotate(720deg) scale(.55); filter: hue-rotate(180deg) saturate(2.5); }
+  70%  { transform: rotate(1440deg) scale(1.15); filter: hue-rotate(300deg) saturate(3); }
+  100% { transform: rotate(2160deg) scale(1);  filter: hue-rotate(360deg); }
+}
+
+html.extreme {
+  --accent: hsl(var(--egg-h, 30) 95% 60%);
+  --accent-fg: #120a1f;
+  --accent-rgb: 255, 120, 60;
+  --accent-dim: hsl(var(--egg-h, 30) 95% 60% / 0.2);
+}
+@property --egg-h { syntax: '<number>'; inherits: true; initial-value: 0; }
+html.extreme { animation: egg-hue 6s linear infinite; }
+@keyframes egg-hue { to { --egg-h: 360; } }
+html.extreme body { animation: egg-wobble 5s ease-in-out infinite; }
+@keyframes egg-wobble {
+  0%, 100% { transform: rotate(-.35deg) scale(1); filter: saturate(1.4); }
+  50%      { transform: rotate(.35deg) scale(1.006); filter: saturate(1.8) contrast(1.05); }
+}
+html.extreme img { animation: egg-bounce 1.2s ease-in-out infinite; }
+@keyframes egg-bounce {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  50%      { transform: translateY(-3px) rotate(1.5deg); }
+}
+html.extreme ::selection { background: var(--accent); color: #000; }

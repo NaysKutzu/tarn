@@ -141,3 +141,22 @@ export function itemToTrack(it: {
     is_video: !!(it.is_video || it.kind === 'video'),
   };
 }
+
+/** Fullscreen art sizes (css px): bg, small blurred placeholder, big art. */
+const NP_SIZES: Array<[number, number]> = [[320, 200], [64, 64], [560, 560]];
+const preloaded = new Map<string, HTMLImageElement>();
+
+/** Warm the image cache with the exact URLs the fullscreen player will ask for. */
+export function preloadNowCover(url: string | null | undefined) {
+  if (!url || !/^https?:/.test(url)) return;
+  for (const [w, h] of NP_SIZES) {
+    const u = sizedCover(url, w * 2, h * 2);
+    if (preloaded.has(u)) continue;
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.decoding = 'async';
+    img.src = u;
+    preloaded.set(u, img); // hold a ref so the request is not cancelled
+    if (preloaded.size > 60) preloaded.delete(preloaded.keys().next().value!);
+  }
+}

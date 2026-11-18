@@ -12,6 +12,8 @@
     banner = false,
     /** YouTube video id - last-resort thumb when CDN art 404s. */
     videoId = null,
+    /** Load now at one fixed size (no lazy, no 1x/2x/3x srcset): for the player art. */
+    eager = false,
     class: cls = '',
   }: {
     src?: string | null;
@@ -22,6 +24,7 @@
     round?: boolean;
     banner?: boolean;
     videoId?: string | null;
+    eager?: boolean;
     class?: string;
   } = $props();
 
@@ -51,7 +54,7 @@
   let shown = $derived(
     useLocal && src ? localCover(src) : fallback || (useOrig && src ? src : srcUrl),
   );
-  let shownSet = $derived(useLocal || fallback || useOrig ? '' : srcset);
+  let shownSet = $derived(eager || useLocal || fallback || useOrig ? '' : srcset);
   let empty = $derived(!src || src.includes('playlist-empty-state'));
 
   function onErr() {
@@ -106,7 +109,7 @@
     sizes="{w}px"
     referrerpolicy="no-referrer"
     draggable="false"
-    loading="lazy"
+    loading={eager ? 'eager' : 'lazy'}
     decoding="async"
     onerror={onErr}
   />

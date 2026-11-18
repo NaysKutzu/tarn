@@ -927,6 +927,27 @@ impl Ytm {
                 crate::diag::log(format!("playlist {id}: pagination stopped early: {e}"));
             }
         }
+        // rustypipe paging has no retry: one dropped request leaves a big
+        // playlist short. Liked songs pages with our own retrying InnerTube
+        // loop, so use that when the count says tracks are missing.
+        let mut extra_tracks: Option<Vec<Track>> = None;
+        if all {
+            let have = p.tracks.items.len() as u64;
+            if p.track_count.is_some_and(|n| n > have) {
+                match self.it().library_browse(&format!("VL{bare}")).await {
+                    Ok((t, _, _)) if t.len() as u64 > have => {
+                        crate::diag::log(format!(
+                            "playlist {id}: fallback paging {} -> {} tracks",
+                            have,
+                            t.len()
+                        ));
+                        extra_tracks = Some(t);
+                    }
+                    Ok(_) => {}
+                    Err(e) => crate::diag::log(format!("playlist {id}: fallback paging: {e}")),
+                }
+            }
+        }
         let mut c = Collection {
             kind: "playlist".into(),
             id: p.id,
@@ -945,6 +966,16 @@ impl Ytm {
             owned: false,
             saved: false,
         };
+        if let Some(t) = extra_tracks {
+            // Keep rustypipe's richer fields (album, covers) for tracks it
+            // did load; append the rest in playlist order.
+            let known: std::collections::HashMap<String, Track> =
+                c.tracks.drain(..).map(|t| (t.id.clone(), t)).collect();
+            c.tracks = t
+                .into_iter()
+                .map(|t| known.get(&t.id).cloned().unwrap_or(t))
+                .collect();
+        }
         // rustypipe often leaves playlist album columns empty. Fill them
         // from the InnerTube browse (third flex column) when missing.
         if c.tracks.iter().any(|t| t.album.is_none()) {
