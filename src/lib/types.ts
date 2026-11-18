@@ -232,6 +232,8 @@ export interface Settings {
   /** Reorder upcoming tracks by tempo (only when shuffle is off). */
   auto_dj: boolean;
   lyrics_karaoke: boolean;
+  /** Fullscreen spectrum visualizer. */
+  visualizer?: 'off' | 'bars' | 'wave';
   lyrics_glow: boolean;
   lyrics_blur: boolean;
   lyrics_dots: boolean;

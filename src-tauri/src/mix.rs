@@ -253,6 +253,7 @@ impl Mixer {
             buffering: self.buffering.clone(),
             recover: self.recover.clone(),
             quiet_ms: self.quiet_ms.clone(),
+            viz_n: 0,
         }
     }
 
@@ -603,6 +604,8 @@ pub struct MixerSource {
     buffering: Arc<AtomicBool>,
     recover: Arc<AtomicBool>,
     quiet_ms: Arc<AtomicU32>,
+    /// Samples pushed to the visualizer tap (format refresh counter).
+    viz_n: u32,
 }
 
 fn apply_gain(frame: &mut [i16], gain: f32) {
@@ -857,7 +860,16 @@ impl Iterator for MixerSource {
     type Item = i16;
     fn next(&mut self) -> Option<Self::Item> {
         // Always yield: the sink stays attached for the life of the thread.
-        Some(self.pull_frame().unwrap_or(0))
+        let v = self.pull_frame().unwrap_or(0);
+        if crate::viz::on() {
+            self.viz_n = self.viz_n.wrapping_add(1);
+            if self.viz_n % 4096 == 1 {
+                let g = self.inner.lock();
+                crate::viz::set_format(g.sr, g.ch);
+            }
+            crate::viz::push(v);
+        }
+        Some(v)
     }
 }
 
