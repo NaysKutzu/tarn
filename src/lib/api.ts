@@ -5,6 +5,16 @@ import type {
 } from './types';
 
 
+export interface JamInfo {
+  /** 'off' | 'hosting' | 'joined' */
+  mode: string;
+  code: string | null;
+  guests: number;
+  following: string | null;
+  rtt_ms: number | null;
+  error: string | null;
+}
+
 export const api = {
   searchAll: (query: string) => invoke<SearchResults>('search_all', { query }),
   searchTracks: (query: string) => invoke<Track[]>('search_tracks', { query }),
@@ -85,6 +95,12 @@ export const api = {
   offlinePause: (on: boolean) => invoke<void>('offline_pause', { on }),
   offlineCollection: (id: string) => invoke<Collection | null>('offline_collection', { id }),
   offlineTracks: () => invoke<Track[]>('offline_tracks'),
+  /** Listen together (desktop only, LAN). */
+  jamHost: () => invoke<JamInfo>('jam_host'),
+  jamJoin: (code: string) => invoke<JamInfo>('jam_join', { code }),
+  jamLeave: () => invoke<void>('jam_leave'),
+  jamStatus: () => invoke<JamInfo>('jam_status'),
+  jamAdd: (track: Track) => invoke<void>('jam_add', { track }),
   saveSessionNow: () => invoke<void>('save_session_now'),
 };
 

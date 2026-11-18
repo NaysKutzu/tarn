@@ -1,5 +1,7 @@
 <script lang="ts">
   import Stats from './lib/components/Stats.svelte';
+  import ListenTogether from './lib/components/ListenTogether.svelte';
+  import { jam } from './lib/jam.svelte';
   import Shortcuts from './lib/components/Shortcuts.svelte';
   import { appCombo, actionFor, appShortcuts } from './lib/shortcuts';
   import { onMount } from 'svelte';
@@ -1480,6 +1482,11 @@
       out.push({ label: 'Play', icon: PlayIcon, onclick: () => playOne(t) });
       out.push({ label: 'Play next', icon: PlayListAddIcon, onclick: () => { api.queueAdd([t], true); toast('Playing next', 'info', 1800); } });
       out.push({ label: 'Add to queue', icon: Queue02Icon, onclick: () => { api.queueAdd([t], false); toast('Added to queue', 'info', 1800); } });
+      if (jam.info.mode === 'joined') {
+        out.push({ label: "Add to host's queue", icon: Queue02Icon, onclick: () => {
+          api.jamAdd(t).then(() => toast("Added to the host's queue", 'info', 1800)).catch((e) => toast(String(e), 'error', 2600));
+        } });
+      }
       if (online) out.push({ label: 'Start radio', icon: Radio02Icon, onclick: () => startRadio(t.id) });
       if (online) {
         sep();
@@ -3194,6 +3201,9 @@
             </span>
             <Toggle bind:checked={settings.listening_stats} label="Listening stats" onchange={() => api.setSettings(settings)} />
           </div>
+          {#if !isPhone}
+            <ListenTogether />
+          {/if}
             </div>
           </section>
           <section class="set-sec" id="set-system">
