@@ -12,6 +12,7 @@ mod mix;
 mod transition;
 mod stats;
 mod analysis;
+mod lrclib;
 mod autodj;
 #[cfg(desktop)]
 mod mpris;
@@ -545,7 +546,24 @@ async fn get_playlist_head(app: State<'_, Arc<App>>, id: String) -> Result<Colle
 
 #[tauri::command]
 async fn get_lyrics(app: State<'_, Arc<App>>, id: String) -> Result<Lyrics, String> {
-    app.ytm.lyrics(&id).await.map_err(|e| e.to_string())
+    let yt = app.ytm.lyrics(&id).await.map_err(|e| e.to_string());
+    if matches!(&yt, Ok(l) if l.synced) || !app.settings.lock().lyrics_lrclib {
+        return yt;
+    }
+    // No timed lyrics from YouTube Music: try LRCLIB for the track we know.
+    let track = {
+        let (queue, _) = app.player.queue_and_index();
+        queue.into_iter().find(|t| t.id == id)
+    };
+    if let Some(track) = track {
+        if let Some(l) = lrclib::lyrics(&track).await {
+            let yt_empty = !matches!(&yt, Ok(y) if !y.lines.is_empty());
+            if l.synced || yt_empty {
+                return Ok(l);
+            }
+        }
+    }
+    yt
 }
 
 #[tauri::command]

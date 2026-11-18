@@ -368,6 +368,9 @@ pub struct Settings {
     /// Lyrics: fill the line being sung letter by letter.
     #[serde(default = "default_true")]
     pub lyrics_karaoke: bool,
+    /// When YouTube Music has no synced lyrics, look the track up on LRCLIB.
+    #[serde(default = "default_true")]
+    pub lyrics_lrclib: bool,
     /// Lyrics: soft glow on the letters being sung.
     #[serde(default = "default_true")]
     pub lyrics_glow: bool,
@@ -421,6 +424,7 @@ impl Default for Settings {
             normalize_target: default_normalize_target(),
             auto_dj: false,
             lyrics_karaoke: true,
+            lyrics_lrclib: true,
             lyrics_glow: true,
             lyrics_blur: true,
             lyrics_dots: true,

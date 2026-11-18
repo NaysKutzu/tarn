@@ -3084,6 +3084,12 @@
                 <Toggle bind:checked={settings.lyrics_karaoke} label="Letter-by-letter fill" onchange={() => api.setSettings(settings)} />
               </div>
               <div class="set-row">
+                <span class="lb">Synced lyrics from LRCLIB
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">When YouTube Music has no timed lyrics, look the song up on lrclib.net</span>
+                </span>
+                <Toggle checked={settings.lyrics_lrclib !== false} label="Synced lyrics from LRCLIB" onchange={(v) => { settings.lyrics_lrclib = v; api.setSettings(settings); }} />
+              </div>
+              <div class="set-row">
                 <span class="lb">Glow
                   <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Soft light on the letters being sung</span>
                 </span>
