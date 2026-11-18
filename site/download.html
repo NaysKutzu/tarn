@@ -30,8 +30,8 @@
     nav a.cur { color: var(--text); }
 
     .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 20px; border-radius: 22px;
-      font-weight: 650; font-size: 15px; border: 1px solid transparent; cursor: pointer; transition: transform .25s var(--ease), background .2s; }
-    .btn:hover { text-decoration: none; transform: translateY(-2px); }
+      font-weight: 650; font-size: 15px; border: 1px solid transparent; cursor: pointer; transition: background .2s; }
+    .btn:hover { text-decoration: none; }
     .btn-p { background: var(--accent); color: #1a1208; }
     .btn-g { background: transparent; color: var(--text); border-color: var(--line); }
     .btn-g:hover { background: rgba(255,255,255,.06); }
@@ -54,9 +54,7 @@
 
     .plats { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; padding: 28px 0 24px; }
     .plat { background: linear-gradient(160deg, var(--bg-elev), #121110); border: 1px solid var(--line); border-radius: 18px; padding: 26px 22px 22px;
-      display: flex; flex-direction: column; gap: 14px; transform-style: preserve-3d;
-      transform: perspective(900px) rotateX(var(--tx, 0deg)) rotateY(var(--ty, 0deg));
-      transition: transform .2s var(--ease), border-color .3s; }
+      display: flex; flex-direction: column; gap: 14px; transition: border-color .3s; }
     .plat:hover { border-color: rgba(var(--accent-rgb), .35); }
     .plat.me { border-color: rgba(var(--accent-rgb), .55); }
     .plat .big { font-size: 44px; color: var(--text); display: block; line-height: 1; }
@@ -73,8 +71,7 @@
     code { background: rgba(255,255,255,.07); padding: 1px 6px; border-radius: 6px; font-size: .9em; }
     footer { border-top: 1px solid var(--line); padding: 28px 0 48px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; color: var(--text-3); font-size: 13px; }
     @media (max-width: 800px) { .more { grid-template-columns: 1fr; } nav a:not(.cur):not(:last-child) { display: none; } }
-    @media (prefers-reduced-motion: reduce) { .plat, .btn { transition: none; } }
-  </style>
+      </style>
 </head>
 <body>
   <header>
@@ -237,18 +234,6 @@
           }
           $('#meta').innerHTML = `Pick your file on <a href="${RELEASES}/latest">GitHub Releases</a>`;
         });
-
-      // subtle 3D tilt
-      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        document.querySelectorAll('.plat').forEach((el) => {
-          el.addEventListener('pointermove', (e) => {
-            const b = el.getBoundingClientRect();
-            el.style.setProperty('--ty', `${((e.clientX - b.left) / b.width - .5) * 10}deg`);
-            el.style.setProperty('--tx', `${(.5 - (e.clientY - b.top) / b.height) * 10}deg`);
-          });
-          el.addEventListener('pointerleave', () => { el.style.setProperty('--tx', '0deg'); el.style.setProperty('--ty', '0deg'); });
-        });
-      }
     })();
   </script>
 </body>
