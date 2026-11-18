@@ -462,11 +462,29 @@ fn atomic_write_0600(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+// macOS: the app is ad-hoc signed, so every update changes its code identity
+// and Keychain re-prompts for the login password. Use the encrypted file
+// store there instead (it is always written anyway).
+#[cfg(target_os = "macos")]
+fn keyring_set(_secret: &str) -> Result<()> {
+    Err(anyhow!("keychain disabled on macOS"))
+}
+#[cfg(target_os = "macos")]
+fn keyring_get() -> Result<Option<String>> {
+    Ok(None)
+}
+#[cfg(target_os = "macos")]
+fn keyring_delete() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
 fn keyring_set(secret: &str) -> Result<()> {
     let entry = keyring::Entry::new(SERVICE, ACCOUNT).context("keyring")?;
     entry.set_password(secret).map_err(|e| anyhow!("{e}"))
 }
 
+#[cfg(not(target_os = "macos"))]
 fn keyring_get() -> Result<Option<String>> {
     let entry = keyring::Entry::new(SERVICE, ACCOUNT).context("keyring")?;
     match entry.get_password() {
@@ -476,6 +494,7 @@ fn keyring_get() -> Result<Option<String>> {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn keyring_delete() -> Result<()> {
     let entry = keyring::Entry::new(SERVICE, ACCOUNT).context("keyring")?;
     match entry.delete_credential() {
