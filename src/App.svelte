@@ -3353,19 +3353,19 @@
         <Hi icon={Cancel01Icon} size={26} />
       </button>
       {#if player.track}
+        <!-- Outside the keyed stage: stays put on a skip and only swaps its image,
+             so the blurred backdrop never flashes empty/half-painted. -->
+        <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" eager alt="" />
+        <div class="np-shade"></div>
         {#key player.track.id}
           <div
             class="np-stage"
             class:slide-next={npSlide === 'next'}
             class:slide-prev={npSlide === 'prev'}
           >
-            <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" eager alt="" />
-            <div class="np-shade"></div>
-            <div class="np-in">
+                        <div class="np-in">
               <div class="np-main" role="presentation" oncontextmenu={(e) => { if (player.track) contextTrack(e, player.track); }}>
                 <div class="np-art">
-                  <!-- Same size the player bar already loaded: shows instantly while the big art streams in. -->
-                  <Cover src={nowCover} videoId={player.track?.id} size={64} class="np-art-lo" eager alt="" />
                   <Cover src={nowCover} videoId={player.track?.id} size={560} eager alt="" />
                   {#if volHud != null}
                     <div class="vol-hud lg" aria-live="polite">{volHud}%</div>

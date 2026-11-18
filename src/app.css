@@ -966,7 +966,8 @@ html { color-scheme: dark; }
   display: grid;
   /* Right group takes what its buttons need, so it can never be drawn over
      the transport controls; the track info absorbs the shortage (ellipsis). */
-  grid-template-columns: minmax(140px, 1fr) minmax(280px, 1.3fr) auto;
+  /* Equal side columns keep the transport + seek bar centred on the window. */
+  grid-template-columns: minmax(var(--side-min, 300px), 1fr) minmax(260px, 560px) minmax(var(--side-min, 300px), 1fr);
   align-items: center;
   height: 100%;
   padding: 8px 16px 0;
@@ -1129,7 +1130,7 @@ html { color-scheme: dark; }
   from { opacity: 0; }
   to { opacity: 1; }
 }
-.now .meta { min-width: 0; flex: 1; }
+.now .meta { min-width: 0; flex: 0 1 auto; }
 .now .title {
   font-size: 14px;
   line-height: 18px;
@@ -1187,9 +1188,11 @@ html { color-scheme: dark; }
 }
 /* Smaller windows: drop the least important bits instead of overlapping. */
 @media (max-width: 1100px) {
+  .player-in { --side-min: 250px; }
   .vol { width: 96px; flex-basis: 96px; }
 }
 @media (max-width: 980px) {
+  .player-in { --side-min: 210px; }
   .vol { width: 76px; flex-basis: 76px; gap: 6px; }
   .vol .sbar { min-width: 40px; }
 }
@@ -1332,23 +1335,25 @@ html { color-scheme: dark; }
   from { opacity: 0; transform: translateX(-56px); }
   to { opacity: 1; transform: translateX(0); }
 }
+/* The blur fades toward transparent at the image edge, which reads as a dark
+   vignette; overscan far enough that the edge is always off-screen. */
 .np-bg {
   position: absolute;
-  inset: -12%;
-  width: 124%;
-  height: 124%;
+  inset: -22%;
+  width: 144%;
+  height: 144%;
   object-fit: cover;
   filter: blur(56px) saturate(1.08);
   opacity: 0.48;
   pointer-events: none;
-  transition: transform 0.7s var(--ease), opacity 0.55s var(--ease);
+  /* No transform/opacity transition: animating a heavily blurred layer
+     leaves dark edges around the screen while it runs (seen on hover). */
 }
 .np-shade {
   position: absolute;
   inset: 0;
-  background: rgba(12,11,10,0.52);
+  background: rgba(12,11,10,0.46);
   pointer-events: none;
-  transition: background 0.55s var(--ease);
 }
 .np-in {
   position: relative;
@@ -2775,13 +2780,6 @@ html { color-scheme: dark; }
   width: min(220px, 26vmin);
   height: min(220px, 26vmin);
   flex-basis: min(220px, 26vmin);
-}
-.app.np-idle .np-bg {
-  transform: scale(1.06);
-  opacity: 0.56;
-}
-.app.np-idle .np-shade {
-  background: rgba(12, 11, 10, 0.4);
 }
 .app.np-idle .np-meta {
   transform: translateY(6px);
