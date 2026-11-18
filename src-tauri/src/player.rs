@@ -27,6 +27,7 @@ enum Cmd {
     Seek(f64),
     Volume(f32),
     Eq([f32; crate::eq::BANDS], bool),
+    Fx(crate::mix::Fx),
     /// Loudness gain for the deck loaded by the next play-type command.
     NextGain(f32),
     /// Loudness gain for what is audible now (its analysis just finished).
@@ -811,6 +812,12 @@ impl Player {
         }
         let _ = self.tx.send(Cmd::Eq(cleaned, enabled));
     }
+    /// Playback speed (0.5..=2), keep pitch, reverb wet (0..=1).
+    pub fn set_fx(&self, speed: f64, keep_pitch: bool, reverb: f64) {
+        let speed = if speed.is_finite() { (speed.clamp(0.5, 2.0) * 100.0).round() / 100.0 } else { 1.0 };
+        let reverb = if reverb.is_finite() { reverb.clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let _ = self.tx.send(Cmd::Fx(crate::mix::Fx { speed, keep_pitch, reverb }));
+    }
     pub fn take_ended(&self) -> bool {
         if self.blending.load(Ordering::Relaxed) {
             // Blend never adopted and the outgoing track finished - drop the
@@ -1496,6 +1503,7 @@ fn audio_thread(
             }
             Ok(Cmd::Volume(v)) => sink.set_volume(v),
             Ok(Cmd::Eq(gains, on)) => mix.set_eq(gains, on),
+            Ok(Cmd::Fx(fx)) => mix.set_fx(fx),
             Ok(Cmd::NextGain(g)) => next_gain = g,
             Ok(Cmd::LiveGain(g)) => {
                 if xf_pending {

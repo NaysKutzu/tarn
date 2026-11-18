@@ -187,6 +187,12 @@ export interface Settings {
   autoplay: boolean;
   /** Resume and play the last session when the app starts. */
   resume_on_start: boolean;
+  /** Playback speed 0.5..2 (1 = normal). */
+  speed?: number;
+  /** Keep pitch when the speed changes. */
+  speed_keep_pitch?: boolean;
+  /** Reverb wet amount 0..1 (0 = off). */
+  reverb?: number;
   cache_max_mb: number;
   /** Only downloaded / cached songs play; nothing touches the network. */
   offline_mode: boolean;

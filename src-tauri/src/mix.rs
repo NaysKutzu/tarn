@@ -173,6 +173,25 @@ struct Inner {
     /// Source frames since track start for the current / incoming deck.
     cur_pos: f64,
     inc_pos: f64,
+    /// Playback speed / reverb settings and their live stages.
+    fx: Fx,
+    speed_stage: Option<Vari>,
+    reverb: Option<crate::fx::Reverb>,
+    fx_fmt: (u32, usize),
+}
+
+/// User playback effects: speed (1 = normal), keep pitch, reverb wet 0..1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fx {
+    pub speed: f64,
+    pub keep_pitch: bool,
+    pub reverb: f32,
+}
+
+impl Default for Fx {
+    fn default() -> Self {
+        Self { speed: 1.0, keep_pitch: false, reverb: 0.0 }
+    }
 }
 
 impl Mixer {
@@ -225,6 +244,10 @@ impl Mixer {
                 cur_pos: 0.0,
                 inc_pos: 0.0,
                 eq: Eq::new(sr),
+                fx: Fx::default(),
+                speed_stage: None,
+                reverb: None,
+                fx_fmt: (sr, ch as usize),
             })),
             samples,
             sample_rate,
@@ -508,6 +531,29 @@ impl Mixer {
         g.eq.set(gains, enabled);
     }
 
+    /// Playback speed / pitch / reverb. Speed changes glide over ~0.3 s.
+    pub fn set_fx(&self, fx: Fx) {
+        let mut g = self.inner.lock();
+        let old = g.fx;
+        g.fx = fx;
+        if old.keep_pitch != fx.keep_pitch || (g.speed_stage.is_none() && fx.speed != 1.0) {
+            g.rebuild_speed();
+        } else {
+            let sr = g.sr;
+            if let Some(st) = g.speed_stage.as_mut() {
+                st.ramp_to(fx.speed, 0.3, sr);
+            }
+        }
+        match (g.reverb.as_mut(), fx.reverb > 0.0) {
+            (Some(r), true) => r.mix = fx.reverb,
+            (None, true) => {
+                let (sr, ch) = (g.sr, g.ch.max(1) as usize);
+                g.reverb = Some(crate::fx::Reverb::new(sr, ch, fx.reverb));
+            }
+            (_, false) => g.reverb = None,
+        }
+    }
+
 
     /// Queue `src` to start the instant the current decoder ends (no overlap,
     /// no silence). Used when crossfade is off, and within an album.
@@ -547,6 +593,27 @@ impl Inner {
         if let Some(t) = self.tap.as_mut() {
             t.reset();
         }
+        // Drop audio the speed stage buffered from before a seek / new track.
+        if self.speed_stage.is_some() {
+            self.rebuild_speed();
+        }
+    }
+
+    fn rebuild_speed(&mut self) {
+        let s = self.fx.speed;
+        self.speed_stage = (s != 1.0).then(|| {
+            if self.fx.keep_pitch {
+                Vari::keylocked(s, self.sr)
+            } else {
+                Vari::with_rate(s)
+            }
+        });
+    }
+
+    fn rebuild_fx(&mut self) {
+        self.rebuild_speed();
+        self.reverb = (self.fx.reverb > 0.0)
+            .then(|| crate::fx::Reverb::new(self.sr, self.ch.max(1) as usize, self.fx.reverb));
     }
 
     fn take_next_gain(&mut self) {
@@ -635,6 +702,52 @@ impl MixerSource {
             g.frame_i += 1;
             return Some(v);
         }
+        if g.fx.speed == 1.0 && g.fx.reverb <= 0.0 && g.speed_stage.is_none() {
+            self.render(g);
+        } else {
+            self.render_fx(g);
+        }
+        g.frame_i = 1;
+        g.frame.first().copied()
+    }
+
+    /// Output stage for playback speed and reverb: pulls mixed frames
+    /// through a varispeed (pitch follows tempo) or keylocked time stretch,
+    /// then the reverb. The position clock still counts source frames.
+    fn render_fx(&self, g: &mut Inner) {
+        let ch = g.ch.max(1) as usize;
+        if g.fx_fmt != (g.sr, ch) {
+            g.fx_fmt = (g.sr, ch);
+            g.rebuild_fx();
+        }
+        let mut out = vec![0i16; ch];
+        if let Some(mut st) = g.speed_stage.take() {
+            st.pull(&mut out, |f| {
+                self.render(g);
+                let n = f.len().min(g.frame.len());
+                f[..n].copy_from_slice(&g.frame[..n]);
+                FrameRes::Ok
+            });
+            // Settled back at 1x: drop the stage, read the mix directly.
+            let settled = g.fx.speed == 1.0
+                && st.rate == 1.0
+                && (!g.fx.keep_pitch || !st.active());
+            if !settled {
+                g.speed_stage = Some(st);
+            }
+        } else {
+            self.render(g);
+            let n = ch.min(g.frame.len());
+            out[..n].copy_from_slice(&g.frame[..n]);
+        }
+        if let Some(r) = g.reverb.as_mut() {
+            r.process(&mut out);
+        }
+        g.frame = out;
+    }
+
+    /// Mix one output frame into `g.frame`.
+    fn render(&self, g: &mut Inner) {
         let ch = g.ch.max(1) as usize;
         let mut a = vec![0i16; ch];
         let mut b = vec![0i16; ch];
@@ -821,8 +934,7 @@ impl MixerSource {
             self.phase.store(0, Ordering::Relaxed);
             self.buffering.store(false, Ordering::Relaxed);
             g.frame = vec![0; ch];
-            g.frame_i = 1;
-            return Some(0);
+            return;
         }
 
         g.step_env();
@@ -848,8 +960,6 @@ impl MixerSource {
             }
         }
         g.frame = mixed;
-        g.frame_i = 1;
-        g.frame.first().copied()
     }
 }
 

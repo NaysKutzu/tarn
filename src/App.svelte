@@ -177,6 +177,28 @@
     void off.status?.downloaded.length;
     if (view.id === 'downloads') loadDownloads();
   });
+  // Playback speed / reverb presets (the backend clamps and applies them).
+  const FX_PRESETS: Record<string, { speed: number; speed_keep_pitch: boolean; reverb: number }> = {
+    normal: { speed: 1, speed_keep_pitch: false, reverb: 0 },
+    nightcore: { speed: 1.25, speed_keep_pitch: false, reverb: 0 },
+    slowed: { speed: 0.85, speed_keep_pitch: false, reverb: 0.35 },
+  };
+  let fxPreset = $derived.by(() => {
+    const s = settings.speed ?? 1, k = !!settings.speed_keep_pitch, r = settings.reverb ?? 0;
+    for (const [name, p] of Object.entries(FX_PRESETS)) {
+      if (Math.abs(p.speed - s) < 0.001 && p.speed_keep_pitch === k && Math.abs(p.reverb - r) < 0.001) return name;
+    }
+    return 'custom';
+  });
+  function applyFxPreset(name: string) {
+    const p = FX_PRESETS[name];
+    if (p) Object.assign(settings, p);
+    else if (fxPreset === 'normal') Object.assign(settings, { speed: 1.1, speed_keep_pitch: true, reverb: 0 });
+    api.setSettings(settings);
+  }
+  function fmtSpeed(v: number): string {
+    return `${(Math.round(v * 100) / 100).toString()}×`;
+  }
   let libLoading = $state(false);
   // True while `library` holds only the cached / sidebar-fast subset.
   let libPartial = $state(false);
@@ -3028,6 +3050,58 @@
               </div>
             </div>
           {/if}
+          <div class="set-row">
+            <span class="lb">Speed & effects
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Nightcore, slowed + reverb, or your own mix</span>
+            </span>
+            <Dropdown value={fxPreset} options={[
+              { value: 'normal', label: 'Normal' },
+              { value: 'nightcore', label: 'Nightcore' },
+              { value: 'slowed', label: 'Slowed + reverb' },
+              { value: 'custom', label: 'Custom' },
+            ]} onchange={(v) => applyFxPreset(v)} />
+          </div>
+          {#if fxPreset !== 'normal'}
+            <div class="set-row">
+              <span class="lb">Speed
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{fmtSpeed(settings.speed ?? 1)}</span>
+              </span>
+              <div style="width:200px">
+                <Slider
+                  value={Math.round(((settings.speed ?? 1) - 0.5) * 100)}
+                  max={150}
+                  live={true}
+                  showTip={true}
+                  step={5}
+                  format={(v) => fmtSpeed(0.5 + Math.round(v) / 100)}
+                  oninput={(v) => { settings.speed = 0.5 + Math.round(v) / 100; api.setSettings(settings); }}
+                  onchange={(v) => { settings.speed = 0.5 + Math.round(v) / 100; api.setSettings(settings); }}
+                />
+              </div>
+            </div>
+            <div class="set-row">
+              <span class="lb">Keep pitch
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Off: pitch follows the speed, like a record (nightcore / slowed)</span>
+              </span>
+              <Toggle checked={!!settings.speed_keep_pitch} label="Keep pitch" onchange={(v) => { settings.speed_keep_pitch = v; api.setSettings(settings); }} />
+            </div>
+            <div class="set-row">
+              <span class="lb">Reverb
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{Math.round((settings.reverb ?? 0) * 100)}%</span>
+              </span>
+              <div style="width:200px">
+                <Slider
+                  value={Math.round((settings.reverb ?? 0) * 100)}
+                  max={100}
+                  live={true}
+                  showTip={true}
+                  format={(v) => `${Math.round(v)}%`}
+                  oninput={(v) => { settings.reverb = Math.round(v) / 100; api.setSettings(settings); }}
+                  onchange={(v) => { settings.reverb = Math.round(v) / 100; api.setSettings(settings); }}
+                />
+              </div>
+            </div>
+          {/if}
           <div class="set-row set-eq">
             <div class="set-eq-head">
               <span class="lb"><Hi icon={SlidersHorizontalIcon} size={20} /> Equalizer
@@ -3521,6 +3595,9 @@
             onchange={commitSeek}
           />
           <span class="t end">{fmtTime(player.duration)}</span>
+          {#if (settings.speed ?? 1) !== 1 || (settings.reverb ?? 0) > 0}
+            <button class="speed-chip" title="Back to normal speed" onclick={() => applyFxPreset('normal')}>{fxPreset === 'slowed' ? 'slowed' : fxPreset === 'nightcore' ? 'nightcore' : fmtSpeed(settings.speed ?? 1)}</button>
+          {/if}
         </div>
       </div>
       <div class="right-c">

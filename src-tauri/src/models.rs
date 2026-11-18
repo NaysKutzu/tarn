@@ -304,6 +304,16 @@ pub struct Settings {
     pub eq_enabled: bool,
     #[serde(default = "default_eq_bands")]
     pub eq_bands: [f32; 5],
+    /// Playback speed, 0.5..=2 (1 = normal).
+    #[serde(default = "default_speed")]
+    pub speed: f64,
+    /// Keep the pitch when the speed changes (off = pitch follows, like a
+    /// record: nightcore / slowed).
+    #[serde(default)]
+    pub speed_keep_pitch: bool,
+    /// Reverb amount 0..=1 (0 = off).
+    #[serde(default)]
+    pub reverb: f64,
     /// Fade-out shape of the outgoing track: "equal_power" | "linear" |
     /// "logarithmic" | "exponential" | "s_curve".
     #[serde(default = "default_curve")]
@@ -401,6 +411,9 @@ impl Default for Settings {
             crossfade_manual: true,
             eq_enabled: false,
             eq_bands: default_eq_bands(),
+            speed: default_speed(),
+            speed_keep_pitch: false,
+            reverb: 0.0,
             crossfade_curve_out: default_curve(),
             crossfade_curve_in: default_curve(),
             crossfade_out_len: default_pct(),
@@ -479,6 +492,10 @@ fn default_normalize_target() -> f32 {
 fn default_bpm_return() -> f64 {
     8.0
 }
+fn default_speed() -> f64 {
+    1.0
+}
+
 fn default_eq_bands() -> [f32; 5] {
     [0.0; 5]
 }

@@ -5,6 +5,7 @@ mod offline;
 mod color;
 pub mod decode;
 mod eq;
+mod fx;
 mod innertube;
 mod player_client;
 mod login;
@@ -142,6 +143,7 @@ impl App {
             settings.crossfade_manual,
         );
         player.set_eq(settings.eq_bands, settings.eq_enabled);
+        player.set_fx(settings.speed, settings.speed_keep_pitch, settings.reverb);
         player.set_transition(settings.transition());
         let analysis = analysis::Analyzer::open(store.data_dir());
         player.set_analyzer(analysis.clone());
@@ -1451,6 +1453,7 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     }
     settings.eq_bands = bands;
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
+    app.player.set_fx(settings.speed, settings.speed_keep_pitch, settings.reverb);
     app.player.set_transition(settings.transition());
     app.stats.set_enabled(settings.listening_stats);
     #[cfg(desktop)]
