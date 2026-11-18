@@ -2991,6 +2991,14 @@
             </span>
             <Toggle bind:checked={settings.auto_dj} label="Auto-DJ" onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
           </div>
+          {#if settings.auto_dj}
+            <div class="set-row">
+              <span class="lb">Harmonic mixing
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Also detect each song's key and prefer ones that blend in key (Camelot wheel)</span>
+              </span>
+              <Toggle checked={!!settings.harmonic_mix} label="Harmonic mixing" onchange={(v) => { settings.harmonic_mix = v; api.setSettings(settings); }} />
+            </div>
+          {/if}
           {#if settings.normalize || settings.bpm_match || settings.auto_dj}
             <div class="set-row">
               <span class="lb">Track analysis

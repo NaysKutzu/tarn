@@ -365,6 +365,9 @@ pub struct Settings {
     /// Reorder upcoming tracks by tempo so transitions flow (no shuffle).
     #[serde(default)]
     pub auto_dj: bool,
+    /// Auto-DJ also weighs musical key (Camelot wheel) when ordering.
+    #[serde(default)]
+    pub harmonic_mix: bool,
     /// Lyrics: fill the line being sung letter by letter.
     #[serde(default = "default_true")]
     pub lyrics_karaoke: bool,
@@ -420,6 +423,7 @@ impl Default for Settings {
             normalize: false,
             normalize_target: default_normalize_target(),
             auto_dj: false,
+            harmonic_mix: false,
             lyrics_karaoke: true,
             lyrics_glow: true,
             lyrics_blur: true,

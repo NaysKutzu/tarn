@@ -18,7 +18,7 @@ use crate::decode::GrowingBody;
 use crate::transition::{analyze, Biquad, EnvBuilder, FrameRes, MIN_CONFIDENCE, SILENCE};
 
 /// Bumped when the measurement changes so stale entries are recomputed.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 /// Entries kept on disk before the oldest are dropped.
 const MAX_ENTRIES: usize = 4000;
 /// Seconds analysed at each end of the track for the beat grids.
@@ -57,6 +57,9 @@ pub struct TrackAnalysis {
     /// Unix seconds when measured (oldest entries are evicted first).
     #[serde(default)]
     pub at: u64,
+    /// Musical key (None = atonal / not enough material).
+    #[serde(default)]
+    pub key: Option<crate::key::Key>,
 }
 
 impl TrackAnalysis {
@@ -180,11 +183,14 @@ impl Analyzer {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 crate::diag::log(format!(
-                    "analysis: {id} {:.1} LUFS peak {:.2} head {:?} tail {:?} ({} ms)",
+                    "analysis: {id} {:.1} LUFS peak {:.2} head {:?} tail {:?} key {} ({} ms)",
                     a.lufs,
                     a.peak,
                     a.head.map(|g| (g.bpm * 10.0).round() / 10.0),
                     a.tail.map(|g| (g.bpm * 10.0).round() / 10.0),
+                    a.key
+                        .map(|k| format!("{} ({})", k.camelot_str(), k.name()))
+                        .unwrap_or_else(|| "-".into()),
                     started.elapsed().as_millis()
                 ));
                 self.insert(id, a.clone());
@@ -320,8 +326,10 @@ pub fn measure_body(body: Arc<GrowingBody>) -> Option<TrackAnalysis> {
     let mut frames = 0u64;
     let mut first_sound: Option<u64> = None;
     let mut last_sound = 0u64;
+    let mut keys = crate::key::KeyDetector::new(sr);
     while let FrameRes::Ok = crate::mix::pull_raw(&mut src, &mut f) {
         meter.push_frame(&f);
+        keys.push_frame(&f);
         let peak = f.iter().map(|&v| (v as i32).abs()).max().unwrap_or(0);
         if peak >= SILENCE {
             first_sound.get_or_insert(frames);
@@ -357,6 +365,7 @@ pub fn measure_body(body: Arc<GrowingBody>) -> Option<TrackAnalysis> {
         head: grid(&head),
         tail: grid(&tail),
         at: 0,
+        key: keys.finish(),
     })
 }
 
@@ -410,6 +419,7 @@ mod tests {
             head: None,
             tail: None,
             at: 0,
+            key: None,
         };
         // Wants +6 dB, but the peak (−6 dBFS) only allows +5 dB.
         let g = a.gain_for(-14.0);
@@ -446,6 +456,7 @@ mod tests {
             }),
             tail: None,
             at: 1,
+            key: None,
         };
         {
             let an = Analyzer::open(&dir);

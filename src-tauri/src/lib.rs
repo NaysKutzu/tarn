@@ -12,6 +12,7 @@ mod mix;
 mod transition;
 mod stats;
 mod analysis;
+mod key;
 mod autodj;
 #[cfg(desktop)]
 mod mpris;

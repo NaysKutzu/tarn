@@ -231,6 +231,8 @@ export interface Settings {
   normalize_target: number;
   /** Reorder upcoming tracks by tempo (only when shuffle is off). */
   auto_dj: boolean;
+  /** Auto-DJ also orders by musical key (Camelot wheel). */
+  harmonic_mix?: boolean;
   lyrics_karaoke: boolean;
   lyrics_glow: boolean;
   lyrics_blur: boolean;
