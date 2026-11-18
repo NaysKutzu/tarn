@@ -286,7 +286,8 @@ export type View =
   | { id: 'new-releases' }
   | { id: 'history' }
   | { id: 'downloads' }
-  | { id: 'stats' };
+  | { id: 'stats' }
+  | { id: 'smart' };
 
 import type { IconSvgElement } from '@hugeicons/svelte';
 

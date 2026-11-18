@@ -104,3 +104,4 @@ export const MiniPlayerIcon = [
     },
   ],
 ] as const;
+export { MagicWand01Icon } from '@hugeicons/core-free-icons';

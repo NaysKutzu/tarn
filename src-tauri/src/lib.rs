@@ -920,6 +920,12 @@ fn track_beat(app: State<Arc<App>>, id: String) -> Option<(Option<analysis::Grid
     app.analysis.get(&id).map(|a| (a.head, a.tail, a.duration_s))
 }
 
+/// Cached tempo for each of `ids` that has been analysed (smart playlists).
+#[tauri::command]
+fn track_bpms(app: State<Arc<App>>, ids: Vec<String>) -> std::collections::HashMap<String, f64> {
+    app.analysis.bpms(&ids)
+}
+
 #[tauri::command]
 fn analysis_count(app: State<Arc<App>>) -> usize {
     app.analysis.len()
@@ -2112,6 +2118,7 @@ pub fn run() {
             prefetch,
             analysis_count,
             track_beat,
+            track_bpms,
             clear_analysis,
             cache_stats,
             get_listens,

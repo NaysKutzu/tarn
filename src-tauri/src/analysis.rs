@@ -60,6 +60,17 @@ pub struct TrackAnalysis {
 }
 
 impl TrackAnalysis {
+    /// Best tempo estimate for the whole track: the more confident of the
+    /// intro / outro grids. None when neither has a usable beat.
+    pub fn bpm(&self) -> Option<f64> {
+        [self.head, self.tail]
+            .into_iter()
+            .flatten()
+            .filter(|g| g.bpm.is_finite() && g.bpm > 0.0 && g.confidence > 0.0)
+            .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
+            .map(|g| g.bpm)
+    }
+
     /// Linear gain that brings this track to `target_lufs`, limited so the
     /// peak stays under -1 dBFS and the change within -12..+6 dB.
     pub fn gain_for(&self, target_lufs: f32) -> f32 {
@@ -130,6 +141,14 @@ impl Analyzer {
             return None;
         }
         self.db.lock().get(id).cloned()
+    }
+
+    /// Tempo of every cached track among `ids` (others are left out).
+    pub fn bpms(&self, ids: &[String]) -> HashMap<String, f64> {
+        let db = self.db.lock();
+        ids.iter()
+            .filter_map(|id| db.get(id).and_then(|a| a.bpm()).map(|b| (id.clone(), b)))
+            .collect()
     }
 
     pub fn has(&self, id: &str) -> bool {
@@ -391,6 +410,20 @@ mod tests {
         // A 1 kHz stereo sine at -6 dBFS is about -6 LUFS with K-weighting
         // (+0.7 dB shelf at 1 kHz, +3 dB for two channels, -3 dB sine RMS).
         assert!(loud > -9.0 && loud < -3.0, "{loud}");
+    }
+
+    #[test]
+    fn bpm_prefers_confident_grid() {
+        let g = |bpm, confidence| Some(Grid { bpm, phase_s: 0.0, confidence });
+        let mut a = TrackAnalysis {
+            v: 0, lufs: -14.0, peak: 1.0, duration_s: 200.0, lead_silence_s: 0.0,
+            music_end_s: 200.0, head: g(120.0, 0.3), tail: g(128.0, 0.8), at: 0,
+        };
+        assert_eq!(a.bpm(), Some(128.0));
+        a.tail = None;
+        assert_eq!(a.bpm(), Some(120.0));
+        a.head = g(0.0, 0.9);
+        assert_eq!(a.bpm(), None);
     }
 
     #[test]
