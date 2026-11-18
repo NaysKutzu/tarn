@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Download Tarn</title>
+  <meta name="description" content="Download Tarn for Windows, macOS, Linux, Android and iOS. Always the latest build, straight from GitHub Releases." />
+  <link rel="icon" href="favicon.png" type="image/png" />
+  <meta property="og:title" content="Download Tarn" />
+  <meta property="og:image" content="logo.png" />
+  <meta name="theme-color" content="#0c0b0a" />
+  <style>
+    :root {
+      --bg: #0c0b0a; --bg-elev: #181715; --text: #f5f3f0; --text-2: #c9c6c0; --text-3: #9a9791;
+      --accent: #e0a45a; --accent-rgb: 224, 164, 90; --line: rgba(255,255,255,0.08); --ease: cubic-bezier(.2,.7,.2,1);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); }
+    body { font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { width: min(1120px, calc(100% - 48px)); margin: 0 auto; }
+    header { position: sticky; top: 0; z-index: 50; background: rgba(12,11,10,.7); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
+    header .wrap { display: flex; align-items: center; justify-content: space-between; padding: 16px 0; }
+    .brand { display: flex; align-items: center; gap: 12px; color: var(--text); font-weight: 700; font-size: 18px; }
+    .brand:hover { text-decoration: none; }
+    .brand img { width: 36px; height: 36px; border-radius: 9px; }
+    nav { display: flex; gap: 22px; font-size: 14px; font-weight: 550; }
+    nav a { color: var(--text-2); } nav a:hover { color: var(--text); text-decoration: none; }
+    nav a.cur { color: var(--text); }
+
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 20px; border-radius: 22px;
+      font-weight: 650; font-size: 15px; border: 1px solid transparent; cursor: pointer; transition: transform .25s var(--ease), background .2s; }
+    .btn:hover { text-decoration: none; transform: translateY(-2px); }
+    .btn-p { background: var(--accent); color: #1a1208; }
+    .btn-g { background: transparent; color: var(--text); border-color: var(--line); }
+    .btn-g:hover { background: rgba(255,255,255,.06); }
+    .btn.sm { min-height: 38px; padding: 0 16px; font-size: 14px; }
+    .btn.off { opacity: .45; pointer-events: none; }
+
+    .ico { display: inline-block; width: 1em; height: 1em; background: currentColor; flex: none;
+      -webkit-mask: var(--i) center / contain no-repeat; mask: var(--i) center / contain no-repeat; }
+    .i-windows { --i: url(icons/windows.svg); } .i-apple { --i: url(icons/apple.svg); } .i-linux { --i: url(icons/linux.svg); }
+    .i-android { --i: url(icons/android.svg); } .i-ios { --i: url(icons/ios.svg); }
+
+    .hero { text-align: center; padding: 72px 0 36px; }
+    .hero h1 { font-size: clamp(38px, 6.4vw, 72px); line-height: 1.04; letter-spacing: -0.04em; margin: 0 0 14px; }
+    .grad { background: linear-gradient(100deg, #fff 10%, var(--accent) 70%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .hero p { color: var(--text-2); font-size: 18px; max-width: 540px; margin: 0 auto 28px; }
+    .main-dl { display: inline-flex; flex-direction: column; align-items: center; gap: 10px; }
+    .main-dl .btn { min-height: 54px; padding: 0 30px; font-size: 17px; border-radius: 27px; }
+    .main-dl .btn .ico { font-size: 22px; }
+    .meta { font-size: 13px; color: var(--text-3); min-height: 20px; }
+
+    .plats { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; padding: 28px 0 24px; }
+    .plat { background: linear-gradient(160deg, var(--bg-elev), #121110); border: 1px solid var(--line); border-radius: 18px; padding: 26px 22px 22px;
+      display: flex; flex-direction: column; gap: 14px; transform-style: preserve-3d;
+      transform: perspective(900px) rotateX(var(--tx, 0deg)) rotateY(var(--ty, 0deg));
+      transition: transform .2s var(--ease), border-color .3s; }
+    .plat:hover { border-color: rgba(var(--accent-rgb), .35); }
+    .plat.me { border-color: rgba(var(--accent-rgb), .55); }
+    .plat .big { font-size: 44px; color: var(--text); display: block; line-height: 1; }
+    .plat h2 { margin: 0; font-size: 20px; }
+    .plat .sub { margin: -8px 0 0; color: var(--text-3); font-size: 13px; }
+    .plat .opts { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
+    .plat .note { margin: 0; color: var(--text-3); font-size: 12.5px; line-height: 1.45; }
+    .tag { align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent);
+      border: 1px solid rgba(var(--accent-rgb), .35); border-radius: 99px; padding: 2px 9px; }
+
+    .more { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 24px 0 80px; }
+    .more div { border: 1px solid var(--line); border-radius: 14px; padding: 20px; background: var(--bg-elev); }
+    .more h3 { margin: 0 0 6px; font-size: 16px; } .more p { margin: 0; color: var(--text-2); font-size: 14px; }
+    code { background: rgba(255,255,255,.07); padding: 1px 6px; border-radius: 6px; font-size: .9em; }
+    footer { border-top: 1px solid var(--line); padding: 28px 0 48px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; color: var(--text-3); font-size: 13px; }
+    @media (max-width: 800px) { .more { grid-template-columns: 1fr; } nav a:not(.cur):not(:last-child) { display: none; } }
+    @media (prefers-reduced-motion: reduce) { .plat, .btn { transition: none; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a class="brand" href="./"><img src="logo.png" alt="" width="36" height="36" /> Tarn</a>
+      <nav>
+        <a href="./">Home</a>
+        <a class="cur" href="download">Download</a>
+        <a href="https://github.com/rexsystems/tarn">Source</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <h1>Get <span class="grad">Tarn.</span></h1>
+      <p>One app for every screen. Always the newest build, straight from GitHub.</p>
+      <div class="main-dl">
+        <a class="btn btn-p" id="main" href="https://github.com/rexsystems/tarn/releases/latest"><span class="ico" id="mainIco"></span><span id="mainTxt">Download Tarn</span></a>
+        <div class="meta" id="meta">Checking the latest version…</div>
+      </div>
+    </section>
+
+    <section class="plats" id="plats">
+      <article class="plat" data-os="windows">
+        <span class="big ico i-windows"></span>
+        <h2>Windows</h2><p class="sub">Windows 10 and 11, 64-bit</p>
+        <div class="opts" data-slot></div>
+      </article>
+      <article class="plat" data-os="macos">
+        <span class="big ico i-apple"></span>
+        <h2>macOS</h2><p class="sub">macOS 11 or newer</p>
+        <div class="opts" data-slot></div>
+        <p class="note">Not notarized yet: the first time, right-click the app and choose Open.</p>
+      </article>
+      <article class="plat" data-os="linux">
+        <span class="big ico i-linux"></span>
+        <h2>Linux</h2><p class="sub">x86_64 and ARM64</p>
+        <div class="opts" data-slot></div>
+      </article>
+      <article class="plat" data-os="android">
+        <span class="big ico i-android"></span>
+        <h2>Android</h2><p class="sub">Arm64 APK</p>
+        <div class="opts" data-slot></div>
+        <p class="note">Early build for sideloading. Allow installs from your browser when asked.</p>
+      </article>
+      <article class="plat" data-os="ios">
+        <span class="big ico i-ios"></span>
+        <h2>iOS</h2><p class="sub">iPhone and iPad</p>
+        <div class="opts" data-slot></div>
+        <p class="note">Unsigned IPA for sideloading with AltStore or Sideloadly. Not on the App Store.</p>
+      </article>
+    </section>
+
+    <section class="more">
+      <div><h3>It updates itself</h3><p>On desktop, Tarn checks for signed updates and offers them in the app. You only download once.</p></div>
+      <div><h3>Not sure which file?</h3><p>Windows: the <code>.exe</code> installer. macOS: the <code>.dmg</code> for your chip. Linux: <code>.AppImage</code> runs anywhere.</p></div>
+      <div><h3>Older builds</h3><p>Every release is kept on <a href="https://github.com/rexsystems/tarn/releases">GitHub Releases</a>, with signatures for each file.</p></div>
+    </section>
+
+    <footer>
+      <span>© Tarn. <a href="https://github.com/rexsystems/tarn/blob/main/LICENSE">GPL-3.0</a></span>
+      <span><a href="https://github.com/rexsystems/tarn">github.com/rexsystems/tarn</a></span>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      const REPO = 'rexsystems/tarn';
+      const RELEASES = `https://github.com/${REPO}/releases`;
+      const $ = (s, r = document) => r.querySelector(s);
+      const ua = navigator.userAgent;
+      const isIOS = /iPhone|iPad|iPod/.test(ua) || (/Mac/.test(ua) && navigator.maxTouchPoints > 1);
+      const me = /Android/.test(ua) ? 'android' : isIOS ? 'ios' : /Mac/.test(ua) ? 'macos' : /Win/.test(ua) ? 'windows' : /Linux|X11/.test(ua) ? 'linux' : '';
+      const arm = /arm|aarch64/i.test(ua);
+      const LABEL = { windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android', ios: 'iOS' };
+      const ICON = { windows: 'i-windows', macos: 'i-apple', linux: 'i-linux', android: 'i-android', ios: 'i-ios' };
+
+      // Which release asset belongs to which button. Names carry the version
+      // ("Tarn_0.1.4+42_x64-setup.exe"), so match on the stable part.
+      const RULES = {
+        windows: [
+          { label: 'Installer (.exe)', re: /x64-setup\.exe$/i, main: true },
+          { label: 'MSI package', re: /\.msi$/i },
+        ],
+        macos: [
+          { label: 'Apple silicon (.dmg)', re: /aarch64\.dmg$/i, main: 'arm' },
+          { label: 'Intel (.dmg)', re: /(x86_64|x64)\.dmg$/i, main: 'intel' },
+        ],
+        linux: [
+          { label: 'AppImage x86_64', re: /(amd64|x86_64)\.AppImage$/i, main: true },
+          { label: 'AppImage ARM64', re: /(aarch64|arm64)\.AppImage$/i },
+          { label: '.deb x86_64', re: /amd64\.deb$/i },
+          { label: '.deb ARM64', re: /arm64\.deb$/i },
+          { label: '.rpm x86_64', re: /x86_64\.rpm$/i },
+          { label: '.rpm ARM64', re: /aarch64\.rpm$/i },
+        ],
+        android: [{ label: 'Download APK', re: /\.apk$/i, main: true }],
+        ios: [{ label: 'Download IPA', re: /\.ipa$/i, main: true }],
+      };
+
+      function mk(label, href, primary) {
+        const a = document.createElement('a');
+        a.className = `btn sm ${primary ? 'btn-p' : 'btn-g'}`;
+        a.href = href;
+        a.textContent = label;
+        a.rel = 'noopener';
+        return a;
+      }
+
+      function fill(assets, tag) {
+        let mainHref = null;
+        for (const os of Object.keys(RULES)) {
+          const card = $(`.plat[data-os="${os}"]`);
+          const slot = $('[data-slot]', card);
+          slot.textContent = '';
+          let any = false;
+          for (const r of RULES[os]) {
+            const a = assets.find((x) => r.re.test(x.name) && !/\.sig$/i.test(x.name));
+            if (!a) continue;
+            any = true;
+            slot.append(mk(r.label, a.browser_download_url, slot.children.length === 0));
+            const wanted = r.main === true || (r.main === 'arm' && arm) || (r.main === 'intel' && !arm);
+            if (os === me && wanted && !mainHref) mainHref = a.browser_download_url;
+          }
+          if (!any) {
+            const t = document.createElement('span');
+            t.className = 'tag';
+            t.textContent = 'Not in this release';
+            slot.append(t);
+            slot.append(mk('Browse releases', RELEASES, false));
+          }
+        }
+        return mainHref;
+      }
+
+      // highlight the visitor's platform and float it first
+      if (me) {
+        const card = $(`.plat[data-os="${me}"]`);
+        card.classList.add('me');
+        $('#plats').prepend(card);
+        $('#mainIco').className = `ico ${ICON[me]}`;
+        $('#mainTxt').textContent = `Download for ${LABEL[me]}`;
+      }
+
+      fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+        .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then((rel) => {
+          const href = fill(rel.assets || [], rel.tag_name);
+          if (href) $('#main').href = href;
+          const d = rel.published_at ? new Date(rel.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+          $('#meta').textContent = `${rel.name || rel.tag_name}${d ? ' · ' + d : ''}`;
+        })
+        .catch(() => {
+          // API rate-limited or blocked: every button falls back to the releases page.
+          for (const card of document.querySelectorAll('.plat')) {
+            const slot = $('[data-slot]', card);
+            slot.textContent = '';
+            slot.append(mk(`Get ${LABEL[card.dataset.os]} build`, `${RELEASES}/latest`, true));
+          }
+          $('#meta').innerHTML = `Pick your file on <a href="${RELEASES}/latest">GitHub Releases</a>`;
+        });
+
+      // subtle 3D tilt
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        document.querySelectorAll('.plat').forEach((el) => {
+          el.addEventListener('pointermove', (e) => {
+            const b = el.getBoundingClientRect();
+            el.style.setProperty('--ty', `${((e.clientX - b.left) / b.width - .5) * 10}deg`);
+            el.style.setProperty('--tx', `${(.5 - (e.clientY - b.top) / b.height) * 10}deg`);
+          });
+          el.addEventListener('pointerleave', () => { el.style.setProperty('--tx', '0deg'); el.style.setProperty('--ty', '0deg'); });
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

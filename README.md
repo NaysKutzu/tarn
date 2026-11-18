@@ -1,36 +1,78 @@
+<div align="center">
+
+<img src="public/logo.png" width="96" alt="Tarn logo">
+
 # Tarn
 
-A fast YouTube Music desktop client, built with Tauri 2, Rust and Svelte. It works with or without a Google account.
+**YouTube Music, on your desktop.**
+A fast, self-contained player for Linux, Windows and macOS. Sign in with Google, or don't.
 
-<p align="left"><img src="public/logo.png" width="72" alt="Tarn"></p>
+[![Latest release](https://img.shields.io/github/v/release/rexsystems/tarn?include_prereleases&label=release&color=e0a45a&labelColor=181715)](https://github.com/rexsystems/tarn/releases/latest)
+[![License](https://img.shields.io/badge/license-GPL--3.0-e0a45a?labelColor=181715)](LICENSE)
+[![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-e0a45a?labelColor=181715)](https://github.com/rexsystems/tarn/releases/latest)
+[![Built with](https://img.shields.io/badge/Tauri%202%20%C2%B7%20Rust%20%C2%B7%20Svelte-e0a45a?labelColor=181715)](#build-from-source)
 
-![Home](docs/home.png)
-![Playing](docs/playing.png)
+[**Download**](https://github.com/rexsystems/tarn/releases/latest) · [Features](#features) · [Build from source](#build-from-source)
 
-Website: [rexsystems.github.io/tarn](https://rexsystems.github.io/tarn)
+<br>
+
+<img src="docs/home.png" width="860" alt="Tarn home screen">
+
+</div>
+
+<br>
+
+## Why Tarn
+
+- **Nothing else to install.** Audio is decoded inside the app, and a current yt-dlp is bundled and kept up to date. No ffmpeg, no extra tools.
+- **Works with or without an account.** Play without signing in, or sign in to get your library, likes and playlists.
+- **Picks up where you left off.** The track and position, queue, volume, shuffle and repeat, the page you were on, and the window itself all come back on launch.
+- **Light and quick.** Tauri, Rust and Svelte instead of a bundled browser.
+
+<div align="center">
+<img src="docs/playing.png" width="860" alt="Tarn playing a track">
+</div>
 
 ## Features
 
-- Play YouTube Music without a Google account, or sign in to use your library, likes and playlists.
-- Playback with crossfade, shuffle and repeat, a queue, and a seek bar with a time preview.
-- Synced lyrics when they are available.
+**Playback**
+- Crossfade, shuffle, repeat and a queue you can reorder.
+- Seek bar with a time preview.
 - Built-in equalizer.
-- Offline downloads for playback without a connection.
+- Sleep timer.
+
+**Fullscreen player**
+- Big cover art over a blurred backdrop that follows the track.
+- Synced lyrics when they are available, with the queue ("Up next") beside them.
+
+**Your library**
+- Liked songs, playlists, albums and artists once you sign in.
+- Playlists and liked songs open instantly, even the big ones.
+- Offline downloads, so playback keeps working without a connection.
+
+**Everywhere on your desktop**
+- Tray mini player.
+- Configurable keyboard shortcuts, plus global hotkeys that work when Tarn is in the background.
 - Media keys and desktop media controls on Linux (MPRIS).
-- Discord Rich Presence.
-- Restores your session on launch: the current track and position (paused, ready to play), the queue, volume, shuffle and repeat, the page you were on, and the window size and position.
+- Discord Rich Presence and scrobbling.
+- Listening stats.
+
+**Updates**
+- Packaged builds check for signed updates on their own. You can also press "Check for updates" in Settings.
 
 ## Install
 
-Downloads are on the [releases](https://github.com/rexsystems/tarn/releases) page:
+Grab the latest build from the [releases page](https://github.com/rexsystems/tarn/releases/latest):
 
-- Linux: AppImage, `.rpm` and `.deb`
-- Windows: NSIS and MSI installers
-- macOS: `.dmg`
+| Platform | Files |
+| --- | --- |
+| **Windows** | NSIS installer (`.exe`) or MSI |
+| **macOS** | `.dmg` for Apple silicon or Intel |
+| **Linux** | AppImage, `.deb` or `.rpm`, for x86_64 and ARM64 |
+| **Android** | APK, when the release includes one (early build) |
+| **iOS** | Unsigned IPA for sideloading, when the release includes one |
 
-Packaged builds check for signed updates on their own. You can also press "Check for updates" in Settings.
-
-Tarn does not need ffmpeg, yt-dlp or any other extra tools installed. Audio is decoded inside the app, and a current yt-dlp is bundled and kept up to date automatically.
+> **macOS:** the app is not notarized yet. The first time, right-click it and choose **Open**.
 
 ## Build from source
 
@@ -48,19 +90,26 @@ Then:
 
 ```sh
 npm install
-npm run tauri build    # packages land in src-tauri/target/release/bundle/
 npm run tauri dev      # development session
+npm run tauri build    # packages land in src-tauri/target/release/bundle/
 ```
 
 The build downloads an official [yt-dlp](https://github.com/yt-dlp/yt-dlp) sidecar automatically. End users of the packages don't need it.
 
 ## Project layout
 
-- `src/`: Svelte frontend (UI, player controls, lists and settings).
-- `src-tauri/src/`: Rust backend (playback, decoding, streams, YouTube Music API access, equalizer, downloads, integrations).
-- `scripts/`: build helpers.
-- `packaging/`: packaging assets, including macOS.
-- `.github/workflows/`: CI, release and website deployment.
+| Path | What's in it |
+| --- | --- |
+| `src/` | Svelte frontend: UI, player controls, lists and settings. |
+| `src-tauri/src/` | Rust backend: playback, decoding, streams, YouTube Music API access, equalizer, downloads, integrations. |
+| `site/` | The static website, including the download page. |
+| `scripts/` | Build helpers. |
+| `packaging/` | Packaging assets, including macOS. |
+| `.github/workflows/` | CI, release and mobile builds. |
+
+## Contributing
+
+Issues and pull requests are welcome. For a change to the player or the backend, run `npm run tauri dev` and try it in the real app before opening a PR.
 
 ## Disclaimer
 
