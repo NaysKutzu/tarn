@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c0b0a">
+<title>Tarn remote</title>
+<style>
+  :root { --bg:#0c0b0a; --el:#181715; --line:rgba(255,255,255,.12); --t:#f5f3f0; --t2:#c9c6c0; --t3:#9a9791; --a:#e0a45a; --af:#1a1208; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  body { background:var(--bg); color:var(--t); font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; min-height:100vh;
+         padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom)); max-width:560px; margin:0 auto; }
+  .now { display:flex; gap:14px; align-items:center; }
+  .cover { width:84px; height:84px; border-radius:10px; background:var(--el) center/cover; flex:none; }
+  .meta { min-width:0; }
+  .title { font-weight:650; font-size:18px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .artist { color:var(--t2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .seek { margin:18px 0 4px; }
+  input[type=range] { width:100%; accent-color:var(--a); height:28px; }
+  .times { display:flex; justify-content:space-between; color:var(--t3); font-size:12px; font-variant-numeric:tabular-nums; }
+  .ctl { display:flex; justify-content:center; align-items:center; gap:18px; margin:10px 0 16px; }
+  button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  .ctl button { width:56px; height:56px; border-radius:50%; display:grid; place-items:center; background:var(--el); }
+  .ctl button.pp { width:72px; height:72px; background:var(--a); color:var(--af); }
+  .ctl button.on { color:var(--a); }
+  svg { width:26px; height:26px; fill:currentColor; }
+  .vol { display:flex; align-items:center; gap:10px; color:var(--t3); }
+  .tabs { display:flex; gap:8px; margin:18px 0 10px; }
+  .tabs button { padding:6px 14px; border-radius:999px; border:1px solid var(--line); }
+  .tabs button.on { background:var(--a); color:var(--af); border-color:transparent; }
+  .q { list-style:none; }
+  .q li { display:flex; gap:10px; align-items:center; padding:8px 6px; border-radius:8px; }
+  .q li.cur { background:var(--el); }
+  .q li .n { color:var(--t3); width:22px; text-align:right; font-size:12px; }
+  .q li .tx { min-width:0; flex:1; }
+  .q li .tx div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .q li .tx .s { color:var(--t3); font-size:13px; }
+  .ly p { padding:6px 0; color:var(--t3); font-size:18px; font-weight:600; transition:color .2s; }
+  .ly p.on { color:var(--t); }
+  .msg { color:var(--t3); padding:30px 0; text-align:center; }
+  .err { position:fixed; left:16px; right:16px; bottom:calc(16px + env(safe-area-inset-bottom)); background:#3a1d19; color:#ffd5cf; padding:10px 14px; border-radius:10px; display:none; }
+</style>
+</head>
+<body>
+<div class="now">
+  <div class="cover" id="cover"></div>
+  <div class="meta"><div class="title" id="title">Tarn</div><div class="artist" id="artist">Connecting…</div></div>
+</div>
+<div class="seek"><input type="range" id="seek" min="0" max="1" step="0.5" value="0" aria-label="Seek"></div>
+<div class="times"><span id="pos">0:00</span><span id="dur">0:00</span></div>
+<div class="ctl">
+  <button id="like" aria-label="Like"><svg viewBox="0 0 24 24"><path d="M12 21s-7.5-4.6-9.6-9.1C.9 8.6 3 5 6.6 5c2.1 0 3.6 1.2 5.4 3.1C13.8 6.2 15.3 5 17.4 5 21 5 23.1 8.6 21.6 11.9 19.5 16.4 12 21 12 21z"/></svg></button>
+  <button id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+  <button id="pp" class="pp" aria-label="Play or pause"><svg viewBox="0 0 24 24" id="ppi"><path d="M8 5v14l11-7z"/></svg></button>
+  <button id="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
+  <span style="width:56px"></span>
+</div>
+<div class="vol"><svg viewBox="0 0 24 24" style="width:20px;height:20px"><path d="M4 9v6h4l5 4V5L8 9zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
+  <input type="range" id="vol" min="0" max="1" step="0.01" value="1" aria-label="Volume"></div>
+<div class="tabs"><button id="tq" class="on">Queue</button><button id="tl">Lyrics</button></div>
+<ul class="q" id="queue"></ul>
+<div class="ly" id="lyrics" hidden></div>
+<div class="err" id="err"></div>
+<script>
+(() => {
+  const token = decodeURIComponent(location.hash.slice(1));
+  if (token) { try { sessionStorage.setItem('tarn-token', token); } catch {} history.replaceState(null, '', location.pathname); }
+  const tok = token || (() => { try { return sessionStorage.getItem('tarn-token') || ''; } catch { return ''; } })();
+  const $ = (id) => document.getElementById(id);
+  const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const PLAY = '<path d="M8 5v14l11-7z"/>', PAUSE = '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';
+  let st = null, at = 0, dragging = false, volDrag = false, tab = 'q', lyr = null, lyrId = '', qSig = '';
+  function err(m) { const e = $('err'); e.textContent = m; e.style.display = m ? 'block' : 'none'; }
+  async function api(path, body) {
+    const r = await fetch(path, body ? { method: 'POST', headers: { 'X-Tarn-Token': tok, 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { headers: { 'X-Tarn-Token': tok } });
+    if (r.status === 401) throw new Error('This link has expired. Scan the QR code in Tarn again.');
+    if (!r.ok) throw new Error('Tarn answered ' + r.status);
+    return r.status === 204 ? null : r.json();
+  }
+  const cmd = (c, value) => api('/api/cmd', { cmd: c, value }).then(() => setTimeout(poll, 150)).catch((e) => err(e.message));
+  function pos() { return st ? Math.min(st.duration || 0, st.position + (st.playing ? (Date.now() - at) / 1000 : 0)) : 0; }
+  function render() {
+    if (!st) return;
+    const t = st.track;
+    $('title').textContent = t ? t.title : 'Nothing playing';
+    $('artist').textContent = t ? (t.artists || []).join(', ') : '';
+    $('cover').style.backgroundImage = t && t.cover && /^https:/.test(t.cover) ? 'url("' + t.cover.replace(/"/g, '') + '")' : '';
+    $('ppi').innerHTML = st.playing ? PAUSE : PLAY;
+    $('like').classList.toggle('on', !!st.liked);
+    $('seek').max = String(st.duration || 1);
+    $('dur').textContent = fmt(st.duration);
+    if (!volDrag) $('vol').value = String(st.volume);
+    const sig = st.queue_start + ':' + st.queue.map((x) => x.id).join(',');
+    if (sig !== qSig) {
+      qSig = sig;
+      $('queue').innerHTML = st.queue.length ? st.queue.map((x, i) =>
+        '<li data-i="' + (st.queue_start + i) + '" class="' + (i === 0 ? 'cur' : '') + '"><span class="n">' + (i === 0 ? '▶' : i) + '</span><div class="tx"><div>' + esc(x.title) + '</div><div class="s">' + esc((x.artists || []).join(', ')) + '</div></div></li>').join('')
+        : '<li class="msg">Queue is empty</li>';
+    }
+    if (t && t.id !== lyrId) { lyrId = t.id; lyr = null; if (tab === 'l') loadLyrics(); }
+  }
+  function tick() {
+    const p = pos();
+    if (!dragging) $('seek').value = String(p);
+    $('pos').textContent = fmt(dragging ? +$('seek').value : p);
+    if (tab === 'l' && lyr && lyr.synced) {
+      const ms = p * 1000; let cur = -1;
+      lyr.lines.forEach((l, i) => { if (l.start_ms != null && l.start_ms <= ms) cur = i; });
+      const ps = $('lyrics').children;
+      for (let i = 0; i < ps.length; i++) {
+        const on = i === cur;
+        if (on && !ps[i].classList.contains('on')) ps[i].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        ps[i].classList.toggle('on', on);
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+  async function loadLyrics() {
+    $('lyrics').innerHTML = '<p class="msg">Loading lyrics…</p>';
+    try {
+      lyr = await api('/api/lyrics');
+      $('lyrics').innerHTML = lyr.lines && lyr.lines.length ? lyr.lines.map((l) => '<p' + (lyr.synced ? '' : ' class="on"') + '>' + (esc(l.text) || '♪') + '</p>').join('') : '<p class="msg">No lyrics for this song</p>';
+    } catch (e) { $('lyrics').innerHTML = '<p class="msg">' + esc(e.message) + '</p>'; }
+  }
+  async function poll() {
+    try { st = await api('/api/state'); at = Date.now(); err(''); render(); }
+    catch (e) { err(e.message || 'Lost connection to Tarn'); }
+  }
+  if (!tok) err('Open this page by scanning the QR code in Tarn.');
+  $('pp').onclick = () => cmd('toggle');
+  $('next').onclick = () => cmd('next');
+  $('prev').onclick = () => cmd('prev');
+  $('like').onclick = () => cmd('like');
+  const sk = $('seek');
+  sk.addEventListener('input', () => { dragging = true; });
+  sk.addEventListener('change', () => { dragging = false; if (st) { st.position = +sk.value; at = Date.now(); } cmd('seek', +sk.value); });
+  const v = $('vol');
+  v.addEventListener('input', () => { volDrag = true; });
+  v.addEventListener('change', () => { volDrag = false; cmd('volume', +v.value); });
+  $('queue').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) cmd('play_index', +li.dataset.i); });
+  $('tq').onclick = () => { tab = 'q'; $('tq').classList.add('on'); $('tl').classList.remove('on'); $('queue').hidden = false; $('lyrics').hidden = true; };
+  $('tl').onclick = () => { tab = 'l'; $('tl').classList.add('on'); $('tq').classList.remove('on'); $('queue').hidden = true; $('lyrics').hidden = false; if (!lyr) loadLyrics(); };
+  if (tok) { poll(); setInterval(() => { if (!document.hidden) poll(); }, 1000); }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

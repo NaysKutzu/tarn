@@ -1,5 +1,6 @@
 <script lang="ts">
   import Stats from './lib/components/Stats.svelte';
+  import PhoneRemote from './lib/components/PhoneRemote.svelte';
   import Shortcuts from './lib/components/Shortcuts.svelte';
   import { appCombo, actionFor, appShortcuts } from './lib/shortcuts';
   import { onMount } from 'svelte';
@@ -3194,6 +3195,9 @@
             </span>
             <Toggle bind:checked={settings.listening_stats} label="Listening stats" onchange={() => api.setSettings(settings)} />
           </div>
+          {#if !isPhone}
+            <PhoneRemote />
+          {/if}
             </div>
           </section>
           <section class="set-sec" id="set-system">

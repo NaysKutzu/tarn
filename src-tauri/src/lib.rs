@@ -19,6 +19,8 @@ mod mpris;
 mod discord;
 #[cfg(desktop)]
 mod tray;
+#[cfg(desktop)]
+mod remote;
 // Phones: system media session / Discord presence are desktop-only for now.
 #[cfg(target_os = "android")]
 mod android_media;
@@ -912,6 +914,41 @@ pub(crate) fn analyze_prefetched(ytm: &std::sync::Arc<Ytm>, player: &Player, id:
             player.analyze(&id, crate::decode::GrowingBody::from_complete(bytes));
         }
     });
+}
+
+/// Phone remote: start the LAN control page and return its URL + QR code.
+#[cfg(desktop)]
+#[tauri::command]
+async fn remote_start(app: State<'_, Arc<App>>, handle: AppHandle) -> Result<remote::RemoteInfo, String> {
+    Ok(remote::start(app.inner().clone(), handle).await)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn remote_stop() {
+    remote::stop();
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn remote_status() -> remote::RemoteInfo {
+    remote::info()
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn remote_start() -> Result<(), String> {
+    Err("The phone remote runs on the desktop app".into())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn remote_stop() {}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn remote_status() -> serde_json::Value {
+    serde_json::json!({ "running": false, "url": null, "qr_svg": null, "error": null })
 }
 
 /// Cached beat grids of a track (None until it has been analysed).
@@ -2112,6 +2149,9 @@ pub fn run() {
             prefetch,
             analysis_count,
             track_beat,
+            remote_start,
+            remote_stop,
+            remote_status,
             clear_analysis,
             cache_stats,
             get_listens,
