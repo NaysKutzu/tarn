@@ -33,6 +33,7 @@
   import { off, initOffline, refreshOffline, sourceInfo, fmtBytes } from './lib/offline.svelte';
   import { filterTracks, filterNamed } from './lib/filter';
   import Slider from './lib/components/Slider.svelte';
+  import Visualizer from './lib/components/Visualizer.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
   import Dropdown from './lib/components/Dropdown.svelte';
   import Toggle from './lib/components/Toggle.svelte';
@@ -3225,6 +3226,16 @@
                 <Toggle bind:checked={settings.lyrics_dots} label="Instrumental dots" onchange={() => api.setSettings(settings)} />
               </div>
               <div class="set-row">
+                <span class="lb">Visualizer
+                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Fullscreen only: the music's spectrum, live, in the cover's colour</span>
+                </span>
+                <Dropdown value={settings.visualizer ?? 'off'} options={[
+                  { value: 'off', label: 'Off' },
+                  { value: 'bars', label: 'Bars' },
+                  { value: 'wave', label: 'Wave' },
+                ]} onchange={(v) => { settings.visualizer = v as 'off' | 'bars' | 'wave'; api.setSettings(settings); }} />
+              </div>
+              <div class="set-row">
                 <span class="lb">Text size
                   <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{Math.round(settings.lyrics_size)}%</span>
                 </span>
@@ -3480,6 +3491,9 @@
              so the blurred backdrop never flashes empty/half-painted. -->
         <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" eager alt="" />
         <div class="np-shade"></div>
+        {#if settings.visualizer === 'bars' || settings.visualizer === 'wave'}
+          <Visualizer mode={settings.visualizer} playing={player.playing} />
+        {/if}
         {#key player.track.id}
           <div
             class="np-stage"

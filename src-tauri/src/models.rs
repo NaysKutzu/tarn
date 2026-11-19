@@ -399,6 +399,9 @@ pub struct Settings {
     /// Lyrics: animated dots during long instrumental gaps.
     #[serde(default = "default_true")]
     pub lyrics_dots: bool,
+    /// Fullscreen player: spectrum visualizer of the audio ("off" | "bars" | "wave").
+    #[serde(default = "default_visualizer")]
+    pub visualizer: String,
     /// Lyrics text size, percent (70..=150).
     #[serde(default = "default_pct")]
     pub lyrics_size: f64,
@@ -454,6 +457,7 @@ impl Default for Settings {
             lyrics_blur: true,
             lyrics_dots: true,
             lyrics_size: 100.0,
+            visualizer: default_visualizer(),
         }
     }
 }
@@ -510,6 +514,8 @@ fn default_bpm_return() -> f64 {
 }
 fn default_speed() -> f64 {
     1.0
+fn default_visualizer() -> String {
+    "off".into()
 }
 
 fn default_eq_bands() -> [f32; 5] {

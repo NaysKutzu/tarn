@@ -246,6 +246,8 @@ export interface Settings {
   lyrics_karaoke: boolean;
   /** Fall back to LRCLIB when YouTube Music has no synced lyrics (default on). */
   lyrics_lrclib?: boolean;
+  /** Fullscreen spectrum visualizer. */
+  visualizer?: 'off' | 'bars' | 'wave';
   lyrics_glow: boolean;
   lyrics_blur: boolean;
   lyrics_dots: boolean;

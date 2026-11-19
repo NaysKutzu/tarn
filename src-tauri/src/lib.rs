@@ -6,6 +6,7 @@ mod color;
 pub mod decode;
 mod eq;
 mod fx;
+mod viz;
 mod innertube;
 mod player_client;
 mod login;
@@ -960,6 +961,19 @@ fn track_wave(app: State<Arc<App>>, id: String) -> Option<Vec<u8>> {
         analyze_prefetched(&app.ytm, &app.player, &id);
     }
     None
+/// Turn the visualizer audio tap on while the fullscreen player shows it.
+#[tauri::command]
+fn set_visualizer(on: bool) {
+    viz::set_on(on);
+}
+
+/// Current output spectrum: `bands` levels 0..=1 (low to high).
+#[tauri::command]
+fn viz_frame(bands: usize) -> Vec<f32> {
+    if !viz::on() {
+        return Vec::new();
+    }
+    viz::spectrum(bands)
 }
 
 #[tauri::command]
@@ -2187,6 +2201,8 @@ pub fn run() {
             analysis_count,
             track_beat,
             track_wave,
+            set_visualizer,
+            viz_frame,
             clear_analysis,
             cache_stats,
             get_listens,
