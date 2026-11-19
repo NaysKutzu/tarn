@@ -117,7 +117,7 @@ export const api = {
   remoteStop: () => invoke<void>('remote_stop'),
   remoteStatus: () => invoke<RemoteInfo>('remote_status'),
   /** Listen together (desktop only, LAN). */
-  jamHost: () => invoke<JamInfo>('jam_host'),
+  jamHost: (server?: string, password?: string) => invoke<JamInfo>('jam_host', { server: server || null, password: password || null }),
   jamJoin: (code: string) => invoke<JamInfo>('jam_join', { code }),
   jamLeave: () => invoke<void>('jam_leave'),
   jamStatus: () => invoke<JamInfo>('jam_status'),

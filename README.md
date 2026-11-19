@@ -57,6 +57,9 @@ A fast, self-contained player for Linux, Windows and macOS. Sign in with Google,
 - Discord Rich Presence and scrobbling.
 - Listening stats.
 
+**Listen along**
+- Play the same music in sync with friends, on your Wi-Fi or over the internet. Host your own tiny relay with [one command](#self-hosted-listen-along-server) so nothing depends on anyone else's server.
+
 **Updates**
 - Packaged builds check for signed updates on their own. You can also press "Check for updates" in Settings.
 
@@ -73,6 +76,22 @@ Grab the latest build from the [releases page](https://github.com/rexsystems/tar
 | **iOS** | Unsigned IPA for sideloading, when the release includes one |
 
 > **macOS:** the app is not notarized yet. The first time, right-click it and choose **Open**.
+
+## Self-hosted Listen Along server
+
+Listen Along works on the same Wi-Fi out of the box. To listen together over the internet, run the small relay in [`server/`](server/) on any Linux box with a domain. One command, direct on a port as a hardened systemd service, with automatic HTTPS through Caddy:
+
+```sh
+git clone --depth 1 https://github.com/rexsystems/tarn && cd tarn/server && sudo ./install.sh jam.example.com
+```
+
+Prefer Docker?
+
+```sh
+git clone --depth 1 https://github.com/rexsystems/tarn && cd tarn/server && DOMAIN=jam.example.com TARN_JAM_PASSWORD='pick-a-long-password' docker compose up -d --build
+```
+
+Then in Tarn open **Settings → Listen together**, enter `https://jam.example.com` and the password, press **Host** and share the join code. Details, configuration and the security model are in [server/README.md](server/README.md).
 
 ## Build from source
 
@@ -102,6 +121,7 @@ The build downloads an official [yt-dlp](https://github.com/yt-dlp/yt-dlp) sidec
 | --- | --- |
 | `src/` | Svelte frontend: UI, player controls, lists and settings. |
 | `src-tauri/src/` | Rust backend: playback, decoding, streams, YouTube Music API access, equalizer, downloads, integrations. |
+| `server/` | Self-hosted Listen Along relay (Rust + Docker). |
 | `site/` | The static website, including the download page. |
 | `scripts/` | Build helpers. |
 | `packaging/` | Packaging assets, including macOS. |

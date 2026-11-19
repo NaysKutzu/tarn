@@ -1311,11 +1311,17 @@ fn remote_status() -> remote::RemoteInfo {
     remote::info()
 }
 
-/// Listen together: host a session on this network.
+/// Listen together: host a session on this network, or on a self-hosted relay
+/// when `server` is given.
 #[cfg(desktop)]
 #[tauri::command]
-async fn jam_host(app: State<'_, Arc<App>>) -> Result<jam::JamInfo, String> {
-    Ok(jam::host(app.inner().clone()).await)
+async fn jam_host(
+    app: State<'_, Arc<App>>,
+    server: Option<String>,
+    password: Option<String>,
+) -> Result<jam::JamInfo, String> {
+    let relay = server.map(|s| (s, password.unwrap_or_default()));
+    Ok(jam::host(app.inner().clone(), relay).await)
 }
 
 /// Listen together: follow a host by its join code.
@@ -1362,7 +1368,8 @@ fn remote_status() -> serde_json::Value {
 
 #[cfg(mobile)]
 #[tauri::command]
-fn jam_host() -> Result<(), String> {
+fn jam_host(server: Option<String>, password: Option<String>) -> Result<(), String> {
+    let _ = (server, password);
     Err("Listen together runs on the desktop app".into())
 }
 

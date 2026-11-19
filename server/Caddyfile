@@ -1,0 +1,6 @@
+# Automatic HTTPS (Let's Encrypt) for $DOMAIN. With DOMAIN unset it serves
+# plain HTTP on :80, handy for a LAN or for putting your own proxy in front.
+{$DOMAIN::80} {
+	encode zstd gzip
+	reverse_proxy jam:47821
+}

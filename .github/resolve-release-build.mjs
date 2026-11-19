@@ -2,8 +2,8 @@
 /**
  * Resolve the next per-base build number for a release.
  *
- * Reads the semver core from tauri.conf.json (e.g. 0.1.4). Looks at existing
- * GitHub tags shaped like `v0.1.4-build.N` and returns N+1. When the base
+ * Reads the semver core from tauri.conf.json (e.g. 0.2.0). Looks at existing
+ * GitHub tags shaped like `v0.2.0-build.N` and returns N+1. When the base
  * version is new (no matching tags), starts at 1.
  *
  * Usage:

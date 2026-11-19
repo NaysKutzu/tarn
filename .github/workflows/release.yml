@@ -543,7 +543,7 @@ jobs:
         run: |
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          # Git tags avoid `+` (URL-unfriendly); app/manifest keep 0.1.4+1.
+          # Git tags avoid `+` (URL-unfriendly); app/manifest keep 0.2.0+1.
           echo "tag=${{ needs.version.outputs.tag }}" >> "$GITHUB_OUTPUT"
           echo "build=${{ needs.version.outputs.build }}" >> "$GITHUB_OUTPUT"
 

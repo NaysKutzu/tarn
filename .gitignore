@@ -59,3 +59,4 @@ CLAUDE.md
 package-lock.json
 skills-lock.json
 .agents/
+server/target/

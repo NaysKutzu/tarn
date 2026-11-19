@@ -1,0 +1,24 @@
+[package]
+name = "tarn-jam-server"
+version = "0.2.0"
+description = "Self-hosted relay for Tarn's Listen Along sessions"
+authors = ["Alex Stefan"]
+license = "GPL-3.0-only"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+hex = "0.4"
+
+tower-http = { version = "0.6", default-features = false, features = ["timeout"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"

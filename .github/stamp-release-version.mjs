@@ -3,7 +3,7 @@
  * Stamp release version as "<base>+<build>" for CI.
  *
  * Updates tauri.conf.json, Cargo.toml, and package.json so the installed
- * app version is e.g. 0.1.4+1.
+ * app version is e.g. 0.2.0+1.
  *
  * Usage:
  *   node .github/stamp-release-version.mjs <build-number>
