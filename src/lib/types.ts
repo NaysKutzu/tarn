@@ -187,6 +187,8 @@ export interface Settings {
   autoplay: boolean;
   /** Resume and play the last session when the app starts. */
   resume_on_start: boolean;
+  /** Waveform overview in the seek bar (analyses each track). */
+  seek_waveform?: boolean;
   cache_max_mb: number;
   /** Only downloaded / cached songs play; nothing touches the network. */
   offline_mode: boolean;

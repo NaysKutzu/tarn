@@ -152,6 +152,7 @@ impl App {
         }
         player.set_normalize(settings.normalize, settings.normalize_target);
         player.set_auto_dj(settings.auto_dj);
+        player.set_waveform(settings.seek_waveform);
         if let Some(sess) = persist::load(store.data_dir()) {
             // Volume / shuffle / repeat / queue metadata - audio is armed later.
             player.set_volume(sess.volume);
@@ -938,6 +939,22 @@ fn track_beat(app: State<Arc<App>>, id: String) -> Option<(Option<analysis::Grid
     app.analysis.get(&id).map(|a| (a.head, a.tail, a.duration_s))
 }
 
+/// Waveform overview of a track for the seek bar (None until analysed).
+#[tauri::command]
+fn track_wave(app: State<Arc<App>>, id: String) -> Option<Vec<u8>> {
+    if !app.player.wants_analysis() {
+        return None;
+    }
+    if let Some(a) = app.analysis.get(&id) {
+        return (!a.wave.is_empty()).then_some(a.wave);
+    }
+    // Played before the feature was on: measure it from the cache now.
+    if !app.analysis.busy(&id) {
+        analyze_prefetched(&app.ytm, &app.player, &id);
+    }
+    None
+}
+
 #[tauri::command]
 fn analysis_count(app: State<Arc<App>>) -> usize {
     app.analysis.len()
@@ -1480,6 +1497,7 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     app.player
         .set_normalize(settings.normalize, settings.normalize_target);
     app.player.set_auto_dj(settings.auto_dj);
+    app.player.set_waveform(settings.seek_waveform);
     save_settings(app.store.data_dir(), &settings);
     *app.settings.lock() = settings;
     if app.refresh_offline() {
@@ -2130,6 +2148,7 @@ pub fn run() {
             prefetch,
             analysis_count,
             track_beat,
+            track_wave,
             clear_analysis,
             cache_stats,
             get_listens,

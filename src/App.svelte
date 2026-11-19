@@ -52,6 +52,7 @@
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
     Download04Icon, ChartColumnIcon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
     PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon,
+    AudioWave01Icon,
   } from './lib/icons';
 
   const isMac =
@@ -176,6 +177,28 @@
   $effect(() => {
     void off.status?.downloaded.length;
     if (view.id === 'downloads') loadDownloads();
+  });
+  // Seek-bar waveform of the current track (polled until it is analysed).
+  let wave = $state<number[] | null>(null);
+  // Derived so the poll restarts only when the track changes, not on every tick.
+  let waveId = $derived(player.track?.id);
+  $effect(() => {
+    const id = waveId;
+    const on = !!settings.seek_waveform;
+    wave = null;
+    if (!id || !on) return;
+    let stop = false;
+    let tries = 0;
+    const poll = () => {
+      if (stop) return;
+      api.trackWave(id).then((w) => {
+        if (stop) return;
+        if (w && w.length) wave = w;
+        else if (++tries < 60) timer = setTimeout(poll, tries < 5 ? 1500 : 4000);
+      }).catch(() => {});
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(poll, 300);
+    return () => { stop = true; clearTimeout(timer); };
   });
   let libLoading = $state(false);
   // True while `library` holds only the cached / sidebar-fast subset.
@@ -2822,6 +2845,12 @@
             </span>
             <Toggle bind:checked={settings.resume_on_start} label="Resume on start" onchange={() => api.setSettings(settings)} />
           </div>
+          <div class="set-row">
+            <span class="lb"><Hi icon={AudioWave01Icon} size={20} /> Waveform seek bar
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Show the shape of the song in the seek bar (each song is analysed once on this device)</span>
+            </span>
+            <Toggle checked={!!settings.seek_waveform} label="Waveform seek bar" onchange={(v) => { settings.seek_waveform = v; api.setSettings(settings); }} />
+          </div>
             </div>
           </section>
           <section class="set-sec" id="set-transitions">
@@ -3520,6 +3549,7 @@
             value={player.position}
             max={player.duration || 0}
             buffered={player.buffered}
+            {wave}
             disabled={!player.track || !(player.duration > 0)}
             showTip
             format={fmtTime}
