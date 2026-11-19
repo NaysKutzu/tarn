@@ -609,6 +609,12 @@ pub struct PlayerState {
     /// re-parsed by the UI) five times a second.
     #[serde(default)]
     pub queue_same: bool,
+    /// Live crossfade progress 0..1 while two tracks overlap (None = idle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xfade: Option<f64>,
+    /// Outgoing track during a crossfade — UI morphs cover/title off this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xfade_from: Option<Track>,
 }
 
 impl Default for PlayerState {
@@ -632,6 +638,8 @@ impl Default for PlayerState {
             disliked: false,
             autoplay: true,
             queue_same: false,
+            xfade: None,
+            xfade_from: None,
         }
     }
 }

@@ -291,6 +291,10 @@ export interface PlayerState {
   autoplay: boolean;
   /** Periodic update without the queue: keep the one already shown. */
   queue_same?: boolean;
+  /** Live crossfade progress 0..1 while two tracks overlap. */
+  xfade?: number | null;
+  /** Outgoing track during a crossfade (cover/title morph). */
+  xfade_from?: Track | null;
 }
 
 export interface GenrePage {

@@ -78,6 +78,8 @@ pub struct Mixer {
     has_src: Arc<AtomicBool>,
     /// Milliseconds the current track has been continuously silent.
     quiet_ms: Arc<AtomicU32>,
+    /// 0 = no UI crossfade; 1..=1000 = progress‰ while a shaped fade runs.
+    xf_milli: Arc<AtomicU32>,
 }
 
 /// Cheap handle used off the audio callback (analysis threads).
@@ -141,6 +143,8 @@ struct Inner {
     /// Crossfade length and position in frames (not interleaved samples).
     xf_len: u32,
     xf_pos: u32,
+    /// Report live progress to the UI (long shaped fades only, not click-cuts).
+    xf_ui: bool,
     sr: u32,
     ch: u16,
     /// True once the outgoing decoder ran out and nothing followed.
@@ -206,11 +210,13 @@ impl Mixer {
         recover: Arc<AtomicBool>,
         has_src: Arc<AtomicBool>,
         quiet_ms: Arc<AtomicU32>,
+        xf_milli: Arc<AtomicU32>,
     ) -> Self {
         let sr = 44100;
         let ch = 2u16;
         sample_rate.store(sr, Ordering::Relaxed);
         channels.store(ch as u32, Ordering::Relaxed);
+        xf_milli.store(0, Ordering::Relaxed);
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 current: None,
@@ -221,6 +227,7 @@ impl Mixer {
                 paused: false,
                 xf_len: 0,
                 xf_pos: 0,
+                xf_ui: false,
                 sr,
                 ch,
                 finished: false,
@@ -258,6 +265,7 @@ impl Mixer {
             recover,
             has_src,
             quiet_ms,
+            xf_milli,
         }
     }
 
@@ -276,8 +284,13 @@ impl Mixer {
             buffering: self.buffering.clone(),
             recover: self.recover.clone(),
             quiet_ms: self.quiet_ms.clone(),
+            xf_milli: self.xf_milli.clone(),
             viz_n: 0,
         }
+    }
+
+    fn clear_xf_ui(&self) {
+        self.xf_milli.store(0, Ordering::Relaxed);
     }
 
     /// Load a decoder at the given position and stay silent, paused.
@@ -322,6 +335,7 @@ impl Mixer {
         g.incoming = None;
         g.xf_len = 0;
         g.xf_pos = 0;
+        g.xf_ui = false;
         g.new_current();
         g.take_next_gain();
         g.finished = false;
@@ -329,6 +343,7 @@ impl Mixer {
         g.env = 0.0;
         g.env_tgt = 0.0;
         g.env_step = 0.0;
+        self.clear_xf_ui();
         self.phase.store(2, Ordering::Relaxed);
         self.has_src.store(true, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
@@ -350,12 +365,14 @@ impl Mixer {
         g.incoming = None;
         g.xf_len = 0;
         g.xf_pos = 0;
+        g.xf_ui = false;
         g.new_current();
         g.take_next_gain();
         g.finished = false;
         g.paused = false;
         g.env = 0.0;
         g.set_fade(1.0, fade_in);
+        self.clear_xf_ui();
         self.phase.store(1, Ordering::Relaxed);
         self.has_src.store(true, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
@@ -375,6 +392,7 @@ impl Mixer {
             g.promote_incoming();
             g.xf_len = 0;
             g.xf_pos = 0;
+            g.xf_ui = false;
         }
         // If sample rates differ, fall back to a short cut - rodio won't
         // resample a mid-stream rate change cleanly.
@@ -399,6 +417,13 @@ impl Mixer {
         g.inc_pos = plan.origin_s * g.sr as f64 + plan.skipped_frames as f64;
         g.xf_len = (secs * g.sr as f32).round().max(1.0) as u32;
         g.xf_pos = 0;
+        // Click-cuts are ~0.22s; only shaped fades get a live UI morph.
+        g.xf_ui = secs >= 0.55;
+        if g.xf_ui {
+            self.xf_milli.store(1, Ordering::Relaxed);
+        } else {
+            self.clear_xf_ui();
+        }
         g.shape = plan.shape.clone();
         g.shape.secs = secs;
         g.return_secs = plan.return_secs;
@@ -483,10 +508,12 @@ impl Mixer {
         g.set_fade(0.0, CLICK_FADE * 0.7);
         g.incoming = None;
         g.xf_len = 0;
+        g.xf_ui = false;
         g.paused = true;
         g.current = None;
         g.new_current();
         g.env = 0.0;
+        self.clear_xf_ui();
         self.phase.store(0, Ordering::Relaxed);
         self.has_src.store(false, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
@@ -504,11 +531,13 @@ impl Mixer {
         g.current = Some(src);
         g.incoming = None;
         g.xf_len = 0;
+        g.xf_ui = false;
         g.new_current();
         g.finished = false;
         g.paused = false;
         g.env = 0.0;
         g.set_fade(1.0, CLICK_FADE);
+        self.clear_xf_ui();
         self.phase.store(1, Ordering::Relaxed);
         self.has_src.store(true, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
@@ -572,10 +601,12 @@ impl Mixer {
         g.inc_pos = 0.0;
         g.xf_len = 0;
         g.xf_pos = 0;
+        g.xf_ui = false;
         g.xf_wait = 0;
         g.inc_vari = Vari::default();
         g.finished = false;
         g.paused = false;
+        self.clear_xf_ui();
         self.ended.store(false, Ordering::Relaxed);
         self.phase.store(1, Ordering::Relaxed);
         self.has_src.store(true, Ordering::Relaxed);
@@ -671,6 +702,7 @@ pub struct MixerSource {
     buffering: Arc<AtomicBool>,
     recover: Arc<AtomicBool>,
     quiet_ms: Arc<AtomicU32>,
+    xf_milli: Arc<AtomicU32>,
     /// Samples pushed to the visualizer tap (format refresh counter).
     viz_n: u32,
 }
@@ -838,6 +870,10 @@ impl MixerSource {
             clock_rate = 0.0;
         } else if g.xf_len > 0 && (b_alive || g.incoming.is_some()) {
             let t = (g.xf_pos as f32 / g.xf_len as f32).clamp(0.0, 1.0);
+            if g.xf_ui {
+                let milli = ((t * 1000.0).round() as u32).clamp(1, 1000);
+                self.xf_milli.store(milli, Ordering::Relaxed);
+            }
             // Default shape is equal-power: cos/sin of π/2 keeps perceived
             // loudness constant.
             let (go, gi) = g.shape.gains(t);
@@ -881,9 +917,14 @@ impl MixerSource {
             clock_rate = g.inc_vari.rate;
             g.xf_pos = g.xf_pos.saturating_add(1);
             if g.xf_pos >= g.xf_len || !a_alive {
+                let was_ui = g.xf_ui;
                 g.promote_incoming();
                 g.xf_len = 0;
                 g.xf_pos = 0;
+                g.xf_ui = false;
+                if was_ui {
+                    self.xf_milli.store(0, Ordering::Relaxed);
+                }
                 a_alive = b_alive || g.current.is_some();
             }
         } else if !a_alive {

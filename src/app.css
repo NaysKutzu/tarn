@@ -1644,6 +1644,48 @@ html[data-glass='1'] .sug {
   border-radius: 8px;
   object-fit: cover;
 }
+.now .cov .xf-layer {
+  display: block;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.now .cov .xf-layer.in {
+  position: relative;
+  opacity: 1;
+}
+.now .cov.xfading .xf-layer.out {
+  z-index: 1;
+  pointer-events: none;
+}
+.now .cov.xfading .xf-layer.in {
+  position: absolute;
+  z-index: 2;
+}
+.now .cov .xf-layer :is(img, .ph, .cover) {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  display: block;
+}
+.now .meta.meta-stack {
+  position: relative;
+  min-height: 36px;
+}
+.now .meta-layer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+}
+.now .meta-stack.xfading .meta-layer.out {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
 .vol-hud {
   position: absolute;
   inset: 0;
@@ -2003,6 +2045,19 @@ html[data-float='1'] .main.with-panel {
 }
 /* The blur fades toward transparent at the image edge, which reads as a dark
    vignette; overscan far enough that the edge is always off-screen. */
+.np-bg-stack {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.np-bg-wrap {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.np-bg-wrap.xf-out { z-index: 1; }
+.np-bg-wrap.xf-in { z-index: 2; }
 .np-bg {
   position: absolute;
   inset: -22%;
@@ -2223,6 +2278,46 @@ html[data-float='1'] .main.with-panel {
   inset: 0;
   filter: blur(3px);
   transform: scale(1.04);
+}
+.np-art .xf-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.np-art .xf-layer.in {
+  position: relative;
+  opacity: 1;
+}
+.np-art.xfading .xf-layer.out {
+  z-index: 1;
+  pointer-events: none;
+}
+.np-art.xfading .xf-layer.in {
+  position: absolute;
+  z-index: 2;
+}
+.np-art .xf-layer :is(img, .ph, .cover) {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  display: block;
+}
+.np-meta-stack {
+  position: relative;
+  max-width: min(520px, 70vw);
+  min-width: 0;
+  width: 100%;
+  text-align: center;
+}
+.np-meta-stack.xfading {
+  min-height: 4.6em;
+}
+.np-meta-stack.xfading .np-meta.xf-out {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+  pointer-events: none;
 }
 .np-meta {
   max-width: min(520px, 70vw);
@@ -4501,6 +4596,16 @@ img, svg { -webkit-user-drag: none; }
   .np-stage.slide-prev {
     animation: none !important;
     transition: none !important;
+  }
+  .np-art.xfading .xf-layer.out,
+  .np-art.xfading .xf-layer.in,
+  .np-meta-stack.xfading .np-meta.xf-out,
+  .np-meta-stack.xfading .np-meta.xf-in,
+  .now .cov.xfading .xf-layer.out,
+  .now .cov.xfading .xf-layer.in,
+  .now .meta-stack.xfading .meta-layer.out,
+  .now .meta-stack.xfading .meta-layer.in {
+    transform: none !important;
   }
 }
 

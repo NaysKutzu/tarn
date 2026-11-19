@@ -45,6 +45,8 @@
   let pct = $derived(
     player && player.duration > 0 ? Math.min(100, (player.position / player.duration) * 100) : 0,
   );
+  let xfading = $derived(player?.xfade != null && !!player?.xfade_from);
+  let xfP = $derived(player?.xfade ?? 0);
 
   function measureTitleOverflow() {
     const clip = titleClipEl;
@@ -83,8 +85,15 @@
 </script>
 
 <div class="mini" data-tauri-drag-region>
-  <div class="cv" data-tauri-drag-region>
-    <Cover src={player?.track?.cover ?? null} videoId={player?.track?.id ?? null} size={72} alt="" />
+  <div class="cv" class:xfading data-tauri-drag-region>
+    {#if xfading && player?.xfade_from}
+      <span class="xf-layer out" aria-hidden="true" style="opacity:{1 - xfP}">
+        <Cover src={player.xfade_from.cover ?? null} videoId={player.xfade_from.id} size={72} alt="" />
+      </span>
+    {/if}
+    <span class="xf-layer in" style={xfading ? `opacity:${xfP}` : undefined}>
+      <Cover src={player?.track?.cover ?? null} videoId={player?.track?.id ?? null} size={72} alt="" />
+    </span>
   </div>
   <div class="mid" data-tauri-drag-region>
     <div class="tn-clip" class:scrolling={titleOverflow} bind:this={titleClipEl} data-tauri-drag-region>
@@ -119,6 +128,7 @@
     user-select: none;
   }
   .cv {
+    position: relative;
     flex: 0 0 72px;
     width: 72px;
     height: 72px;
@@ -126,6 +136,20 @@
     border-radius: 8px;
     overflow: hidden;
     background: var(--bg-active, rgba(255, 255, 255, 0.08));
+  }
+  .cv .xf-layer {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  .cv .xf-layer.in { position: relative; }
+  .cv.xfading .xf-layer.out {
+    z-index: 1;
+    pointer-events: none;
+  }
+  .cv.xfading .xf-layer.in {
+    position: absolute;
+    z-index: 2;
   }
   .cv :global(img), .cv :global(.ph) {
     width: 72px;

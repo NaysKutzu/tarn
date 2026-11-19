@@ -274,7 +274,11 @@ impl InnerTube {
         }
         // Follow continuation pages so Listen again / Quick picks / Mixed
         // for you and the rest of the personalized feed actually arrive.
+        // Soft cap: enough for a full Home without chasing empty trailing pages.
         for n in 0..8 {
+            if home.shelves.len() >= 16 {
+                break;
+            }
             let Some(tok) = home.continuation.clone() else {
                 break;
             };
@@ -298,12 +302,18 @@ impl InnerTube {
             }
         }
         // Per-shelf "show more" tokens - fill Listen again / Quick picks / etc.
-        // Run them in parallel - sequentially this was one round-trip per shelf.
+        // Cap parallelism: expanding every shelf at once hammered the network
+        // on startup while Home was still settling.
         let mut set = tokio::task::JoinSet::new();
+        let mut expand_n = 0usize;
         for (i, s) in home.shelves.iter().enumerate() {
             if s.continuation.is_none() {
                 continue;
             }
+            if expand_n >= 4 {
+                break;
+            }
+            expand_n += 1;
             let it = self.clone();
             let mut shelf = s.clone();
             set.spawn(async move {

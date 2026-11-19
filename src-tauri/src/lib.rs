@@ -551,6 +551,40 @@ async fn get_home(
             h
         }
     };
+    // Mix-art placeholders need a few `next` lookups - do them after the UI
+    // already has Home, then push a partial with real covers.
+    if home.signed_in {
+        let app2 = app.inner().clone();
+        let handle2 = handle.clone();
+        let mut home2 = home.clone();
+        tauri::async_runtime::spawn(async move {
+            app2.ytm.fill_mix_covers(&mut home2).await;
+            if home_feed_ok(&home2) {
+                {
+                    let mut slot = app2.home_slot.lock().await;
+                    if let Some(cur) = slot.1.as_mut() {
+                        // Keep shelf structure; only patch covers we resolved.
+                        for (i, sh) in home2.shelves.iter().enumerate() {
+                            if let Some(dst) = cur.shelves.get_mut(i) {
+                                for (j, it) in sh.items.iter().enumerate() {
+                                    if let Some(slot_it) = dst.items.get_mut(j) {
+                                        if slot_it.id == it.id {
+                                            if let Some(c) = it.cover.clone() {
+                                                slot_it.cover = Some(c);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        home2 = cur.clone();
+                    }
+                }
+                save_home_cache(&app2, &home2);
+                let _ = handle2.emit("home-partial", home2);
+            }
+        });
+    }
     Ok(home)
 }
 
@@ -939,6 +973,17 @@ pub(crate) async fn start_playback_at(
     } else {
         crate::player::PlayStyle::Fresh
     };
+    if manual {
+        // After the decision so a resolve retry cannot trip the rapid window.
+        app.player.note_manual_nav();
+    }
+    diag::log(format!(
+        "play: {:?}{} {} → {}",
+        style,
+        if manual { " (manual)" } else { "" },
+        snap.track.as_ref().map(|t| t.id.as_str()).unwrap_or("-"),
+        track.id,
+    ));
     // Overlap styles: keep the outgoing UI/clock until the mixer starts the
     // fade (same idea as natural end-blend). Swapping early made the seek bar
     // jump to the end of the next song while the old one was still audible.
@@ -1767,13 +1812,28 @@ async fn patch_library_liked(app: &App, id: &str, liked: bool, track: Option<&Tr
 }
 
 /// Last full library from disk, for an instant sidebar / Liked list while
-/// the fresh one loads. Only returned for the account that saved it.
+/// the fresh one loads. Prefer the matching account; if auth has no name
+/// yet (session still settling), still return a signed-in cache so the
+/// playlist sidebar is not skeletons for seconds.
 #[tauri::command]
 fn get_library_cached(app: State<'_, Arc<App>>) -> Option<Library> {
-    let name = app.auth.lock().account.as_ref().map(|a| a.name.clone())?;
+    let auth = app.auth.lock().clone();
+    if !auth.signed_in {
+        return None;
+    }
     let bytes = std::fs::read(library_cache_path(&app)).ok()?;
     let lib: Library = serde_json::from_slice(&bytes).ok()?;
-    if lib.account.as_ref().map(|a| a.name.as_str()) != Some(name.as_str()) {
+    if !lib.signed_in {
+        return None;
+    }
+    if let Some(name) = auth.account.as_ref().map(|a| a.name.as_str()) {
+        if let Some(saved) = lib.account.as_ref().map(|a| a.name.as_str()) {
+            if saved != name {
+                return None;
+            }
+        }
+    }
+    if lib.playlists.is_empty() && lib.liked.is_empty() {
         return None;
     }
     // Seed hearts before the full library round-trip finishes.
@@ -2392,6 +2452,8 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
         let mut last_queue_sig: Option<u64> = None;
         let mut last_queue_sent = std::time::Instant::now();
         loop {
+            // Keep a steady 200 ms tick even during audio crossfade. A 50 ms
+            // emit storm was thrashing WebView2 (dual-layer morph + tray).
             std::thread::sleep(std::time::Duration::from_millis(200));
             if let Some(header) = app.ytm.harvest_cookies() {
                 if let Err(e) = app.store.save(&header) {

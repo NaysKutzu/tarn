@@ -499,7 +499,7 @@
           // Drop any leftover logged-out snapshot so we never flash it.
           try { localStorage.removeItem(homeCacheKey('anon')); } catch {}
         }
-        // Disk cache first (survives localStorage quota + auth flicker), then local mirror.
+        // Disk caches first — paint Home + sidebar playlists before any network.
         try {
           const disk = await api.homeCached();
           if (disk?.shelves?.length) home = disk;
@@ -509,6 +509,16 @@
           warmHomeCovers(home);
           homeBoot = false;
           writeHomeCache(home, acct);
+        }
+        if (auth.signed_in) {
+          try {
+            const cached = await api.libraryCached();
+            if (cached) {
+              library = cached;
+              libPartial = true;
+              libLoading = false;
+            }
+          } catch {}
         }
       } catch {}
       if (!auth.signed_in && player.track && isLocalLiked(player.track.id)) {
@@ -524,9 +534,11 @@
           }
         }
       } catch {}
-      if (view.id === 'home') await loadHome();
+      // Don't await Home before Library: that left playlists as skeletons
+      // for the whole Home network round-trip.
+      if (view.id === 'home') void loadHome();
       if (auth.signed_in) {
-        loadLibrary();
+        void loadLibrary();
       } else {
         // restore_session may finish after first auth(); listen('auth') handles
         // the happy path, this is a backup if the event is missed.
@@ -534,8 +546,15 @@
           api.auth().then((a) => {
             if (!a.signed_in) return;
             auth = a;
-            loadLibrary({ retries: 4 });
-            if (!home) loadHome();
+            void api.libraryCached().then((cached) => {
+              if (cached && !library) {
+                library = cached;
+                libPartial = true;
+                libLoading = false;
+              }
+            }).catch(() => {});
+            void loadLibrary({ retries: 4 });
+            if (!home) void loadHome();
           }).catch(() => {});
         }, 900);
       }
@@ -770,7 +789,8 @@
     queueMenu = null;
     if (v.id === 'home' && !home) loadHome();
     if (v.id === 'explore' && !explore) loadExplore();
-    if (v.id === 'library') loadLibrary();
+    // Opening Library: fetch now (cancel any boot defer).
+    if (v.id === 'library') loadLibrary({ deferMs: 0 });
     if (v.id === 'artist') loadArtist(v.artistId);
     if (v.id === 'album') loadAlbum(v.albumId);
     if (v.id === 'playlist') loadPlaylist(v.playlistId);
@@ -1196,7 +1216,8 @@
     const token = beginPageLoad();
     try { releases = await api.newReleases(); } catch (e) { fail(e, "Couldn't load new releases"); } finally { endPageLoad(token); }
   }
-  async function loadLibrary(opts?: { retries?: number }) {
+  let libRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  async function loadLibrary(opts?: { retries?: number; deferMs?: number }) {
     if (!auth.signed_in) {
       libLoading = false;
       return;
@@ -1228,37 +1249,58 @@
       libPartial = false;
       return;
     }
-    const retries = opts?.retries ?? 3;
-    try {
-      let last = await api.library();
-      // Session restore / cookie settle can return an empty library once;
-      // retry a few times so the sidebar playlists show without a manual reload.
-      for (let i = 0; i < retries; i++) {
-        const empty =
-          !last.playlists?.length &&
-          !last.liked?.length &&
-          !last.albums?.length &&
-          !last.artists?.length;
-        if (!empty) break;
-        await new Promise((r) => setTimeout(r, 350 + i * 250));
-        if (!auth.signed_in) break;
-        last = await api.library();
+
+    const runFull = async () => {
+      const retries = opts?.retries ?? 3;
+      try {
+        let last = await api.library();
+        // Session restore / cookie settle can return an empty library once;
+        // retry a few times so the sidebar playlists show without a manual reload.
+        for (let i = 0; i < retries; i++) {
+          const empty =
+            !last.playlists?.length &&
+            !last.liked?.length &&
+            !last.albums?.length &&
+            !last.artists?.length;
+          if (!empty) break;
+          await new Promise((r) => setTimeout(r, 350 + i * 250));
+          if (!auth.signed_in) break;
+          last = await api.library();
+        }
+        library = last;
+        // Keep the now-playing heart lit if this song is in the liked list.
+        if (player.track && knownLikedId(player.track.id)) {
+          player.liked = true;
+          player.disliked = false;
+        }
+      } catch (e) {
+        fail(e, "Couldn't load your library");
+        if (!library) {
+          library = { signed_in: auth.signed_in, mock: auth.mock, account: auth.account, playlists: [], liked: [], albums: [], artists: [], recents: [] };
+        }
+      } finally {
+        libLoading = false;
+        libPartial = false;
       }
-      library = last;
-      // Keep the now-playing heart lit if this song is in the liked list.
-      if (player.track && knownLikedId(player.track.id)) {
-        player.liked = true;
-        player.disliked = false;
-      }
-    } catch (e) {
-      fail(e, "Couldn't load your library");
-      if (!library) {
-        library = { signed_in: auth.signed_in, mock: auth.mock, account: auth.account, playlists: [], liked: [], albums: [], artists: [], recents: [] };
-      }
-    } finally {
-      libLoading = false;
-      libPartial = false;
+    };
+
+    // Cached library is enough for the sidebar/hearts. Defer the multi-MB
+    // liked pagination so it does not fight Home + mix covers at boot.
+    const cachedOk =
+      (library?.liked?.length ?? 0) >= 20 ||
+      (library?.playlists?.length ?? 0) >= 3;
+    const deferMs = opts?.deferMs ?? (cachedOk ? 2500 : 0);
+    if (libRefreshTimer) {
+      clearTimeout(libRefreshTimer);
+      libRefreshTimer = undefined;
     }
+    if (deferMs > 0) {
+      libLoading = false;
+      libPartial = true;
+      libRefreshTimer = setTimeout(() => { void runFull(); }, deferMs);
+      return;
+    }
+    await runFull();
   }
   async function loadHistory() {
     const token = beginPageLoad();
@@ -1322,6 +1364,21 @@
     }
     return coverFor(t);
   });
+  /** Live audio-crossfade morph only (no per-tick client tween — that froze WebView2). */
+  let xfading = $derived(player.xfade != null && !!player.xfade_from);
+  let xfP = $derived(player.xfade ?? 0);
+  let xfFromCover = $derived.by(() => {
+    const t = player.xfade_from;
+    if (!t) return null;
+    if (t.cover) return coverFor(t);
+    const fromQueue = player.queue.find((x) => x.id === t.id && x.cover);
+    return coverFor(fromQueue ?? t);
+  });
+  let morphing = $derived(xfading);
+  let morphP = $derived(xfP);
+  let morphFrom = $derived(player.xfade_from ?? null);
+  let morphFromCover = $derived(xfFromCover);
+  let morphDir = $state<'next' | 'prev'>('next');
 
   // Skipping with the fullscreen player (lyrics / up next) remounts the art;
   // load the neighbours' covers ahead so it paints at once instead of
@@ -2440,7 +2497,8 @@
       return;
     }
     if (npPrevId && id !== npPrevId) {
-      npSlide = idx < npPrevIndex ? 'prev' : 'next';
+      morphDir = idx < npPrevIndex ? 'prev' : 'next';
+      npSlide = xfading ? null : morphDir;
     }
     npPrevId = id;
     npPrevIndex = idx;
@@ -2530,7 +2588,7 @@
       </button>
     </nav>
     <div class="side-scroll">
-      {#if auth.signed_in && !off.offline && !library?.playlists?.length && (libLoading || libPartial || !library)}
+      {#if auth.signed_in && !off.offline && !library?.playlists?.length && libLoading && !libPartial}
         <div class="side-head">
           <div class="side-label">{tr('Playlists')}</div>
         </div>
@@ -4123,36 +4181,55 @@
       {#if player.track}
         <!-- Outside the keyed stage: stays put on a skip and only swaps its image,
              so the blurred backdrop never flashes empty/half-painted. -->
-        <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" eager alt="" />
+        <!-- Single blurred backdrop only — dual-fading blur(56px) layers froze WebView2. -->
+        <div class="np-bg-stack">
+          <div class="np-bg-wrap">
+            <Cover src={nowCover} videoId={player.track?.id} width={320} height={200} class="np-bg" eager alt="" />
+          </div>
+        </div>
         <div class="np-shade"></div>
         {#if settings.visualizer === 'bars' || settings.visualizer === 'wave'}
           <Visualizer mode={settings.visualizer} playing={player.playing} />
         {/if}
-        {#key player.track.id}
-          <div
-            class="np-stage"
-            class:slide-next={npSlide === 'next'}
-            class:slide-prev={npSlide === 'prev'}
-          >
-                        <div class="np-in">
+        <div
+          class="np-stage"
+          class:slide-next={!morphing && npSlide === 'next'}
+          class:slide-prev={!morphing && npSlide === 'prev'}
+        >
+          <div class="np-in">
               <div class="np-main" role="presentation" oncontextmenu={(e) => { if (player.track) contextTrack(e, player.track); }}>
-                <div class="np-art">
-                  <Cover src={nowCover} videoId={player.track?.id} size={560} eager alt="" />
+                <div class="np-art" class:xfading={morphing}>
+                  {#if morphing && morphFrom}
+                    <div class="xf-layer out" aria-hidden="true" style="opacity:{1 - morphP}">
+                      <Cover src={morphFromCover} videoId={morphFrom.id} size={560} eager alt="" />
+                    </div>
+                  {/if}
+                  <div class="xf-layer in" style={morphing ? `opacity:${morphP}` : undefined}>
+                    <Cover src={nowCover} videoId={player.track?.id} size={560} eager alt="" />
+                  </div>
                   {#if volHud != null}
                     <div class="vol-hud lg" aria-live="polite">{volHud}%</div>
                   {/if}
                 </div>
-                <div class="np-meta">
-                  <h1>{player.track.title}</h1>
-                  <div class="ar">
-                    {#each player.track.artists as a, k}
-                      {#if k > 0}<span>, </span>{/if}
-                      <button class="linkish" type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
-                    {/each}
-                  </div>
-                  {#if npLyricsMode && lyricsReady && !npLyricsOn}
-                    <div class="np-ly-miss">{tr('No synced lyrics for this track')}</div>
+                <div class="np-meta-stack" class:xfading={morphing}>
+                  {#if morphing && morphFrom}
+                    <div class="np-meta xf-out" aria-hidden="true" style="opacity:{1 - morphP}">
+                      <h1>{morphFrom.title}</h1>
+                      <div class="ar">{morphFrom.artists.join(', ')}</div>
+                    </div>
                   {/if}
+                  <div class="np-meta xf-in" style={morphing ? `opacity:${morphP}` : undefined}>
+                    <h1>{player.track.title}</h1>
+                    <div class="ar">
+                      {#each player.track.artists as a, k}
+                        {#if k > 0}<span>, </span>{/if}
+                        <button class="linkish" type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
+                      {/each}
+                    </div>
+                    {#if npLyricsMode && lyricsReady && !npLyricsOn}
+                      <div class="np-ly-miss">{tr('No synced lyrics for this track')}</div>
+                    {/if}
+                  </div>
                 </div>
               </div>
               {#if npLyricsOn && lyrics}
@@ -4182,7 +4259,6 @@
               {/if}
             </div>
           </div>
-        {/key}
       {/if}
       {#if npQueueOn}
         <aside
@@ -4371,21 +4447,42 @@
       <div class="player-in">
         <div class="now" role="presentation" onwheel={nudgeVolume} oncontextmenu={(e) => { if (player.track) contextTrack(e, player.track); }}>
           {#if player.track}
-            <button class="cov" type="button" onclick={toggleExpanded} title={tr('Now playing')}>
-              <Cover src={nowCover} videoId={player.track?.id} size={64} alt="" />
+            <button
+              class="cov"
+              class:xfading={morphing}
+              type="button"
+              onclick={toggleExpanded}
+              title={tr('Now playing')}
+            >
+              {#if morphing && morphFrom}
+                <span class="xf-layer out" aria-hidden="true" style="opacity:{1 - morphP}">
+                  <Cover src={morphFromCover} videoId={morphFrom.id} size={64} alt="" />
+                </span>
+              {/if}
+              <span class="xf-layer in" style={morphing ? `opacity:${morphP}` : undefined}>
+                <Cover src={nowCover} videoId={player.track?.id} size={64} alt="" />
+              </span>
               {#if volHud != null}
                 <div class="vol-hud" aria-live="polite">{volHud}%</div>
               {/if}
             </button>
-            <div class="meta">
-              <div class="title-clip" class:scrolling={titleOverflow} bind:this={titleClipEl}>
-                <div class="title" bind:this={titleEl}>{player.track.title}</div>
-              </div>
-              <div class="artist">
-                {#each player.track.artists as a, k}
-                  {#if k > 0}<span>, </span>{/if}
-                  <button type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
-                {/each}
+            <div class="meta meta-stack" class:xfading={morphing}>
+              {#if morphing && morphFrom}
+                <div class="meta-layer out" aria-hidden="true" style="opacity:{1 - morphP}">
+                  <div class="title">{morphFrom.title}</div>
+                  <div class="artist">{morphFrom.artists.join(', ')}</div>
+                </div>
+              {/if}
+              <div class="meta-layer in" style={morphing ? `opacity:${morphP}` : undefined}>
+                <div class="title-clip" class:scrolling={titleOverflow} bind:this={titleClipEl}>
+                  <div class="title" bind:this={titleEl}>{player.track.title}</div>
+                </div>
+                <div class="artist">
+                  {#each player.track.artists as a, k}
+                    {#if k > 0}<span>, </span>{/if}
+                    <button type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
+                  {/each}
+                </div>
               </div>
             </div>
             <div class="likes">

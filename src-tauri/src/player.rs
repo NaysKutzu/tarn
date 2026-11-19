@@ -114,6 +114,12 @@ pub struct Player {
     /// Auto-DJ wants upcoming tracks analysed.
     auto_dj: Arc<AtomicBool>,
     waveform: Arc<AtomicBool>,
+    /// Live crossfade progress‰ from the mixer (0 = idle).
+    xf_milli: Arc<AtomicU32>,
+    /// Outgoing track while a shaped crossfade is audible (for the UI morph).
+    xfade_from: Arc<Mutex<Option<Track>>>,
+    /// Last manual Next/Prev/pick time — rapid skips skip the long fade.
+    last_manual: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Player {
@@ -146,6 +152,9 @@ impl Player {
         let pending_adopt = Arc::new(Mutex::new(None));
         let pending_rating = Arc::new(Mutex::new(None));
         let linear_queue = Arc::new(Mutex::new(None));
+        let xf_milli = Arc::new(AtomicU32::new(0));
+        let xfade_from = Arc::new(Mutex::new(None));
+        let last_manual = Arc::new(Mutex::new(None));
 
         let samples_t = samples.clone();
         let rate_t = sample_rate.clone();
@@ -167,6 +176,7 @@ impl Player {
         let quiet_ms_t = quiet_ms.clone();
         let blending_t = blending.clone();
         let last_ended_t = last_ended.clone();
+        let xf_milli_t = xf_milli.clone();
 
         std::thread::Builder::new()
             .name("tarn-audio".into())
@@ -183,6 +193,7 @@ impl Player {
                     buffering_t,
                     recover_t,
                     has_src_t,
+                    xf_milli_t,
                     AudioExtras {
                         tx: tx_t,
                         cfg: cfg_t,
@@ -233,6 +244,9 @@ impl Player {
             audible: Arc::new(Mutex::new(String::new())),
             auto_dj: Arc::new(AtomicBool::new(false)),
             waveform: Arc::new(AtomicBool::new(false)),
+            xf_milli,
+            xfade_from,
+            last_manual,
         }
     }
 
@@ -298,7 +312,28 @@ impl Player {
             Some(b) => b.buffered_secs(s.duration),
             None => if s.duration > 0.0 && !s.loading { s.duration } else { 0.0 },
         };
+        let milli = self.xf_milli.load(Ordering::Relaxed);
+        let arming = self.blending.load(Ordering::Relaxed)
+            || self.pending_adopt.lock().is_some();
+        let mut from = self.xfade_from.lock();
+        if milli > 0 {
+            s.xfade = Some((milli as f64 / 1000.0).clamp(0.0, 1.0));
+            s.xfade_from = from.clone();
+        } else if arming && from.is_some() {
+            // Analysis / beat-wait: hold the ghost at 0 until audio overlaps.
+            s.xfade = Some(0.0);
+            s.xfade_from = from.clone();
+        } else {
+            *from = None;
+            s.xfade = None;
+            s.xfade_from = None;
+        }
         s
+    }
+
+    /// True while a shaped crossfade is reporting UI progress (or arming).
+    pub fn xfade_active(&self) -> bool {
+        self.xf_milli.load(Ordering::Relaxed) > 0 || self.xfade_from.lock().is_some()
     }
 
     pub fn set_loading(&self, track: Track, queue: Vec<Track>, index: usize) {
@@ -323,6 +358,8 @@ impl Player {
         self.blending.store(false, Ordering::Relaxed);
         self.blend_adopted.store(false, Ordering::SeqCst);
         *self.last_ended.lock() = None;
+        *self.xfade_from.lock() = None;
+        self.xf_milli.store(0, Ordering::Relaxed);
         self.quiet_ms.store(0, Ordering::Relaxed);
         self.phase
             .store(if loading { 3 } else { 2 }, Ordering::Relaxed);
@@ -508,6 +545,20 @@ impl Player {
                 .unwrap_or_default(),
         };
         let out_id = std::mem::replace(&mut *self.audible.lock(), in_id.clone());
+        // Stash the audible/UI track so the front-end can morph covers while
+        // the mixer overlaps. Arm progress immediately so analysis wait does
+        // not clear the ghost on the next snapshot. Short cuts clear it.
+        if matches!(style, PlayStyle::Crossfade(_)) {
+            let outgoing = self.state.lock().track.clone();
+            *self.xfade_from.lock() = outgoing;
+            // 1‰ placeholder until the mixer reports real progress.
+            if self.xf_milli.load(Ordering::Relaxed) == 0 {
+                self.xf_milli.store(1, Ordering::Relaxed);
+            }
+        } else {
+            *self.xfade_from.lock() = None;
+            self.xf_milli.store(0, Ordering::Relaxed);
+        }
         self.analyze(&in_id, audio.clone());
         let _ = self.tx.send(Cmd::NextGain(self.gain_for(&in_id)));
         let cmd = match style {
@@ -632,6 +683,9 @@ impl Player {
 
     /// `manual` is Next/Prev/clicking another track. Natural end-of-track
     /// handoffs pass `false` and only need the main crossfade toggle.
+    ///
+    /// Call [`Self::note_manual_nav`] after the play decision so probing this
+    /// twice (or a resolve retry) cannot poison the rapid-skip window.
     pub fn should_crossfade(&self, from: Option<&Track>, to: &Track, manual: bool) -> bool {
         if !self.xf_on.load(Ordering::Relaxed) {
             return false;
@@ -645,7 +699,28 @@ impl Player {
         if self.album_cont.load(Ordering::Relaxed) && albums_match(from, to) {
             return false;
         }
+        // Mash next/prev while a shaped fade is already audible, or within 2s
+        // of the last manual nav: cut hard so long fades don't stack.
+        if manual && self.rapid_manual_nav() {
+            return false;
+        }
         true
+    }
+
+    /// True when the user is mashing skip (or skipping mid-fade).
+    pub fn rapid_manual_nav(&self) -> bool {
+        if self.xf_milli.load(Ordering::Relaxed) > 0 {
+            return true;
+        }
+        self.last_manual
+            .lock()
+            .map(|t| t.elapsed() < Duration::from_millis(2000))
+            .unwrap_or(false)
+    }
+
+    /// Mark a user Next/Prev/pick so a second press within 2s skips the fade.
+    pub fn note_manual_nav(&self) {
+        *self.last_manual.lock() = Some(Instant::now());
     }
 
     /// If we're close enough to the end, latch a blend and return the next
@@ -709,6 +784,10 @@ impl Player {
         self.blending.store(false, Ordering::Relaxed);
         *self.pending_adopt.lock() = None;
         *self.pending_rating.lock() = None;
+        // Aborted blend: drop the morph ghost so the UI doesn't hang mid-fade.
+        if self.xf_milli.load(Ordering::Relaxed) == 0 {
+            *self.xfade_from.lock() = None;
+        }
     }
 
     /// Show `track` in the UI only after the mixer has started it.
@@ -1364,6 +1443,7 @@ fn audio_thread(
     buffering: Arc<AtomicBool>,
     recover: Arc<AtomicBool>,
     has_src: Arc<AtomicBool>,
+    xf_milli: Arc<AtomicU32>,
     extras: AudioExtras,
 ) {
     let wanted = crate::output::prefs().0;
@@ -1389,6 +1469,7 @@ fn audio_thread(
         recover.clone(),
         has_src.clone(),
         extras.quiet_ms.clone(),
+        xf_milli,
     );
     sink.append(mix.source());
     sink.play();
@@ -1930,6 +2011,49 @@ mod crossfade_tests {
         assert!(
             order.iter().all(|id| id == "t0"),
             "repeat-one must keep the same track, got {order:?}"
+        );
+    }
+
+    #[test]
+    fn rapid_manual_skip_skips_crossfade() {
+        let p = Player::start();
+        p.set_crossfade(true, 4.0, false, true);
+        let a = t("a", "A");
+        let b = t("b", "B");
+        let c = t("c", "C");
+        assert!(p.should_crossfade(Some(&a), &b, true), "first skip fades");
+        p.note_manual_nav();
+        assert!(
+            !p.should_crossfade(Some(&b), &c, true),
+            "second skip within 2s must cut"
+        );
+        // Natural end-of-track handoff is unaffected by the manual timer.
+        assert!(p.should_crossfade(Some(&b), &c, false));
+    }
+
+    #[test]
+    fn manual_skip_during_live_fade_skips_crossfade() {
+        let p = Player::start();
+        p.set_crossfade(true, 4.0, false, true);
+        let a = t("a", "A");
+        let b = t("b", "B");
+        p.xf_milli.store(400, Ordering::Relaxed);
+        assert!(
+            !p.should_crossfade(Some(&a), &b, true),
+            "skip while a shaped fade is audible must cut"
+        );
+    }
+
+    #[test]
+    fn probing_should_crossfade_does_not_poison_rapid_window() {
+        let p = Player::start();
+        p.set_crossfade(true, 4.0, false, true);
+        let a = t("a", "A");
+        let b = t("b", "B");
+        assert!(p.should_crossfade(Some(&a), &b, true));
+        assert!(
+            p.should_crossfade(Some(&a), &b, true),
+            "without note_manual_nav, a second probe must still allow fade"
         );
     }
 

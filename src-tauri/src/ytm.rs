@@ -340,7 +340,10 @@ impl Ytm {
 
     /// Auto mixes ship a `/mixart` cover the webview can't load (needs
     /// session cookies), so they render as "?". Use the first track's art.
-    async fn fill_mix_covers(&self, home: &mut Home) {
+    ///
+    /// Keep this off the Home critical path: each mix hits `next` (~300KB),
+    /// and doing a dozen in parallel at boot froze the UI for seconds.
+    pub async fn fill_mix_covers(&self, home: &mut Home) {
         {
             let mut g = self.mix_titles.lock().unwrap();
             for sh in &home.shelves {
@@ -360,10 +363,13 @@ impl Ytm {
                 }
             }
         }
-        ids.truncate(12);
+        // A few visible mixes is enough; the rest keep their placeholder until
+        // the user opens them. Was 12 parallel `next` calls at every Home load.
+        ids.truncate(4);
         if ids.is_empty() {
             return;
         }
+        crate::diag::log(format!("home: filling {} mix covers in background", ids.len()));
         let mut set = tokio::task::JoinSet::new();
         for id in ids {
             let it = self.it();
@@ -430,7 +436,8 @@ impl Ytm {
         // When signed in, the InnerTube feed IS the product - do not pad
         // it with the logged-out charts/trending filler.
         if signed {
-            self.fill_mix_covers(&mut home).await;
+            // Mix covers are filled AFTER the UI gets this Home (see get_home).
+            // Awaiting them here blocked first paint on a dozen `next` calls.
             crate::diag::log(format!(
                 "home feed (signed-in): {} shelves, {} chips",
                 home.shelves.len(),
