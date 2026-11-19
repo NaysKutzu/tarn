@@ -17,6 +17,16 @@
     Shelf, ShelfItem, Track, View, CtxTarget,
   } from './lib/types';
   import { coverFor, itemToTrack, preloadNowCover } from './lib/cover';
+  import {
+    clearHomeCaches,
+    homeCacheKey,
+    homeFeedOk,
+    homeFingerprint,
+    isHomeUpgrade,
+    readHomeCache,
+    warmHomeCovers,
+    writeHomeCache,
+  } from './lib/home-cache';
   import { artistsLine, fmtCount, fmtTime, shareUrl } from './lib/format';
   import type { MenuEntry, CollTarget } from './lib/types';
   import { paintAccent } from './lib/contrast';
@@ -44,12 +54,13 @@
   import Dropdown from './lib/components/Dropdown.svelte';
   import Toggle from './lib/components/Toggle.svelte';
   import Skeleton from './lib/components/Skeleton.svelte';
+  import HomeBuilding from './lib/components/HomeBuilding.svelte';
   import SearchBar from './lib/components/SearchBar.svelte';
   import Toast from './lib/components/Toast.svelte';
   import UpdatePrompt from './lib/components/UpdatePrompt.svelte';
   import { fail, authPrompt, toast } from './lib/toast';
   import { friendlyError, isAuthError } from './lib/errors';
-  import { localLikes, isLocalLiked, setLocalLiked, localRecents, recordRecent } from './lib/local';
+  import { localLikes, isLocalLiked, setLocalLiked, localRecents, recordRecent, localSearchHistory, recordSearch, removeSearch, clearSearchHistory } from './lib/local';
   import {Home01Icon, Search01Icon, Compass01Icon, LibraryIcon, Settings02Icon, PlayIcon, PauseIcon, PreviousIcon, NextIcon, ShuffleIcon, RepeatIcon, RepeatOne01Icon, VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, FavouriteFilledIcon, ThumbsDownIcon, Queue02Icon, Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon, Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon, LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon, Download04Icon, ChartColumnIcon, Forward01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon, MagicWand01Icon, PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon, AudioWave01Icon, PaintBoardIcon} from './lib/icons';
   import { applyTheme, ACCENTS, hexRgb, type Theme } from './lib/theme';
 
@@ -76,6 +87,8 @@
 
   let view = $state<View>({ id: 'home' });
   let home = $state<Home | null>(null);
+  /** True until first Home cache hydrate / fetch settles — avoids a blank flash on cold start. */
+  let homeBoot = $state(true);
   let explore = $state<Explore | null>(null);
   let searchQ = $state('');
   let results = $state<SearchResults | null>(null);
@@ -240,6 +253,7 @@
     try { localStorage.setItem(DISLIKE_KEY, JSON.stringify(dislikedIds)); } catch {}
   }
   let recents = $state<Track[]>(localRecents());
+  let searchHist = $state<string[]>(localSearchHistory());
   type HistEntry = { view: View; scroll: number; searchQ: string; results: SearchResults | null; searchTab: typeof searchTab };
   let backStack = $state<HistEntry[]>([]);
   let fwdStack = $state<HistEntry[]>([]);
@@ -277,36 +291,9 @@
   let cacheUsed = $state(0);
   let cacheMax = $state(1024 * 1024 * 1024);
 
-  function homeCacheKey(account?: string | null): string {
-    return `tarn.home.v2.${account || 'anon'}`;
-  }
-  function clearHomeCaches() {
-    try {
-      const drop: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && (k.startsWith('tarn.home.') || k === 'tarn.home.v1')) drop.push(k);
-      }
-      for (const k of drop) localStorage.removeItem(k);
-    } catch {}
-  }
-  function readHomeCache(account?: string | null): Home | null {
-    try {
-      const raw = localStorage.getItem(homeCacheKey(account));
-      if (!raw) return null;
-      const v = JSON.parse(raw);
-      const h = (v && v.home) ? v.home as Home : v as Home;
-      // Never serve a logged-out (or other-account) feed when signed in.
-      if (account && h && h.signed_in === false) return null;
-      return h;
-    } catch { return null; }
-  }
-  function writeHomeCache(h: Home, account?: string | null) {
-    try {
-      const key = homeCacheKey(account ?? (auth.signed_in ? (auth.account?.name ?? 'user') : 'anon'));
-      localStorage.setItem(key, JSON.stringify({ at: Date.now(), account: key, home: h }));
-    } catch {}
-  }
+  /** idle | out (fade stale) | in (fresh settle) — only for cache → live swaps */
+  let homeAnim = $state<'idle' | 'out' | 'in'>('idle');
+  let homeApplyGen = 0;
   function dedupeTracks(list: Track[]): Track[] {
     const seen = new Set<string>();
     return list.filter((t) => t.id && !seen.has(t.id) && (seen.add(t.id), true));
@@ -387,7 +374,17 @@
           // Drop any leftover logged-out snapshot so we never flash it.
           try { localStorage.removeItem(homeCacheKey('anon')); } catch {}
         }
-        home = readHomeCache(acct);
+        // Disk cache first (survives localStorage quota + auth flicker), then local mirror.
+        try {
+          const disk = await api.homeCached();
+          if (disk?.shelves?.length) home = disk;
+        } catch {}
+        if (!home) home = readHomeCache(acct);
+        if (home) {
+          warmHomeCovers(home);
+          homeBoot = false;
+          writeHomeCache(home, acct);
+        }
       } catch {}
       if (!auth.signed_in && player.track && isLocalLiked(player.track.id)) {
         player.liked = true;
@@ -425,14 +422,20 @@
       // thousands of tracks): keep the same array so nothing is re-parsed,
       // re-proxied or re-rendered five times a second.
       if (next.queue_same) next.queue = player.queue;
+      // Only patch an empty heart while signed-out (local likes) or while the
+      // library is still painting. After that, trust the backend liked set —
+      // a one-way "force liked" from a stale list re-lit hearts after unlike.
       if (next.track) {
         const id = next.track.id;
-        const known =
-          isLocalLiked(id) ||
-          !!library?.liked?.some((t) => t.id === id);
-        if (known && !next.liked) {
-          next.liked = true;
-          next.disliked = false;
+        const trustLocal = !auth.signed_in || libPartial || libLoading;
+        if (trustLocal) {
+          const known =
+            isLocalLiked(id) ||
+            !!library?.liked?.some((t) => t.id === id);
+          if (known && !next.liked) {
+            next.liked = true;
+            next.disliked = false;
+          }
         }
       }
       if (next.track && !next.liked && isDisliked(next.track.id)) next.disliked = true;
@@ -452,13 +455,45 @@
       player = next;
     }).then((u) => unsubs.push(u));
     listen('auth', () => {
-      api.auth().then((a) => {
+      api.auth().then(async (a) => {
         const was = auth.signed_in;
+        const wasName = auth.account?.name ?? null;
         auth = a;
         if (a.signed_in !== was) {
-          clearHomeCaches();
-          home = null;
           explore = null;
+          if (!a.signed_in) {
+            // Sign-out: drop personalized feed.
+            clearHomeCaches();
+            try { await api.clearHomeCache(); } catch {}
+            home = null;
+            homeBoot = true;
+          } else {
+            // Sign-in: never wipe the cache — paint this account's snapshot if we have one.
+            try { localStorage.removeItem(homeCacheKey('anon')); } catch {}
+            const acct = a.account?.name ?? 'user';
+            if (!home?.shelves?.length) {
+              try {
+                const disk = await api.homeCached();
+                if (disk?.shelves?.length) home = disk;
+              } catch {}
+              if (!home) home = readHomeCache(acct);
+              if (home) {
+                warmHomeCovers(home);
+                homeBoot = false;
+              }
+            }
+          }
+        } else if (
+          a.signed_in &&
+          wasName &&
+          a.account?.name &&
+          a.account.name !== wasName
+        ) {
+          // Switched Google account in-session.
+          clearHomeCaches();
+          try { await api.clearHomeCache(); } catch {}
+          home = null;
+          homeBoot = true;
         }
         if (a.signed_in) {
           loadLibrary({ retries: was ? 2 : 4 });
@@ -473,6 +508,17 @@
         }
       });
     }).then((u) => unsubs.push(u));
+    listen<Home>('home-partial', (e) => {
+      // Live shelves while continuations / expands still run. Ignore during mood chips.
+      if (chip) return;
+      const h = e.payload;
+      if (!h?.shelves?.length) return;
+      if (!isHomeUpgrade(h, home)) return;
+      home = h;
+      homeBoot = false;
+      loading = false;
+      if (homeFeedOk(h)) writeHomeCache(h, auth.signed_in ? (auth.account?.name ?? 'user') : 'anon');
+    }).then((u) => unsubs.push(u));
 
     const keys = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
@@ -481,8 +527,7 @@
       const action = combo ? actionFor(appShortcuts(settings.shortcuts), combo) : null;
       if (action === 'search' && !typing) {
         e.preventDefault();
-        go({ id: 'search' });
-        queueMicrotask(() => document.getElementById('q')?.focus());
+        openSearch();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
@@ -615,6 +660,27 @@
     if (v.id === 'search') queueMicrotask(() => document.getElementById('q')?.focus());
   }
 
+  /** Sidebar Home: show cache immediately, then quiet-refresh and soft-replace. */
+  async function goHome() {
+    chip = null;
+    go({ id: 'home' });
+    if (!home) {
+      try {
+        const disk = await api.homeCached();
+        if (disk?.shelves?.length) home = disk;
+      } catch {}
+      if (!home) {
+        const acct = auth.signed_in ? (auth.account?.name ?? 'user') : 'anon';
+        home = readHomeCache(acct);
+      }
+      if (home) {
+        warmHomeCovers(home);
+        homeBoot = false;
+      }
+    }
+    void loadHome();
+  }
+
   function applyEntry(e: HistEntry) {
     navLock = true;
     view = e.view;
@@ -731,9 +797,55 @@
     homeInflight ??= loadHomeNow(params).finally(() => { homeInflight = null; });
     return homeInflight;
   }
+  function sleep(ms: number) {
+    return new Promise<void>((r) => setTimeout(r, ms));
+  }
+  /** Paint live Home; crossfade when replacing a cached snapshot that actually changed. */
+  async function applyHome(h: Home, animate: boolean) {
+    const gen = ++homeApplyGen;
+    const prev = home;
+    // Never let a logged-out thin race wipe Listen again / New releases from cache.
+    if (prev && !isHomeUpgrade(h, prev)) {
+      homeAnim = 'idle';
+      return;
+    }
+    const changed = !!prev && homeFingerprint(prev) !== homeFingerprint(h);
+    if (animate && changed) {
+      homeAnim = 'out';
+      await sleep(220);
+      if (gen !== homeApplyGen) return;
+      home = h;
+      warmHomeCovers(h);
+      homeAnim = 'in';
+      await sleep(520);
+      if (gen !== homeApplyGen) return;
+      homeAnim = 'idle';
+      return;
+    }
+    home = h;
+    // First paint after the building screen: soft settle instead of a hard pop.
+    homeAnim = prev ? 'idle' : 'in';
+    warmHomeCovers(h);
+    if (!prev) {
+      await sleep(520);
+      if (gen !== homeApplyGen) return;
+      homeAnim = 'idle';
+    }
+  }
+  function clearHomeFeedCache() {
+    clearHomeCaches();
+    void api.clearHomeCache().catch(() => {});
+    home = null;
+    homeAnim = 'idle';
+    homeBoot = true;
+    toast(tr('Home feed cache cleared'), 'info', 2500);
+    if (view.id === 'home' && !off.offline) void loadHome();
+    else homeBoot = false;
+  }
   async function loadHomeNow(params?: string | null) {
     if (off.offline) {
       loading = false;
+      homeBoot = false;
       if (view.id === 'home') go({ id: 'downloads' }, { replace: true });
       return;
     }
@@ -741,12 +853,17 @@
     if (!quiet) loading = true;
     try {
       const h = await api.home(params);
-      home = h;
-      if (!params) writeHomeCache(h, auth.signed_in ? (auth.account?.name ?? 'user') : 'anon');
+      const before = home;
+      // Partials may already have painted; only animate a real cache→live swap.
+      await applyHome(h, quiet && !!before);
+      if (!params && homeFeedOk(h) && isHomeUpgrade(h, before)) {
+        writeHomeCache(h, auth.signed_in ? (auth.account?.name ?? 'user') : 'anon');
+      }
     } catch (e) {
       if (!home) fail(e, "Couldn't load Home");
     } finally {
       loading = false;
+      homeBoot = false;
     }
   }
   async function loadExplore() {
@@ -987,6 +1104,7 @@
     const qq = (q ?? searchQ).trim();
     if (!qq) return;
     searchQ = qq;
+    searchHist = recordSearch(qq);
     loading = true;
     if (view.id !== 'search') go({ id: 'search' }, { replace: opts?.replace });
     else rememberUi();
@@ -998,6 +1116,21 @@
     } finally {
       loading = false;
     }
+  }
+
+  function openSearch() {
+    searchQ = '';
+    results = null;
+    go({ id: 'search' });
+    queueMicrotask(() => document.getElementById('q')?.focus());
+  }
+
+  function dropSearchHist(q: string) {
+    searchHist = removeSearch(q);
+  }
+
+  function wipeSearchHist() {
+    searchHist = clearSearchHistory();
   }
 
   function withCoverFallback(tracks: Track[], fallback?: string | null): Track[] {
@@ -2110,7 +2243,7 @@
       data-tauri-drag-region
     ></div>
     <div class="tb-fade">
-      <TitleBar canBack={backStack.length > 0} canFwd={fwdStack.length > 0} onBack={goBack} onFwd={goFwd} />
+      <TitleBar canBack={backStack.length > 0} canFwd={fwdStack.length > 0} onBack={goBack} onFwd={goFwd} onSearch={openSearch} />
     </div>
   </div>
   <aside class="sidebar" class:is-hidden={expanded}>
@@ -2119,13 +2252,13 @@
       <span class="word">Tarn</span>
     </div>
     <nav class="nav">
-      <button class="nav-item {navOn('home') ? 'on' : ''}" onclick={() => go({ id: 'home' })} type="button">
+      <button class="nav-item {navOn('home') ? 'on' : ''}" onclick={() => void goHome()} type="button">
         <span class="ic"><Hi icon={Home01Icon} size={24} /></span> {tr('Home')}
       </button>
       <button class="nav-item {navOn('explore') || view.id === 'charts' || view.id === 'new-releases' || view.id === 'genre' ? 'on' : ''}" onclick={() => go({ id: 'explore' })} type="button">
         <span class="ic"><Hi icon={Compass01Icon} size={24} /></span> {tr('Explore')}
       </button>
-      <button class="nav-item {navOn('search') ? 'on' : ''}" onclick={() => go({ id: 'search' })} type="button">
+      <button class="nav-item {navOn('search') ? 'on' : ''}" onclick={() => openSearch()} type="button">
         <span class="ic"><Hi icon={Search01Icon} size={24} /></span> {tr('Search')}
       </button>
       <button class="nav-item {navOn('library') || view.id === 'history' ? 'on' : ''}" onclick={() => go({ id: 'library' })} type="button">
@@ -2205,25 +2338,35 @@
       {/if}
 
       {#if view.id === 'home'}
-        {#if home?.chips?.length}
-          <div class="chips">
-            {#each home.chips as c}
-              <button class="chip {chip === c.title || c.selected ? 'on' : ''}" type="button" onclick={() => openChip(c)}>{c.title}</button>
-            {/each}
-          </div>
-        {/if}
-        {#if loading && !home}<Skeleton kind="home" />{/if}
-        {#each home?.shelves ?? [] as s}
-          <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} onPlayCollection={(it) => playCollection(it, false)} />
-        {/each}
+        <div
+          class="home-feed"
+          class:home-out={homeAnim === 'out'}
+          class:home-in={homeAnim === 'in'}
+        >
+          {#if home?.chips?.length}
+            <div class="chips">
+              {#each home.chips as c}
+                <button class="chip {chip === c.title || c.selected ? 'on' : ''}" type="button" onclick={() => openChip(c)}>{c.title}</button>
+              {/each}
+            </div>
+          {/if}
+          {#if !home && (loading || homeBoot)}
+            <HomeBuilding />
+          {/if}
+          {#each home?.shelves ?? [] as s (s.id || s.title)}
+            <ShelfRow shelf={s} onPlayItems={playTracks} onOpen={openItem} onContext={contextItem} onPlayCollection={(it) => playCollection(it, false)} />
+          {/each}
+        </div>
 
       {:else if view.id === 'explore'}
         <SearchBar
           bind:value={searchQ}
+          recent={searchHist}
           onSubmit={(q) => runSearch(q)}
           onPlay={(t, queue) => playTracks(queue, Math.max(0, queue.findIndex((x) => x.id === t.id)))}
           onOpen={openItem}
           onContext={contextItem}
+          onRemoveRecent={dropSearchHist}
         />
         <h1 class="page-title">{tr('Explore')}</h1>
         <div class="explore-links">
@@ -2257,12 +2400,49 @@
         <SearchBar
           bind:value={searchQ}
           autofocus
+          recent={searchHist}
           onSubmit={(q) => runSearch(q)}
           onPlay={(t, queue) => playTracks(queue, Math.max(0, queue.findIndex((x) => x.id === t.id)))}
           onOpen={openItem}
           onContext={contextItem}
+          onRemoveRecent={dropSearchHist}
         />
         {#if loading && !results}<Skeleton kind="search" />{/if}
+        {#if !loading && !results}
+          <div class="search-landing">
+            {#if searchHist.length}
+              <div class="search-landing-head">
+                <h2 class="search-landing-title">{tr('Recent searches')}</h2>
+                <button class="q-clear" type="button" onclick={wipeSearchHist}>{tr('Clear all')}</button>
+              </div>
+              <div class="search-hist">
+                {#each searchHist as q}
+                  <div class="search-hist-row">
+                    <button class="search-hist-go" type="button" onclick={() => runSearch(q)}>
+                      <span class="search-hist-ico"><Hi icon={HistoryIcon} size={18} /></span>
+                      <span class="clamp one">{q}</span>
+                    </button>
+                    <button
+                      class="search-hist-x"
+                      type="button"
+                      title={tr('Remove')}
+                      aria-label={tr('Remove')}
+                      onclick={() => dropSearchHist(q)}
+                    >
+                      <Hi icon={Cancel01Icon} size={16} />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div class="search-empty">
+                <span class="search-empty-ico"><Hi icon={Search01Icon} size={28} /></span>
+                <p class="search-empty-title">{tr('Find songs, artists, albums')}</p>
+                <p class="search-empty-sub">{tr('Type above, or press / from anywhere.')}</p>
+              </div>
+            {/if}
+          </div>
+        {/if}
         {#if results}
           <div class="tabs">
             {#each [
@@ -3416,6 +3596,12 @@
                 </div>
               {/if}
             </div>
+          </div>
+          <div class="set-row">
+            <span class="lb"><Hi icon={Delete02Icon} size={20} /> {tr('Home feed cache')}
+              <span class="set-meta">{tr('Cached shelves shown instantly on launch while Tarn refreshes from YouTube Music')}</span>
+            </span>
+            <button class="btn ghost sm" type="button" onclick={clearHomeFeedCache}>{tr('Clear home cache')}</button>
           </div>
             </div>
           </section>

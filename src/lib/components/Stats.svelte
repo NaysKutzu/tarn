@@ -8,6 +8,31 @@
     type Listen, type StatsRange, type Summary,
   } from '../stats';
 
+  const COVER_CACHE_KEY = 'tarn.artistCovers.v1';
+  const COVER_CACHE_MAX = 200;
+
+  function readCoverCache(): Record<string, string> {
+    try {
+      const raw = localStorage.getItem(COVER_CACHE_KEY);
+      if (!raw) return {};
+      const v = JSON.parse(raw) as Record<string, string>;
+      return v && typeof v === 'object' ? v : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeCoverCache(map: Record<string, string>) {
+    try {
+      const entries = Object.entries(map);
+      const trimmed =
+        entries.length > COVER_CACHE_MAX ? Object.fromEntries(entries.slice(-COVER_CACHE_MAX)) : map;
+      localStorage.setItem(COVER_CACHE_KEY, JSON.stringify(trimmed));
+    } catch {
+      /* quota / private mode */
+    }
+  }
+
   let {
     enabled,
     onPlay,
@@ -26,6 +51,9 @@
   let listens = $state<Listen[] | null>(null);
   let error = $state('');
   let confirmClear = $state(false);
+  /** Real YTM artist portraits keyed by channel/browse id (not album art). */
+  let artistCovers = $state<Record<string, string>>(readCoverCache());
+  let coverGen = 0;
 
   async function load() {
     error = '';
@@ -45,6 +73,73 @@
   const hourMax = $derived(s ? Math.max(1, ...s.byHour) : 1);
   const dayMax = $derived(s ? Math.max(1, ...s.byDay) : 1);
   const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  function artistCoverOf(a: { id: string | null; cover: string | null }): string | null {
+    if (a.id && artistCovers[a.id]) return artistCovers[a.id];
+    return a.cover;
+  }
+
+  /** Prefer channel portraits over the first track's album/video thumb. */
+  async function enrichArtistCovers(summary: Summary) {
+    const gen = ++coverGen;
+    const need = summary.topArtists
+      .map((a) => a.item)
+      .filter((a) => a.id && !artistCovers[a.id!]);
+    if (!need.length) return;
+
+    // Library cards already carry channel avatars - fill those first, free.
+    try {
+      const lib = (await api.libraryCached().catch(() => null))
+        ?? (await api.libraryLite().catch(() => null));
+      if (gen === coverGen && lib?.artists?.length) {
+        const next = { ...artistCovers };
+        let hit = false;
+        for (const a of need) {
+          const id = a.id!;
+          const card = lib.artists.find((x) => x.id === id && x.cover);
+          if (card?.cover) {
+            next[id] = card.cover;
+            hit = true;
+          }
+        }
+        if (hit) {
+          artistCovers = next;
+          writeCoverCache(next);
+        }
+      }
+    } catch {
+      /* offline / unsigned */
+    }
+
+    const still = need.filter((a) => a.id && !artistCovers[a.id!]);
+    if (!still.length || gen !== coverGen) return;
+
+    await Promise.all(
+      still.map(async (a) => {
+        const id = a.id!;
+        try {
+          let cover = await api.artistCover(id);
+          // No browse id portrait - try search card avatar by exact name.
+          if (!cover && a.name) {
+            const res = await api.searchAll(a.name).catch(() => null);
+            const match = res?.artists?.find(
+              (x) => x.cover && x.name.toLowerCase() === a.name.toLowerCase(),
+            ) ?? res?.artists?.find((x) => x.cover);
+            cover = match?.cover ?? null;
+          }
+          if (gen !== coverGen || !cover) return;
+          artistCovers = { ...artistCovers, [id]: cover };
+          writeCoverCache(artistCovers);
+        } catch {
+          /* keep album-art fallback */
+        }
+      }),
+    );
+  }
+
+  $effect(() => {
+    if (s && s.plays > 0) void enrichArtistCovers(s);
+  });
 
   async function clearAll() {
     if (!confirmClear) {
@@ -104,7 +199,7 @@
     {#if s.topArtists[0]}
       {@const a = s.topArtists[0]}
       <section class="st-top-artist">
-        <Cover src={a.item.cover} size={96} round alt="" />
+        <Cover src={artistCoverOf(a.item)} size={96} round alt="" />
         <div>
           <span class="t-meta">{tr('Top artist')}</span>
           <button class="st-link big" type="button" disabled={!a.item.id} onclick={() => a.item.id && onArtist(a.item.id)}>{a.item.name}</button>
@@ -139,7 +234,7 @@
             <li>
               <button type="button" class="st-row" disabled={!a.item.id} onclick={() => a.item.id && onArtist(a.item.id)}>
                 <span class="rank">{i + 1}</span>
-                <Cover src={a.item.cover} size={40} round alt="" />
+                <Cover src={artistCoverOf(a.item)} size={40} round alt="" />
                 <span class="txt"><span class="clamp one">{a.item.name}</span></span>
                 <span class="t-meta cnt">{fmtListen(a.secs)}</span>
               </button>
@@ -228,6 +323,13 @@
   }
   .st-top-artist { display: flex; gap: 18px; align-items: center; }
   .st-top-artist > div { display: flex; flex-direction: column; gap: 2px; }
+  .st-top-artist :global(img.round),
+  .st-row :global(img.round),
+  .st-top-artist :global(.ph.round),
+  .st-row :global(.ph.round) {
+    flex: 0 0 auto;
+    background: var(--bg-elev);
+  }
   .st-link { border: 0; background: none; color: inherit; font: inherit; padding: 0; cursor: pointer; text-align: left; }
   .st-link:hover:not(:disabled) { text-decoration: underline; }
   .st-link.big { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }

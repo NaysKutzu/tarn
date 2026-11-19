@@ -28,11 +28,16 @@ export const api = {
   searchTracks: (query: string) => invoke<Track[]>('search_tracks', { query }),
   suggestions: (query: string) => invoke<string[]>('search_suggestions', { query }),
   home: (params?: string | null) => invoke<Home>('get_home', { params: params ?? null }),
+  /** Last Home feed from disk — instant paint while live refresh runs. */
+  homeCached: () => invoke<Home | null>('get_home_cached'),
+  clearHomeCache: () => invoke<void>('clear_home_cache'),
   explore: () => invoke<Explore>('get_explore'),
   genre: (id: string) => invoke<GenrePage>('get_genre', { id }),
   charts: () => invoke<Home>('get_charts'),
   newReleases: () => invoke<Home>('get_new_releases'),
   artist: (id: string) => invoke<ArtistPage>('get_artist', { id }),
+  /** Portrait URL only - used by Stats so artist circles aren't album art. */
+  artistCover: (id: string) => invoke<string | null>('get_artist_cover', { id }),
   album: (id: string) => invoke<Collection>('get_album', { id }),
   playlist: (id: string) => invoke<Collection>('get_playlist', { id }),
   playlistHead: (id: string) => invoke<Collection>('get_playlist_head', { id }),

@@ -100,6 +100,9 @@ pub struct Player {
     /// Next track to show in the UI once the mixer actually starts it.
     /// Avoids "new title, old audio" while crossfade analysis is in flight.
     pending_adopt: Arc<Mutex<Option<(Track, usize, u64)>>>,
+    /// Like/dislike for the pending adopt track. Applied with the title swap
+    /// so the heart does not flip to the next song mid-crossfade.
+    pending_rating: Arc<Mutex<Option<(bool, bool)>>>,
     /// Original playlist order while shuffle is on (for restore + Up next).
     linear_queue: Arc<Mutex<Option<Vec<Track>>>>,
     /// Per-track loudness / beat cache.
@@ -141,6 +144,7 @@ impl Player {
         let blend_adopted = Arc::new(AtomicBool::new(false));
         let play_gen = Arc::new(AtomicU64::new(0));
         let pending_adopt = Arc::new(Mutex::new(None));
+        let pending_rating = Arc::new(Mutex::new(None));
         let linear_queue = Arc::new(Mutex::new(None));
 
         let samples_t = samples.clone();
@@ -157,6 +161,7 @@ impl Player {
         let cfg_t = xf_cfg.clone();
         let quiet_t = quiet_ms.clone();
         let pending_t = pending_adopt.clone();
+        let pending_rating_t = pending_rating.clone();
         let play_gen_t = play_gen.clone();
         let blend_adopted_t = blend_adopted.clone();
         let quiet_ms_t = quiet_ms.clone();
@@ -183,6 +188,7 @@ impl Player {
                         cfg: cfg_t,
                         quiet_ms: quiet_t,
                         pending_adopt: pending_t,
+                        pending_rating: pending_rating_t,
                         play_gen: play_gen_t,
                         blend_adopted: blend_adopted_t,
                         quiet_clear: quiet_ms_t,
@@ -220,6 +226,7 @@ impl Player {
             blend_adopted,
             play_gen,
             pending_adopt,
+            pending_rating,
             linear_queue,
             analyzer: Arc::new(Mutex::new(None)),
             normalize: Arc::new(Mutex::new(None)),
@@ -309,6 +316,7 @@ impl Player {
         // Invalidate any in-flight end-of-track blend from the previous queue.
         self.play_gen.fetch_add(1, Ordering::SeqCst);
         *self.pending_adopt.lock() = None;
+        *self.pending_rating.lock() = None;
         self.ended.store(false, Ordering::Relaxed);
         self.recover.store(false, Ordering::Relaxed);
         self.buffering.store(false, Ordering::Relaxed);
@@ -339,8 +347,48 @@ impl Player {
         s.playing = false;
         s.position = position.max(0.0);
         s.error = None;
+        Self::install_queue(&mut s, &self.linear_queue, queue, index);
+    }
+
+    /// Manual skip / pick-another-track with crossfade (or cut): keep the
+    /// outgoing title, duration, index and seek clock until the mixer
+    /// actually starts the overlap. Early `prepare()` used to swap in the
+    /// next track at position 0 while `samples` still held the old elapsed
+    /// time, so the bar snapped to the end of the new song mid-fade.
+    ///
+    /// Returns the (possibly shuffle-remapped) queue index for `queue_adopt`.
+    pub fn begin_manual_blend(&self, queue: Vec<Track>, index: usize) -> usize {
+        self.play_gen.fetch_add(1, Ordering::SeqCst);
+        *self.pending_adopt.lock() = None;
+        // Keep pending_rating: start_playback stashes the next heart before this.
+        self.ended.store(false, Ordering::Relaxed);
+        self.recover.store(false, Ordering::Relaxed);
+        self.buffering.store(false, Ordering::Relaxed);
+        self.blending.store(true, Ordering::Relaxed);
+        self.blend_adopted.store(false, Ordering::SeqCst);
+        *self.last_ended.lock() = None;
+        self.quiet_ms.store(0, Ordering::Relaxed);
+        let mut queue = queue;
+        for t in &mut queue {
+            t.ensure_cover();
+        }
+        let mut s = self.state.lock();
+        s.error = None;
+        // Keep showing the outgoing index until adopt; only refresh the list.
+        let keep = s.index;
+        let mapped = Self::install_queue(&mut s, &self.linear_queue, queue, index);
+        s.index = keep.min(s.queue.len().saturating_sub(1));
+        mapped
+    }
+
+    fn install_queue(
+        s: &mut PlayerState,
+        linear_queue: &Arc<Mutex<Option<Vec<Track>>>>,
+        queue: Vec<Track>,
+        index: usize,
+    ) -> usize {
         if s.shuffle {
-            let mut lin = self.linear_queue.lock();
+            let mut lin = linear_queue.lock();
             if lin
                 .as_ref()
                 .is_some_and(|orig| Self::same_track_set(orig, &queue))
@@ -348,6 +396,7 @@ impl Player {
                 // Same playlist (e.g. click in Up next) - keep linear, keep order.
                 s.queue = queue;
                 s.index = index;
+                index
             } else {
                 // New playlist while shuffle is on: remember linear, show shuffled.
                 *lin = Some(queue.clone());
@@ -356,11 +405,13 @@ impl Player {
                 Self::shuffle_queue_view(&mut q, &mut i);
                 s.queue = q;
                 s.index = i;
+                i
             }
         } else {
-            *self.linear_queue.lock() = None;
+            *linear_queue.lock() = None;
             s.queue = queue;
             s.index = index;
+            index
         }
     }
 
@@ -657,12 +708,18 @@ impl Player {
     pub fn clear_blending(&self) {
         self.blending.store(false, Ordering::Relaxed);
         *self.pending_adopt.lock() = None;
+        *self.pending_rating.lock() = None;
     }
 
     /// Show `track` in the UI only after the mixer has started it.
     pub fn queue_adopt(&self, track: Track, index: usize) {
         let gen = self.play_gen.load(Ordering::SeqCst);
         *self.pending_adopt.lock() = Some((track, index, gen));
+    }
+
+    /// Heart state to apply when the pending adopt track becomes visible.
+    pub fn set_pending_rating(&self, liked: bool, disliked: bool) {
+        *self.pending_rating.lock() = Some((liked, disliked));
     }
 
     pub fn adopt_track(&self, track: Track, index: usize) {
@@ -681,6 +738,7 @@ impl Player {
         }
         self.blend_adopted.store(true, Ordering::SeqCst);
         self.quiet_ms.store(0, Ordering::Relaxed);
+        let rating = self.pending_rating.lock().take();
         let mut track = track;
         track.ensure_cover();
         let mut s = self.state.lock();
@@ -694,12 +752,19 @@ impl Player {
                 slot.cover = track.cover.clone();
             }
         }
+        if let Some(d) = track.duration.filter(|&d| d > 0) {
+            s.duration = d as f64;
+        }
         s.track = Some(track);
         s.index = index;
         s.loading = false;
         s.playing = true;
         s.position = 0.0;
         s.error = None;
+        if let Some((liked, disliked)) = rating {
+            s.liked = liked;
+            s.disliked = disliked;
+        }
         self.blending.store(false, Ordering::Relaxed);
     }
 
@@ -1234,6 +1299,7 @@ struct AudioExtras {
     cfg: Arc<Mutex<XfConfig>>,
     quiet_ms: Arc<AtomicU32>,
     pending_adopt: Arc<Mutex<Option<(Track, usize, u64)>>>,
+    pending_rating: Arc<Mutex<Option<(bool, bool)>>>,
     play_gen: Arc<AtomicU64>,
     blend_adopted: Arc<AtomicBool>,
     quiet_clear: Arc<AtomicU32>,
@@ -1249,6 +1315,7 @@ fn flush_pending_adopt(extras: &AudioExtras, state: &Mutex<PlayerState>) {
         return;
     }
     track.ensure_cover();
+    let rating = extras.pending_rating.lock().take();
     let mut s = state.lock();
     if track.cover.is_none() {
         if let Some(q) = s.queue.get(index).and_then(|t| t.cover.clone()) {
@@ -1260,12 +1327,21 @@ fn flush_pending_adopt(extras: &AudioExtras, state: &Mutex<PlayerState>) {
         }
     }
     let prev = s.track.as_ref().map(|t| t.id.clone()).unwrap_or_default();
+    // Prefer a known length on the incoming track so the seek bar doesn't
+    // keep the outgoing duration after a mid-song skip crossfade.
+    if let Some(d) = track.duration.filter(|&d| d > 0) {
+        s.duration = d as f64;
+    }
     s.track = Some(track);
     s.index = index;
     s.loading = false;
     s.playing = true;
     s.position = 0.0;
     s.error = None;
+    if let Some((liked, disliked)) = rating {
+        s.liked = liked;
+        s.disliked = disliked;
+    }
     drop(s);
     if !prev.is_empty() {
         *extras.last_ended.lock() = Some(prev);
@@ -1432,6 +1508,7 @@ fn audio_thread(
                 if gen != generation {
                     eprintln!("crossfade: analysis superseded, dropping");
                     *extras.pending_adopt.lock() = None;
+                    *extras.pending_rating.lock() = None;
                 } else if mix.is_paused() {
                     // Paused while analysing: swap silently, stay paused.
                     let skipped = plan.skipped_frames;

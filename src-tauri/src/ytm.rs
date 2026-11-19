@@ -390,8 +390,13 @@ impl Ytm {
         }
     }
 
-    pub async fn home(&self, params: Option<&str>) -> Result<Home> {
-        let mut home = match self.it().home(params).await {
+    pub async fn home<F>(&self, params: Option<&str>, mut on_partial: F) -> Result<Home>
+    where
+        F: FnMut(&Home) + Send,
+    {
+        let it = self.it();
+        let had_cookie = it.has_cookie();
+        let mut home = match it.home_progressive(params, &mut on_partial).await {
             Ok(h) if !h.shelves.is_empty() => h,
             Ok(h) => h,
             Err(e) => {
@@ -400,6 +405,26 @@ impl Ytm {
             }
         };
         let signed = self.cookie_header().is_some();
+        // Cookies landed mid-flight (session restore race): first browse was the
+        // thin logged-out Home (Throwback / Quick picks / 100% Hits). Retry once.
+        let retry = signed && (!had_cookie || !crate::home_feed_ok(&home));
+        if retry {
+            crate::diag::log(format!(
+                "home: weak feed ({} shelves, cookie_on_browse={had_cookie}) — retrying",
+                home.shelves.len()
+            ));
+            let again = match self.it().home_progressive(params, &mut on_partial).await {
+                Ok(h) if !h.shelves.is_empty() => h,
+                Ok(h) => h,
+                Err(e) => {
+                    crate::diag::log(format!("home browse retry: {e}"));
+                    Home::default()
+                }
+            };
+            if crate::home_feed_ok(&again) || again.shelves.len() >= home.shelves.len() {
+                home = again;
+            }
+        }
         home.signed_in = signed;
         self.harvest_cookies();
         // When signed in, the InnerTube feed IS the product - do not pad
@@ -746,6 +771,20 @@ impl Ytm {
             videos_playlist_id: a.videos_playlist_id,
             subscribed: false,
         })
+    }
+
+    /// Artist portrait only - skips albums-more / videos / duration enrichment.
+    /// Used by Stats so top-artist circles aren't album or video thumbs.
+    pub async fn artist_cover(&self, id: &str) -> Result<Option<String>> {
+        let a = self
+            .rp
+            .query()
+            .music_artist(id, false)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+        Ok(best_thumb(&a.header_image)
+            .or_else(|| a.tracks.first().and_then(|t| best_thumb(&t.cover)))
+            .or_else(|| a.albums.first().and_then(|t| best_thumb(&t.cover))))
     }
 
     /// rustypipe's artist page often omits track length. Fill from the artist's

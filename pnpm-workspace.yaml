@@ -1,6 +1,5 @@
 allowBuilds:
   '@hugeicons/svelte': true
-  esbuild: true
 minimumReleaseAgeExclude:
   - '@tauri-apps/cli-darwin-arm64@2.12.6'
   - '@tauri-apps/cli-darwin-x64@2.12.6'

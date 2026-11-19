@@ -50,3 +50,36 @@ export function recordRecent(track: Track): Track[] {
   write(RECENTS_KEY, list);
   return list;
 }
+
+const SEARCH_HIST_KEY = 'tarn.search_hist.v1';
+const MAX_SEARCH_HIST = 12;
+
+export function localSearchHistory(): string[] {
+  const v = read<unknown>(SEARCH_HIST_KEY, []);
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((q) => (typeof q === 'string' ? q.trim() : ''))
+    .filter(Boolean)
+    .slice(0, MAX_SEARCH_HIST);
+}
+
+export function recordSearch(q: string): string[] {
+  const qq = q.trim();
+  if (!qq) return localSearchHistory();
+  const key = qq.toLowerCase();
+  const list = [qq, ...localSearchHistory().filter((x) => x.toLowerCase() !== key)].slice(0, MAX_SEARCH_HIST);
+  write(SEARCH_HIST_KEY, list);
+  return list;
+}
+
+export function removeSearch(q: string): string[] {
+  const key = q.trim().toLowerCase();
+  const list = localSearchHistory().filter((x) => x.toLowerCase() !== key);
+  write(SEARCH_HIST_KEY, list);
+  return list;
+}
+
+export function clearSearchHistory(): string[] {
+  write(SEARCH_HIST_KEY, []);
+  return [];
+}

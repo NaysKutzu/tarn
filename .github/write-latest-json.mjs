@@ -6,7 +6,8 @@
  *   node .github/write-latest-json.mjs <version> <bundle-dir> <platform-key> [out-file]
  *
  * platform-key examples:
- *   windows-x86_64 | linux-x86_64 | linux-aarch64 | darwin-aarch64 | darwin-x86_64
+ *   windows-x86_64 | windows-aarch64 | linux-x86_64 | linux-aarch64 |
+ *   darwin-aarch64 | darwin-x86_64
  *
  * Download URLs point at the GitHub Release for RELEASE_TAG (or
  * UPDATER_DOWNLOAD_BASE_URL when set).

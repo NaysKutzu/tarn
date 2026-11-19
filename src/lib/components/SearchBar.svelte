@@ -6,24 +6,28 @@
   import { artistsLine, fmtTime } from '../format';
   import Cover from './Cover.svelte';
   import Hi from './Hi.svelte';
-  import { Search01Icon, PlayIcon, ArrowRight01Icon } from '../icons';
+  import { Search01Icon, PlayIcon, ArrowRight01Icon, HistoryIcon, Cancel01Icon } from '../icons';
 
   let {
     value = $bindable(''),
     autofocus = false,
     placeholder = 'Search',
+    recent = [] as string[],
     onSubmit,
     onPlay,
     onOpen,
     onContext,
+    onRemoveRecent,
   }: {
     value?: string;
     autofocus?: boolean;
     placeholder?: string;
+    recent?: string[];
     onSubmit: (q: string) => void;
     onPlay: (track: Track, queue: Track[]) => void;
     onOpen: (item: ShelfItem) => void;
     onContext?: (e: MouseEvent, item: ShelfItem) => void;
+    onRemoveRecent?: (q: string) => void;
   } = $props();
 
   function songItem(t: Track): ShelfItem {
@@ -57,6 +61,7 @@
   let top = $derived(results?.top ?? null);
 
   type Hit =
+    | { kind: 'recent'; q: string }
     | { kind: 'sug'; q: string }
     | { kind: 'top' }
     | { kind: 'song'; i: number }
@@ -64,8 +69,15 @@
     | { kind: 'album'; i: number }
     | { kind: 'all' };
 
+  let recentList = $derived(recent.slice(0, 8));
+  let showRecent = $derived(open && !value.trim() && recentList.length > 0);
+
   let hits = $derived.by((): Hit[] => {
     const out: Hit[] = [];
+    if (!value.trim()) {
+      for (const q of recentList) out.push({ kind: 'recent', q });
+      return out;
+    }
     for (const q of sugList) out.push({ kind: 'sug', q });
     if (top) out.push({ kind: 'top' });
     for (let i = 0; i < songList.length; i++) out.push({ kind: 'song', i });
@@ -75,7 +87,7 @@
     return out;
   });
 
-  let hasDrop = $derived(open && !!value.trim() && hits.length > 0);
+  let hasDrop = $derived(open && hits.length > 0 && (!!value.trim() || showRecent));
 
   function apply(hit: { suggestions: string[]; results: SearchResults | null }) {
     suggestions = hit.suggestions ?? [];
@@ -169,6 +181,7 @@
 
   function activate(h: Hit) {
     switch (h.kind) {
+      case 'recent':
       case 'sug': submit(h.q); break;
       case 'top': if (top) openItem(top); break;
       case 'song': playSong(songList[h.i]); break;
@@ -176,6 +189,12 @@
       case 'album': open = false; onOpen(asAlbum(albumList[h.i])); break;
       case 'all': submit(); break;
     }
+  }
+
+  function dropRecent(q: string, ev: Event) {
+    ev.stopPropagation();
+    ev.preventDefault();
+    onRemoveRecent?.(q);
   }
 
   function move(delta: number) {
@@ -209,21 +228,27 @@
     }
   }
 
-  function isOn(kind: Hit['kind'], i?: number): boolean {
+  function isOn(kind: Hit['kind'], i?: number, q?: string): boolean {
     if (active < 0) return false;
     const h = hits[active];
     if (!h || h.kind !== kind) return false;
     if (kind === 'song' || kind === 'artist' || kind === 'album') {
       return (h as { i: number }).i === i;
     }
+    if (kind === 'recent' || kind === 'sug') {
+      return (h as { q: string }).q === q;
+    }
     return true;
   }
 
-  function hitIndex(kind: Hit['kind'], i?: number): number {
+  function hitIndex(kind: Hit['kind'], i?: number, q?: string): number {
     return hits.findIndex((h) => {
       if (h.kind !== kind) return false;
       if (kind === 'song' || kind === 'artist' || kind === 'album') {
         return (h as { i: number }).i === i;
+      }
+      if (kind === 'recent' || kind === 'sug') {
+        return (h as { q: string }).q === q;
       }
       return true;
     });
@@ -269,18 +294,47 @@
         onmousedown={(e) => e.preventDefault()}
       >
         <div class="sug-body" bind:this={bodyEl}>
-          {#if sugList.length}
+          {#if showRecent}
+            <div class="sug-label">{tr('Recent searches')}</div>
             <div class="sug-sec">
-              {#each sugList as s, i}
-                {@const idx = hitIndex('sug', i)}
+              {#each recentList as s}
+                {@const idx = hitIndex('recent', undefined, s)}
+                <div
+                  class="sug-recent"
+                  class:on={isOn('recent', undefined, s)}
+                  role="option"
+                  id="sug-hit-{idx}"
+                  data-hit={idx}
+                  aria-selected={isOn('recent', undefined, s)}
+                >
+                  <button class="sug-text" type="button" onclick={() => submit(s)}>
+                    <span class="sug-ico"><Hi icon={HistoryIcon} size={16} /></span>
+                    <span class="sug-t">{s}</span>
+                  </button>
+                  <button
+                    class="sug-x"
+                    type="button"
+                    title={tr('Remove')}
+                    aria-label={tr('Remove')}
+                    onclick={(e) => dropRecent(s, e)}
+                  >
+                    <Hi icon={Cancel01Icon} size={14} />
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {:else if sugList.length}
+            <div class="sug-sec">
+              {#each sugList as s}
+                {@const idx = hitIndex('sug', undefined, s)}
                 <button
                   class="sug-text"
-                  class:on={isOn('sug') && hits[active] && (hits[active] as { q?: string }).q === s}
+                  class:on={isOn('sug', undefined, s)}
                   type="button"
                   role="option"
                   id="sug-hit-{idx}"
                   data-hit={idx}
-                  aria-selected={isOn('sug') && (hits[active] as { q?: string }).q === s}
+                  aria-selected={isOn('sug', undefined, s)}
                   onclick={() => submit(s)}
                 >
                   <span class="sug-ico"><Hi icon={Search01Icon} size={16} /></span>
@@ -290,7 +344,7 @@
             </div>
           {/if}
 
-          {#if top}
+          {#if !showRecent && top}
             {@const idx = hitIndex('top')}
             <div class="sug-label">{tr('Top result')}</div>
             <button
@@ -319,7 +373,7 @@
             </button>
           {/if}
 
-          {#if songList.length}
+          {#if !showRecent && songList.length}
             <div class="sug-label">{tr('Songs')}</div>
             {#each songList as t, i}
               {@const idx = hitIndex('song', i)}
@@ -349,7 +403,7 @@
             {/each}
           {/if}
 
-          {#if artistList.length}
+          {#if !showRecent && artistList.length}
             <div class="sug-label">{tr('Artists')}</div>
             {#each artistList as a, i}
               {@const idx = hitIndex('artist', i)}
@@ -375,7 +429,7 @@
             {/each}
           {/if}
 
-          {#if albumList.length}
+          {#if !showRecent && albumList.length}
             <div class="sug-label">{tr('Albums')}</div>
             {#each albumList as a, i}
               {@const idx = hitIndex('album', i)}
@@ -402,18 +456,20 @@
           {/if}
         </div>
 
-        <button
-          class="sug-all"
-          class:on={isOn('all')}
-          type="button"
-          role="option"
-          id="sug-hit-{hitIndex('all')}"
-          data-hit={hitIndex('all')}
-          aria-selected={isOn('all')}
-          onclick={() => submit()}
-        >
-          {tr('See all results')} <Hi icon={ArrowRight01Icon} size={16} />
-        </button>
+        {#if !showRecent}
+          <button
+            class="sug-all"
+            class:on={isOn('all')}
+            type="button"
+            role="option"
+            id="sug-hit-{hitIndex('all')}"
+            data-hit={hitIndex('all')}
+            aria-selected={isOn('all')}
+            onclick={() => submit()}
+          >
+            {tr('See all results')} <Hi icon={ArrowRight01Icon} size={16} />
+          </button>
+        {/if}
       </div>
     {/if}
   </div>

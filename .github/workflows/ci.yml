@@ -36,7 +36,12 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Verify native bindings
-        run: node -e "require('rollup'); require('esbuild'); console.log('native bindings ok')"
+        # Vite 8 ships Rolldown (not Rollup/esbuild); resolve it through vite under pnpm.
+        run: >-
+          node -e "const {createRequire}=require('module');
+          const fromVite=createRequire(require.resolve('vite/package.json'));
+          fromVite('rolldown'); fromVite('lightningcss');
+          console.log('native bindings ok')"
 
       - name: Build frontend
         run: pnpm run build

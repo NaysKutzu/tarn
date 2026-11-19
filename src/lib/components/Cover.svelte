@@ -124,6 +124,12 @@
 {/if}
 
 <style>
+  img.round,
+  .ph.round {
+    border-radius: 50%;
+    object-fit: cover;
+    object-position: center;
+  }
   .ph.ask {
     display: grid;
     place-items: center;
