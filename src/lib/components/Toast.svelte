@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import { onMount } from 'svelte';
   import { api } from '../api';
   import { subscribeToasts, dismissToast, type Toast } from '../toast';
@@ -29,7 +30,7 @@
             <Hi icon={Login03Icon} size={16} /> Sign in
           </button>
         {/if}
-        <button class="toast-x" type="button" aria-label="Dismiss" onclick={() => dismissToast(t.id)}>
+        <button class="toast-x" type="button" aria-label={tr('Dismiss')} onclick={() => dismissToast(t.id)}>
           <Hi icon={Cancel01Icon} size={14} />
         </button>
       </div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import { onMount } from 'svelte';
   import { toast } from '../toast';
 
@@ -34,13 +35,13 @@
     err = '';
     // Never auto-prompt (or install) updates while running `tauri dev`.
     if (isDev) {
-      if (manual) toast('Updates are off in development');
+      if (manual) toast(tr('Updates are off in development'));
       return;
     }
     const u = await load();
     update = u;
     if (!u) {
-      if (manual) toast("You're on the latest version");
+      if (manual) toast(tr("You're on the latest version"));
       return;
     }
     version = u.version;
@@ -108,8 +109,8 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="upd-back" onmousedown={(e) => { if (e.target === e.currentTarget && !installing) later(); }}>
     <div class="upd" role="dialog" aria-labelledby="upd-title" aria-modal="true">
-      <div class="upd-k">Update available</div>
-      <h2 id="upd-title" class="upd-title">Tarn {version} is ready</h2>
+      <div class="upd-k">{tr('Update available')}</div>
+      <h2 id="upd-title" class="upd-title">{tr('Tarn {version} is ready', { version })}</h2>
       {#if notes}
         <div class="upd-notes">{notes}</div>
       {/if}
@@ -117,15 +118,15 @@
         <div class="upd-bar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} role="progressbar">
           <span style="width:{Math.round(progress * 100)}%"></span>
         </div>
-        <div class="upd-prog">{progress >= 1 ? 'Restarting…' : `Downloading ${Math.round(progress * 100)}%`}</div>
+        <div class="upd-prog">{progress >= 1 ? tr('Restarting…') : tr('Downloading {p}%', { p: Math.round(progress * 100) })}</div>
       {/if}
       {#if err}
         <div class="upd-err">{err}</div>
       {/if}
       <div class="upd-actions">
-        <button type="button" class="upd-later" disabled={installing} onclick={later}>Later</button>
+        <button type="button" class="upd-later" disabled={installing} onclick={later}>{tr('Later')}</button>
         <button type="button" class="upd-go" disabled={installing} onclick={installTracked}>
-          {installing ? 'Installing…' : 'Install and restart'}
+          {installing ? tr('Installing…') : tr('Install and restart')}
         </button>
       </div>
     </div>

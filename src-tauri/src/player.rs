@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use parking_lot::Mutex;
-use rodio::{OutputStream, Sink};
+use rodio::Sink;
 
 use crate::analysis::{Analyzer, TrackAnalysis};
 use crate::models::{PlayerState, Track};
@@ -27,6 +27,9 @@ enum Cmd {
     Seek(f64),
     Volume(f32),
     Eq([f32; crate::eq::BANDS], bool),
+    Fx(crate::mix::Fx),
+    /// Move playback to another output device (None = system default).
+    Output(Option<String>),
     /// Loudness gain for the deck loaded by the next play-type command.
     NextGain(f32),
     /// Loudness gain for what is audible now (its analysis just finished).
@@ -819,6 +822,16 @@ impl Player {
         }
         let _ = self.tx.send(Cmd::Eq(cleaned, enabled));
     }
+    /// Playback speed (0.5..=2), keep pitch, reverb wet (0..=1).
+    pub fn set_fx(&self, speed: f64, keep_pitch: bool, reverb: f64) {
+        let speed = if speed.is_finite() { (speed.clamp(0.5, 2.0) * 100.0).round() / 100.0 } else { 1.0 };
+        let reverb = if reverb.is_finite() { reverb.clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let _ = self.tx.send(Cmd::Fx(crate::mix::Fx { speed, keep_pitch, reverb }));
+    }
+    /// Reopen the audio output on `name` (None = system default).
+    pub fn set_output_device(&self, name: Option<String>) {
+        let _ = self.tx.send(Cmd::Output(name));
+    }
     pub fn take_ended(&self) -> bool {
         if self.blending.load(Ordering::Relaxed) {
             // Blend never adopted and the outgoing track finished - drop the
@@ -1277,10 +1290,10 @@ fn audio_thread(
     has_src: Arc<AtomicBool>,
     extras: AudioExtras,
 ) {
-    let (_stream, handle) = match OutputStream::try_default() {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("audio output: {e}");
+    let wanted = crate::output::prefs().0;
+    let (mut _stream, handle) = match crate::output::open(wanted.as_deref()) {
+        Some((s, h, _)) => (s, h),
+        None => {
             // Keep the thread alive so commands don't fail the whole app.
             for _ in rx {
                 // discard
@@ -1288,7 +1301,7 @@ fn audio_thread(
             return;
         }
     };
-    let sink = Sink::try_new(&handle).expect("sink");
+    let mut sink = Sink::try_new(&handle).expect("sink");
     sink.set_volume(state.lock().volume);
     let mix = crate::mix::Mixer::new(
         samples.clone(),
@@ -1503,7 +1516,25 @@ fn audio_thread(
                 }
             }
             Ok(Cmd::Volume(v)) => sink.set_volume(v),
+            Ok(Cmd::Output(name)) => {
+                // Same mixer, new device: the old sink stops pulling before
+                // the new one starts, so nothing plays twice.
+                if let Some((s, h, _)) = crate::output::open(name.as_deref()) {
+                    match Sink::try_new(&h) {
+                        Ok(new_sink) => {
+                            new_sink.set_volume(state.lock().volume);
+                            sink.stop();
+                            new_sink.append(mix.source());
+                            new_sink.play();
+                            sink = new_sink;
+                            _stream = s;
+                        }
+                        Err(e) => eprintln!("audio output: sink: {e}"),
+                    }
+                }
+            }
             Ok(Cmd::Eq(gains, on)) => mix.set_eq(gains, on),
+            Ok(Cmd::Fx(fx)) => mix.set_fx(fx),
             Ok(Cmd::NextGain(g)) => next_gain = g,
             Ok(Cmd::LiveGain(g)) => {
                 if xf_pending {

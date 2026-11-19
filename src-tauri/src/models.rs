@@ -270,9 +270,19 @@ pub struct Settings {
     /// Skip off-topic intros / outros of music videos via SponsorBlock.
     #[serde(default)]
     pub sponsorblock: bool,
+    /// Language of Tarn's own menus and buttons ("system" | "en" | "ro"). Separate
+    /// from `language`, which is what YouTube Music answers in.
+    #[serde(default = "default_ui_language")]
+    pub ui_language: String,
     /// Desktop track-change notifications. Off by default.
     #[serde(default)]
     pub notifications: bool,
+    /// "dark" | "light" | "oled" | "system".
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Fixed accent colour "#rrggbb" (None = taken from the cover art).
+    #[serde(default)]
+    pub accent_color: Option<String>,
     /// Show what you're listening to on Discord. On by default.
     #[serde(default = "default_true")]
     pub discord_presence: bool,
@@ -310,6 +320,23 @@ pub struct Settings {
     pub eq_enabled: bool,
     #[serde(default = "default_eq_bands")]
     pub eq_bands: [f32; 5],
+    /// Playback speed, 0.5..=2 (1 = normal).
+    #[serde(default = "default_speed")]
+    pub speed: f64,
+    /// Keep the pitch when the speed changes (off = pitch follows, like a
+    /// record: nightcore / slowed).
+    #[serde(default)]
+    pub speed_keep_pitch: bool,
+    /// Reverb amount 0..=1 (0 = off).
+    #[serde(default)]
+    pub reverb: f64,
+    /// Output device name (None = system default).
+    #[serde(default)]
+    pub output_device: Option<String>,
+    /// Follow output devices as they come and go: back to the chosen
+    /// device when it reconnects, or to a new system default.
+    #[serde(default)]
+    pub output_auto_switch: bool,
     /// Fade-out shape of the outgoing track: "equal_power" | "linear" |
     /// "logarithmic" | "exponential" | "s_curve".
     #[serde(default = "default_curve")]
@@ -371,6 +398,9 @@ pub struct Settings {
     /// Reorder upcoming tracks by tempo so transitions flow (no shuffle).
     #[serde(default)]
     pub auto_dj: bool,
+    /// Auto-DJ also weighs musical key (Camelot wheel) when ordering.
+    #[serde(default)]
+    pub harmonic_mix: bool,
     /// Lyrics: fill the line being sung letter by letter.
     #[serde(default = "default_true")]
     pub lyrics_karaoke: bool,
@@ -386,6 +416,9 @@ pub struct Settings {
     /// Lyrics: animated dots during long instrumental gaps.
     #[serde(default = "default_true")]
     pub lyrics_dots: bool,
+    /// Fullscreen player: spectrum visualizer of the audio ("off" | "bars" | "wave").
+    #[serde(default = "default_visualizer")]
+    pub visualizer: String,
     /// Lyrics text size, percent (70..=150).
     #[serde(default = "default_pct")]
     pub lyrics_size: f64,
@@ -396,9 +429,12 @@ impl Default for Settings {
         Self {
             quality: "high".into(),
             language: "en".into(),
+            ui_language: default_ui_language(),
             region: "US".into(),
             sponsorblock: false,
             notifications: false,
+            theme: default_theme(),
+            accent_color: None,
             discord_presence: true,
             notifications_migrated: true,
             autoplay: true,
@@ -412,6 +448,11 @@ impl Default for Settings {
             crossfade_manual: true,
             eq_enabled: false,
             eq_bands: default_eq_bands(),
+            speed: default_speed(),
+            speed_keep_pitch: false,
+            reverb: 0.0,
+            output_device: None,
+            output_auto_switch: false,
             crossfade_curve_out: default_curve(),
             crossfade_curve_in: default_curve(),
             crossfade_out_len: default_pct(),
@@ -431,12 +472,14 @@ impl Default for Settings {
             normalize: false,
             normalize_target: default_normalize_target(),
             auto_dj: false,
+            harmonic_mix: false,
             lyrics_karaoke: true,
             lyrics_lrclib: true,
             lyrics_glow: true,
             lyrics_blur: true,
             lyrics_dots: true,
             lyrics_size: 100.0,
+            visualizer: default_visualizer(),
         }
     }
 }
@@ -491,6 +534,19 @@ fn default_normalize_target() -> f32 {
 fn default_bpm_return() -> f64 {
     8.0
 }
+fn default_speed() -> f64 {
+    1.0
+}
+fn default_visualizer() -> String {
+    "off".into()
+}
+fn default_theme() -> String {
+    "dark".into()
+}
+fn default_ui_language() -> String {
+    "system".into()
+}
+
 fn default_eq_bands() -> [f32; 5] {
     [0.0; 5]
 }

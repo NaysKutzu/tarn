@@ -65,9 +65,23 @@ pub struct TrackAnalysis {
     /// scaled to the loudest bin.
     #[serde(default)]
     pub wave: Vec<u8>,
+    /// Musical key (None = atonal / not enough material).
+    #[serde(default)]
+    pub key: Option<crate::key::Key>,
 }
 
 impl TrackAnalysis {
+    /// Best tempo estimate for the whole track: the more confident of the
+    /// intro / outro grids. None when neither has a usable beat.
+    pub fn bpm(&self) -> Option<f64> {
+        [self.head, self.tail]
+            .into_iter()
+            .flatten()
+            .filter(|g| g.bpm.is_finite() && g.bpm > 0.0 && g.confidence > 0.0)
+            .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
+            .map(|g| g.bpm)
+    }
+
     /// Linear gain that brings this track to `target_lufs`, limited so the
     /// peak stays under -1 dBFS and the change within -12..+6 dB.
     pub fn gain_for(&self, target_lufs: f32) -> f32 {
@@ -140,6 +154,14 @@ impl Analyzer {
         self.db.lock().get(id).cloned()
     }
 
+    /// Tempo of every cached track among `ids` (others are left out).
+    pub fn bpms(&self, ids: &[String]) -> HashMap<String, f64> {
+        let db = self.db.lock();
+        ids.iter()
+            .filter_map(|id| db.get(id).and_then(|a| a.bpm()).map(|b| (id.clone(), b)))
+            .collect()
+    }
+
     pub fn has(&self, id: &str) -> bool {
         self.db.lock().contains_key(id)
     }
@@ -193,11 +215,14 @@ impl Analyzer {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 crate::diag::log(format!(
-                    "analysis: {id} {:.1} LUFS peak {:.2} head {:?} tail {:?} ({} ms)",
+                    "analysis: {id} {:.1} LUFS peak {:.2} head {:?} tail {:?} key {} ({} ms)",
                     a.lufs,
                     a.peak,
                     a.head.map(|g| (g.bpm * 10.0).round() / 10.0),
                     a.tail.map(|g| (g.bpm * 10.0).round() / 10.0),
+                    a.key
+                        .map(|k| format!("{} ({})", k.camelot_str(), k.name()))
+                        .unwrap_or_else(|| "-".into()),
                     started.elapsed().as_millis()
                 ));
                 self.insert(id, a.clone());
@@ -336,8 +361,10 @@ pub fn measure_body(body: Arc<GrowingBody>) -> Option<TrackAnalysis> {
     let block = (sr / WAVE_RATE).max(1) as u64;
     let mut blocks: Vec<u16> = Vec::new();
     let mut block_sq = 0f64;
+    let mut keys = crate::key::KeyDetector::new(sr);
     while let FrameRes::Ok = crate::mix::pull_raw(&mut src, &mut f) {
         meter.push_frame(&f);
+        keys.push_frame(&f);
         let peak = f.iter().map(|&v| (v as i32).abs()).max().unwrap_or(0);
         block_sq += (peak as f64) * (peak as f64);
         if (frames + 1).is_multiple_of(block) {
@@ -379,6 +406,7 @@ pub fn measure_body(body: Arc<GrowingBody>) -> Option<TrackAnalysis> {
         tail: grid(&tail),
         at: 0,
         wave: overview(&blocks, WAVE_BINS),
+        key: keys.finish(),
     })
 }
 
@@ -454,6 +482,21 @@ mod tests {
     }
 
     #[test]
+    fn bpm_prefers_confident_grid() {
+        let g = |bpm, confidence| Some(Grid { bpm, phase_s: 0.0, confidence });
+        let mut a = TrackAnalysis {
+            v: 0, lufs: -14.0, peak: 1.0, duration_s: 200.0, lead_silence_s: 0.0,
+            music_end_s: 200.0, head: g(120.0, 0.3), tail: g(128.0, 0.8), at: 0,
+            wave: Vec::new(), key: None,
+        };
+        assert_eq!(a.bpm(), Some(128.0));
+        a.tail = None;
+        assert_eq!(a.bpm(), Some(120.0));
+        a.head = g(0.0, 0.9);
+        assert_eq!(a.bpm(), None);
+    }
+
+    #[test]
     fn silence_has_no_loudness() {
         assert!(meter_of(&vec![0i16; 48000 * 2], 48000).lufs().is_none());
     }
@@ -471,6 +514,7 @@ mod tests {
             tail: None,
             at: 0,
             wave: Vec::new(),
+            key: None,
         };
         // Wants +6 dB, but the peak (−6 dBFS) only allows +5 dB.
         let g = a.gain_for(-14.0);
@@ -508,6 +552,7 @@ mod tests {
             tail: None,
             at: 1,
             wave: vec![0, 128, 255],
+            key: None,
         };
         {
             let an = Analyzer::open(&dir);

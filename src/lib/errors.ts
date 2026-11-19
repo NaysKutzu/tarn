@@ -1,4 +1,5 @@
 /** Map raw backend / network errors to short, user-facing copy. */
+import { t } from './i18n.svelte';
 
 export function isAuthError(e: unknown): boolean {
   const s = String(e ?? '').toLowerCase();
@@ -9,6 +10,10 @@ export function friendlyError(
   e: unknown,
   fallback = 'Something went wrong. Try again.',
 ): string {
+  return t(friendlyRaw(e, fallback));
+}
+
+function friendlyRaw(e: unknown, fallback: string): string {
   const s = String(e ?? '').trim();
   const low = s.toLowerCase();
   if (!s) return fallback;

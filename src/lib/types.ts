@@ -180,6 +180,8 @@ export interface AuthStatus {
 export interface Settings {
   quality: string;
   language: string;
+  /** Language of Tarn's own UI ('system' | 'en' | 'ro'). */
+  ui_language?: string;
   region: string;
   notifications: boolean;
   /** Show the current track on Discord Rich Presence. */
@@ -191,6 +193,20 @@ export interface Settings {
   resume_on_start: boolean;
   /** Waveform overview in the seek bar (analyses each track). */
   seek_waveform?: boolean;
+  /** Playback speed 0.5..2 (1 = normal). */
+  speed?: number;
+  /** Keep pitch when the speed changes. */
+  speed_keep_pitch?: boolean;
+  /** Reverb wet amount 0..1 (0 = off). */
+  reverb?: number;
+  /** Colour theme. */
+  theme?: 'dark' | 'light' | 'oled' | 'system';
+  /** Fixed accent "#rrggbb"; null = from the cover art. */
+  accent_color?: string | null;
+  /** Output device name; null = system default. */
+  output_device?: string | null;
+  /** Follow devices as they connect / disconnect. */
+  output_auto_switch?: boolean;
   cache_max_mb: number;
   /** Only downloaded / cached songs play; nothing touches the network. */
   offline_mode: boolean;
@@ -235,9 +251,13 @@ export interface Settings {
   normalize_target: number;
   /** Reorder upcoming tracks by tempo (only when shuffle is off). */
   auto_dj: boolean;
+  /** Auto-DJ also orders by musical key (Camelot wheel). */
+  harmonic_mix?: boolean;
   lyrics_karaoke: boolean;
   /** Fall back to LRCLIB when YouTube Music has no synced lyrics (default on). */
   lyrics_lrclib?: boolean;
+  /** Fullscreen spectrum visualizer. */
+  visualizer?: 'off' | 'bars' | 'wave';
   lyrics_glow: boolean;
   lyrics_blur: boolean;
   lyrics_dots: boolean;
@@ -292,7 +312,8 @@ export type View =
   | { id: 'new-releases' }
   | { id: 'history' }
   | { id: 'downloads' }
-  | { id: 'stats' };
+  | { id: 'stats' }
+  | { id: 'smart' };
 
 import type { IconSvgElement } from '@hugeicons/svelte';
 

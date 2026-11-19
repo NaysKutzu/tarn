@@ -5,6 +5,9 @@ mod offline;
 mod color;
 pub mod decode;
 mod eq;
+mod fx;
+mod viz;
+mod output;
 mod innertube;
 mod player_client;
 mod login;
@@ -13,6 +16,7 @@ mod transition;
 mod stats;
 mod analysis;
 mod lrclib;
+mod key;
 mod autodj;
 mod sponsorblock;
 #[cfg(desktop)]
@@ -21,6 +25,9 @@ mod mpris;
 mod discord;
 #[cfg(desktop)]
 mod tray;
+#[cfg(desktop)]
+mod remote;
+mod jam;
 // Phones: system media session / Discord presence are desktop-only for now.
 #[cfg(target_os = "android")]
 mod android_media;
@@ -146,6 +153,11 @@ impl App {
             settings.crossfade_manual,
         );
         player.set_eq(settings.eq_bands, settings.eq_enabled);
+        player.set_fx(settings.speed, settings.speed_keep_pitch, settings.reverb);
+        output::set_prefs(settings.output_device.clone(), settings.output_auto_switch);
+        if settings.output_device.is_some() {
+            player.set_output_device(settings.output_device.clone());
+        }
         player.set_transition(settings.transition());
         let analysis = analysis::Analyzer::open(store.data_dir());
         player.set_analyzer(analysis.clone());
@@ -937,6 +949,104 @@ pub(crate) fn analyze_prefetched(ytm: &std::sync::Arc<Ytm>, player: &Player, id:
     });
 }
 
+/// Phone remote: start the LAN control page and return its URL + QR code.
+#[cfg(desktop)]
+#[tauri::command]
+async fn remote_start(app: State<'_, Arc<App>>, handle: AppHandle) -> Result<remote::RemoteInfo, String> {
+    Ok(remote::start(app.inner().clone(), handle).await)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn remote_stop() {
+    remote::stop();
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn remote_status() -> remote::RemoteInfo {
+    remote::info()
+}
+
+/// Listen together: host a session on this network.
+#[cfg(desktop)]
+#[tauri::command]
+async fn jam_host(app: State<'_, Arc<App>>) -> Result<jam::JamInfo, String> {
+    Ok(jam::host(app.inner().clone()).await)
+}
+
+/// Listen together: follow a host by its join code.
+#[cfg(desktop)]
+#[tauri::command]
+fn jam_join(app: State<Arc<App>>, code: String) -> jam::JamInfo {
+    jam::join(app.inner().clone(), &code)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn jam_leave() {
+    jam::stop();
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn jam_status() -> jam::JamInfo {
+    jam::info()
+}
+
+/// Guest: add a song to the host's queue.
+#[cfg(desktop)]
+#[tauri::command]
+async fn jam_add(track: Track) -> Result<(), String> {
+    jam::add_to_host(track).await
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn remote_start() -> Result<(), String> {
+    Err("The phone remote runs on the desktop app".into())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn remote_stop() {}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn remote_status() -> serde_json::Value {
+    serde_json::json!({ "running": false, "url": null, "qr_svg": null, "error": null })
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn jam_host() -> Result<(), String> {
+    Err("Listen together runs on the desktop app".into())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn jam_join(code: String) -> Result<(), String> {
+    let _ = code;
+    Err("Listen together runs on the desktop app".into())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn jam_leave() {}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn jam_status() -> serde_json::Value {
+    serde_json::json!({ "mode": "off", "code": null, "guests": 0, "following": null, "rtt_ms": null, "error": null })
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn jam_add(track: Track) -> Result<(), String> {
+    let _ = track;
+    Err("Listen together runs on the desktop app".into())
+}
+
 /// Cached beat grids of a track (None until it has been analysed).
 #[tauri::command]
 fn track_beat(app: State<Arc<App>>, id: String) -> Option<(Option<analysis::Grid>, Option<analysis::Grid>, f32)> {
@@ -957,6 +1067,33 @@ fn track_wave(app: State<Arc<App>>, id: String) -> Option<Vec<u8>> {
         analyze_prefetched(&app.ytm, &app.player, &id);
     }
     None
+}
+
+/// Turn the visualizer audio tap on while the fullscreen player shows it.
+#[tauri::command]
+fn set_visualizer(on: bool) {
+    viz::set_on(on);
+}
+
+/// Current output spectrum: `bands` levels 0..=1 (low to high).
+#[tauri::command]
+fn viz_frame(bands: usize) -> Vec<f32> {
+    if !viz::on() {
+        return Vec::new();
+    }
+    viz::spectrum(bands)
+}
+
+/// Output devices for the settings picker.
+#[tauri::command]
+fn output_devices() -> output::Devices {
+    output::list()
+}
+
+/// Cached tempo for each of `ids` that has been analysed (smart playlists).
+#[tauri::command]
+fn track_bpms(app: State<Arc<App>>, ids: Vec<String>) -> std::collections::HashMap<String, f64> {
+    app.analysis.bpms(&ids)
 }
 
 #[tauri::command]
@@ -1490,6 +1627,15 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     }
     settings.eq_bands = bands;
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
+    app.player.set_fx(settings.speed, settings.speed_keep_pitch, settings.reverb);
+    {
+        let before = output::prefs().0;
+        output::set_prefs(settings.output_device.clone(), settings.output_auto_switch);
+        let now = output::prefs().0;
+        if before != now {
+            app.player.set_output_device(now);
+        }
+    }
     app.player.set_transition(settings.transition());
     app.stats.set_enabled(settings.listening_stats);
     #[cfg(desktop)]
@@ -2096,6 +2242,7 @@ pub fn run() {
             });
             emit_loop(handle.clone(), app.clone());
             autodj::start(app.clone());
+            output::watch(app.player.clone());
             net_loop(handle.clone(), app.clone());
             {
                 let h = handle.clone();
@@ -2183,6 +2330,18 @@ pub fn run() {
             analysis_count,
             track_beat,
             track_wave,
+            set_visualizer,
+            viz_frame,
+            output_devices,
+            track_bpms,
+            remote_start,
+            remote_stop,
+            remote_status,
+            jam_host,
+            jam_join,
+            jam_leave,
+            jam_status,
+            jam_add,
             clear_analysis,
             cache_stats,
             get_listens,

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import type { Track } from '../types';
   import { artistsLine, fmtTime } from '../format';
   import Cover from './Cover.svelte';
@@ -248,8 +249,8 @@
   <input
     class="qsearch"
     type="search"
-    placeholder="Search in queue"
-    aria-label="Search in queue"
+    placeholder={tr('Search in queue')}
+    aria-label={tr('Search in queue')}
     bind:value={q}
   />
 {/if}
@@ -285,7 +286,7 @@
       <span
         class="grip"
         role="presentation"
-        title="Drag to reorder"
+        title={tr('Drag to reorder')}
         onpointerdown={(e) => startDrag(e, i)}
         onpointermove={moveDrag}
         onpointerup={endDrag}
@@ -298,16 +299,16 @@
         <div class="ta">{artistsLine(t.artists)}</div>
       </div>
       {#if off.downloaded.has(t.id)}
-        <span class="dl" title="Downloaded"><Hi icon={Download04Icon} size={13} /></span>
+        <span class="dl" title={tr('Downloaded')}><Hi icon={Download04Icon} size={13} /></span>
       {/if}
       {#if i === index}
-        <span class="now-tag">Now</span>
+        <span class="now-tag">{tr('Now')}</span>
       {:else}
         {#if t.duration}<span class="dur">{fmtTime(t.duration)}</span>{/if}
         <button
           class="rm"
           type="button"
-          title="Remove from queue"
+          title={tr('Remove from queue')}
           onclick={(e) => { e.stopPropagation(); onRemove(i); }}
         ><Hi icon={Cancel01Icon} size={16} /></button>
       {/if}
