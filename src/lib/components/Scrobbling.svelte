@@ -66,11 +66,9 @@
   }
 </script>
 
-<div class="set-row" style="flex-direction:column;align-items:stretch;gap:10px">
+<div class="set-row set-stack">
   <span class="lb">{tr('Scrobbling')}
-    <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">
-      {tr('Send what you play to Last.fm and/or ListenBrainz (after half the song, or 4 minutes).')}
-    </span>
+    <span class="set-meta">{tr('Send what you play to Last.fm and/or ListenBrainz (after half the song, or 4 minutes).')}</span>
   </span>
 
   <div class="scr">

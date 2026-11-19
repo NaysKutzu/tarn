@@ -1,6 +1,6 @@
 //! Musical key detection for harmonic mixing: a pitch-class profile
 //! (chroma) from Goertzel filters on decimated mono audio, matched against
-//! the Krumhansl–Kessler key profiles. Keys are reported in Camelot
+//! the Krumhansl-Kessler key profiles. Keys are reported in Camelot
 //! notation (8B = C major, 8A = A minor) for DJ-style compatibility.
 
 use serde::{Deserialize, Serialize};
@@ -189,7 +189,7 @@ fn correlate(chroma: &[f64; 12], profile: &[f64; 12], tonic: usize) -> f64 {
     }
 }
 
-/// Krumhansl–Schmuckler: the key whose profile correlates best.
+/// Krumhansl-Schmuckler: the key whose profile correlates best.
 pub fn detect(chroma: &[f64; 12]) -> Option<Key> {
     let mut scores: Vec<(f64, u8, bool)> = Vec::with_capacity(24);
     for t in 0..12 {

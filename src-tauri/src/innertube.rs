@@ -49,6 +49,10 @@ impl InnerTube {
         self
     }
 
+    pub fn has_cookie(&self) -> bool {
+        self.cookie.as_ref().is_some_and(|c| !c.is_empty())
+    }
+
     fn context(&self) -> Value {
         let mut ctx = json!({
             "client": {
@@ -253,14 +257,28 @@ impl InnerTube {
         Ok(dedup_tracks(out))
     }
 
-    pub async fn home(&self, params: Option<&str>) -> Result<Home> {
+    /// Browse Home. `on_partial` is called as soon as the first browse page
+    /// lands (and again after each continuation page) so the UI can paint
+    /// shelves while "show more" expansions still run.
+    pub async fn home_progressive<F>(&self, params: Option<&str>, mut on_partial: F) -> Result<Home>
+    where
+        F: FnMut(&Home),
+    {
         let v = self.browse("FEmusic_home", params).await?;
         let account_hdr = response_has_account(&v);
         let mut home = parse_home(&v);
         home.continuation = find_page_continuation(&v);
+        home.signed_in = self.cookie.is_some();
+        if !home.shelves.is_empty() {
+            on_partial(&home);
+        }
         // Follow continuation pages so Listen again / Quick picks / Mixed
         // for you and the rest of the personalized feed actually arrive.
+        // Soft cap: enough for a full Home without chasing empty trailing pages.
         for n in 0..8 {
+            if home.shelves.len() >= 16 {
+                break;
+            }
             let Some(tok) = home.continuation.clone() else {
                 break;
             };
@@ -275,6 +293,7 @@ impl InnerTube {
                     ));
                     merge_home(&mut home, extra);
                     home.continuation = find_page_continuation(&more);
+                    on_partial(&home);
                 }
                 Err(e) => {
                     crate::diag::log(format!("home continuation {}: {e}", n + 1));
@@ -283,12 +302,18 @@ impl InnerTube {
             }
         }
         // Per-shelf "show more" tokens - fill Listen again / Quick picks / etc.
-        // Run them in parallel - sequentially this was one round-trip per shelf.
+        // Cap parallelism: expanding every shelf at once hammered the network
+        // on startup while Home was still settling.
         let mut set = tokio::task::JoinSet::new();
+        let mut expand_n = 0usize;
         for (i, s) in home.shelves.iter().enumerate() {
             if s.continuation.is_none() {
                 continue;
             }
+            if expand_n >= 4 {
+                break;
+            }
+            expand_n += 1;
             let it = self.clone();
             let mut shelf = s.clone();
             set.spawn(async move {
@@ -729,13 +754,16 @@ fn parse_shelf(val: &Value) -> Option<Shelf> {
         return None;
     }
     let kind = infer_shelf_kind(&items);
+    let continuation = contents
+        .and_then(|arr| continuation_token_from_list(arr))
+        .or_else(|| find_continuation(val));
     Some(Shelf {
         id: val["shelfId"].as_str().map(|s| s.to_string()),
         title,
         subtitle,
         kind,
         items,
-        continuation: find_continuation(val),
+        continuation,
     })
 }
 
@@ -1567,35 +1595,90 @@ fn response_has_account(v: &Value) -> bool {
 }
 
 fn find_page_continuation(v: &Value) -> Option<String> {
-    // Prefer the trailing continuationItemRenderer in list contents
-    // (YTM 2025+ puts the token as the last row, not under sectionList alone).
+    // Prefer playlist/library shelves and appendContinuationItemsAction -
+    // a deep walk of every `contents` array also hits unrelated UI (chips,
+    // related, voting) and used to feed reload / non-browse tokens into
+    // browse → HTTP 400 INVALID_ARGUMENT.
+    //
+    // Do NOT use musicShelfRenderer / musicCarouselShelfRenderer here: those
+    // hold per-shelf "show more" tokens. On Home that would steal the page
+    // continuation and break feed paging (or 400 on the wrong token).
+    let mut from_playlist = None;
+    walk(v, &mut |key, val| {
+        if matches!(
+            key,
+            "musicPlaylistShelfRenderer"
+                | "musicPlaylistShelfContinuation"
+                | "musicShelfContinuation"
+        ) {
+            if let Some(arr) = val["contents"]
+                .as_array()
+                .or_else(|| val["items"].as_array())
+            {
+                if let Some(t) = continuation_token_from_list(arr) {
+                    from_playlist = Some(t);
+                }
+            }
+            if from_playlist.is_none() {
+                from_playlist = next_continuation_data(&val["continuations"]);
+            }
+        }
+        if key == "appendContinuationItemsAction" {
+            if let Some(arr) = val["continuationItems"].as_array() {
+                if let Some(t) = continuation_token_from_list(arr) {
+                    from_playlist = Some(t);
+                }
+            }
+        }
+    });
+    if from_playlist.is_some() {
+        return from_playlist;
+    }
+
+    // Home / explore: trailing continuationItemRenderer as a direct child of
+    // sectionList / continuationItems (not nested inside a shelf).
     let mut from_list = None;
     walk(v, &mut |key, val| {
-        if key == "continuationItems" || key == "contents" || key == "items" {
-            if let Some(arr) = val.as_array() {
+        if key == "continuationItems" || key == "sectionListRenderer" {
+            let arr = if key == "sectionListRenderer" {
+                val["contents"].as_array()
+            } else {
+                val.as_array()
+            };
+            if let Some(arr) = arr {
                 if let Some(t) = continuation_token_from_list(arr) {
                     from_list = Some(t);
                 }
+            }
+            if from_list.is_none() && key == "sectionListRenderer" {
+                from_list = next_continuation_data(&val["continuations"]);
             }
         }
     });
     if from_list.is_some() {
         return from_list;
     }
-    let mut tok = None;
+
+    // Library song lists (FEmusic_liked_videos, etc.): token lives inside the
+    // sole musicShelfRenderer. Only reached when there is no page-level token,
+    // so Home's per-shelf "show more" tokens are not stolen as feed paging.
+    let mut from_shelf = None;
     walk(v, &mut |key, val| {
-        if tok.is_none() && key == "sectionListRenderer" {
-            if let Some(arr) = val["contents"].as_array() {
+        if key == "musicShelfRenderer" {
+            if let Some(arr) = val["contents"]
+                .as_array()
+                .or_else(|| val["items"].as_array())
+            {
                 if let Some(t) = continuation_token_from_list(arr) {
-                    tok = Some(t);
+                    from_shelf = Some(t);
                 }
             }
-            if tok.is_none() {
-                tok = find_continuation(&val["continuations"]);
+            if from_shelf.is_none() {
+                from_shelf = next_continuation_data(&val["continuations"]);
             }
         }
     });
-    tok.or_else(|| find_continuation(v))
+    from_shelf.or_else(|| next_continuation_data(v))
 }
 
 /// Token from the last `continuationItemRenderer` in a shelf/list (ytmusicapi 2025 shape).
@@ -1620,6 +1703,8 @@ fn token_from_continuation_item(r: &Value) -> Option<String> {
         }
     }
     // Nested under commandExecutorCommand (alongside voting refresh, etc.).
+    // Only CONTINUATION_REQUEST_TYPE_BROWSE is valid for /browse - other
+    // command types (watch next, reload) return 400 INVALID_ARGUMENT.
     if let Some(cmds) = r
         .pointer("/continuationEndpoint/commandExecutorCommand/commands")
         .and_then(|x| x.as_array())
@@ -1629,40 +1714,55 @@ fn token_from_continuation_item(r: &Value) -> Option<String> {
                 .pointer("/continuationCommand/request")
                 .and_then(|x| x.as_str())
                 .unwrap_or("");
-            if req == "CONTINUATION_REQUEST_TYPE_BROWSE"
-                || cmd.get("continuationCommand").is_some()
+            if req != "CONTINUATION_REQUEST_TYPE_BROWSE" {
+                continue;
+            }
+            if let Some(t) = cmd
+                .pointer("/continuationCommand/token")
+                .and_then(|x| x.as_str())
             {
-                if let Some(t) = cmd
-                    .pointer("/continuationCommand/token")
-                    .and_then(|x| x.as_str())
-                {
-                    if t.len() > 20 {
-                        return Some(t.to_string());
-                    }
+                if t.len() > 20 {
+                    return Some(t.to_string());
                 }
             }
         }
     }
-    find_continuation(r)
+    None
 }
 
 fn parse_continuation_items(v: &Value) -> (Vec<ShelfItem>, Option<String>) {
     let mut items = Vec::new();
     let mut list_tok = None;
-    walk(v, &mut |key, val| {
-        if key == "continuationItems" || key == "contents" || key == "items" {
-            if let Some(arr) = val.as_array() {
-                if let Some(t) = continuation_token_from_list(arr) {
-                    list_tok = Some(t);
-                }
-                for c in arr {
-                    if let Some(it) = parse_item(c) {
-                        items.push(it);
+    // Prefer the dedicated continuation payload when present.
+    if let Some(arr) = v
+        .pointer("/onResponseReceivedActions/0/appendContinuationItemsAction/continuationItems")
+        .and_then(|x| x.as_array())
+    {
+        list_tok = continuation_token_from_list(arr);
+        for c in arr {
+            if let Some(it) = parse_item(c) {
+                items.push(it);
+            }
+        }
+    }
+    if items.is_empty() {
+        walk(v, &mut |key, val| {
+            if key == "continuationItems" || key == "contents" || key == "items" {
+                if let Some(arr) = val.as_array() {
+                    if list_tok.is_none() {
+                        if let Some(t) = continuation_token_from_list(arr) {
+                            list_tok = Some(t);
+                        }
+                    }
+                    for c in arr {
+                        if let Some(it) = parse_item(c) {
+                            items.push(it);
+                        }
                     }
                 }
             }
-        }
-    });
+        });
+    }
     if items.is_empty() {
         let mut shelves = Vec::new();
         collect_shelves(v, &mut shelves);
@@ -1685,32 +1785,49 @@ fn parse_continuation_items(v: &Value) -> (Vec<ShelfItem>, Option<String>) {
     )
 }
 
-fn find_continuation(v: &Value) -> Option<String> {
+/// Legacy `continuations[].nextContinuationData` only - never reload tokens.
+fn next_continuation_data(v: &Value) -> Option<String> {
     let mut tok = None;
     walk(v, &mut |key, val| {
-        if tok.is_none() {
-            if key == "continuation" && val.is_string() {
-                if let Some(s) = val.as_str() {
-                    if s.len() > 20 {
-                        tok = Some(s.to_string());
-                    }
-                }
-            }
-            if key == "nextContinuationData" {
-                if let Some(s) = val["continuation"].as_str() {
+        if tok.is_none() && key == "nextContinuationData" {
+            if let Some(s) = val["continuation"].as_str() {
+                if s.len() > 20 {
                     tok = Some(s.to_string());
-                }
-            }
-            if key == "continuationCommand" {
-                if let Some(s) = val["token"].as_str() {
-                    if s.len() > 20 {
-                        tok = Some(s.to_string());
-                    }
                 }
             }
         }
     });
     tok
+}
+
+fn find_continuation(v: &Value) -> Option<String> {
+    // Shelf "show more": last continuationItemRenderer, else nextContinuationData.
+    // Do NOT grab the first bare `"continuation"` string - that often belongs to
+    // reloadContinuationData and /browse rejects it with 400 INVALID_ARGUMENT.
+    if let Some(arr) = v["contents"]
+        .as_array()
+        .or_else(|| v["items"].as_array())
+    {
+        if let Some(t) = continuation_token_from_list(arr) {
+            return Some(t);
+        }
+    }
+    next_continuation_data(v).or_else(|| {
+        let mut tok = None;
+        walk(v, &mut |key, val| {
+            if tok.is_none() && key == "continuationCommand" {
+                let req = val["request"].as_str().unwrap_or("CONTINUATION_REQUEST_TYPE_BROWSE");
+                if req == "CONTINUATION_REQUEST_TYPE_BROWSE" {
+                    if let Some(s) = val["token"].as_str() {
+                        if s.len() > 20 {
+                            tok = Some(s.to_string());
+                        }
+                    }
+                }
+            }
+        });
+        tok
+    })
 }
 
 // Silence unused import warnings if PlaylistCard etc. unused
@@ -1761,7 +1878,6 @@ impl InnerTube {
         let (mut tracks, mut cards, mut artists) = parse_library_page(&v);
         let mut tok = find_page_continuation(&v);
         let mut prev_tok: Option<String> = None;
-        let mut stagnant = 0u32;
         for n in 0..80 {
             let Some(token) = tok.take() else {
                 break;
@@ -1776,9 +1892,14 @@ impl InnerTube {
             prev_tok = Some(token.clone());
             // A single transient failure (rate limit, dropped connection)
             // used to end the paging here and leave only the first 100 tracks.
+            // Do not retry hard 400 INVALID_ARGUMENT - that is a bad token.
             let mut page = self.browse_continuation(&token).await;
             for attempt in 1..=3u64 {
                 if page.is_ok() {
+                    break;
+                }
+                let msg = page.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+                if msg.contains("HTTP 400") || msg.contains("INVALID_ARGUMENT") {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(400 * attempt)).await;
@@ -1835,27 +1956,24 @@ impl InnerTube {
                     artists = dedup_artists(artists);
                     let after = tracks.len() + cards.len() + artists.len();
                     crate::diag::log(format!(
-                        "library_browse {browse_id} continuation {}: +{} items (tracks={})",
+                        "library_browse {browse_id} continuation {}: +{} items (tracks={}, token {} chars)",
                         n + 1,
                         after.saturating_sub(before),
-                        tracks.len()
+                        tracks.len(),
+                        token.len()
                     ));
-                    tok = next.or_else(|| find_page_continuation(&more));
+                    // ytmusicapi stops on an empty continuation page - chasing
+                    // another token from a ~1KB empty body is what produced 400s.
                     if after == before {
-                        stagnant += 1;
-                        // One empty/dup page with a fresh token can happen;
-                        // two in a row means we're looping.
-                        if stagnant >= 2 || tok.is_none() {
-                            break;
-                        }
-                    } else {
-                        stagnant = 0;
+                        break;
                     }
+                    tok = next.or_else(|| find_page_continuation(&more));
                 }
                 Err(e) => {
                     crate::diag::log(format!(
-                        "library_browse {browse_id} continuation {}: {e}",
-                        n + 1
+                        "library_browse {browse_id} continuation {}: {e} (token {} chars)",
+                        n + 1,
+                        token.len()
                     ));
                     break;
                 }
@@ -2013,4 +2131,117 @@ fn dedup_artists(mut v: Vec<ArtistCard>) -> Vec<ArtistCard> {
     let mut seen = std::collections::HashSet::new();
     v.retain(|t| !t.id.is_empty() && seen.insert(t.id.clone()));
     v
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ignores_reload_continuation_data() {
+        let v = json!({
+            "continuations": [{
+                "reloadContinuationData": {
+                    "continuation": "RELOAD_TOKEN_THAT_IS_LONG_ENOUGH_TO_PASS_LEN_CHECK_XXXX"
+                }
+            }]
+        });
+        assert!(find_continuation(&v).is_none());
+        assert!(find_page_continuation(&v).is_none());
+    }
+
+    #[test]
+    fn prefers_next_continuation_data() {
+        let v = json!({
+            "continuations": [
+                {
+                    "reloadContinuationData": {
+                        "continuation": "RELOAD_TOKEN_THAT_IS_LONG_ENOUGH_TO_PASS_LEN_CHECK_XXXX"
+                    }
+                },
+                {
+                    "nextContinuationData": {
+                        "continuation": "NEXT_TOKEN_THAT_IS_LONG_ENOUGH_TO_PASS_LEN_CHECK_YYYYY"
+                    }
+                }
+            ]
+        });
+        assert_eq!(
+            find_continuation(&v).as_deref(),
+            Some("NEXT_TOKEN_THAT_IS_LONG_ENOUGH_TO_PASS_LEN_CHECK_YYYYY")
+        );
+    }
+
+    #[test]
+    fn command_executor_requires_browse_type() {
+        let r = json!({
+            "continuationEndpoint": {
+                "commandExecutorCommand": {
+                    "commands": [{
+                        "continuationCommand": {
+                            "request": "CONTINUATION_REQUEST_TYPE_WATCH_NEXT",
+                            "token": "WATCH_NEXT_TOKEN_LONG_ENOUGH_TO_PASS_LEN_CHECK_ZZZZ"
+                        }
+                    }]
+                }
+            }
+        });
+        assert!(token_from_continuation_item(&r).is_none());
+
+        let r = json!({
+            "continuationEndpoint": {
+                "commandExecutorCommand": {
+                    "commands": [{
+                        "continuationCommand": {
+                            "request": "CONTINUATION_REQUEST_TYPE_BROWSE",
+                            "token": "BROWSE_TOKEN_LONG_ENOUGH_TO_PASS_LEN_CHECK_AAAAAA"
+                        }
+                    }]
+                }
+            }
+        });
+        assert_eq!(
+            token_from_continuation_item(&r).as_deref(),
+            Some("BROWSE_TOKEN_LONG_ENOUGH_TO_PASS_LEN_CHECK_AAAAAA")
+        );
+    }
+
+    #[test]
+    fn playlist_shelf_token_beats_nested_noise() {
+        let v = json!({
+            "contents": {
+                "singleColumnBrowseResultsRenderer": {
+                    "tabs": [{
+                        "tabRenderer": {
+                            "content": {
+                                "sectionListRenderer": {
+                                    "contents": [{
+                                        "musicPlaylistShelfRenderer": {
+                                            "contents": [
+                                                { "musicResponsiveListItemRenderer": { "playlistItemData": { "videoId": "abcdefghijk" } } },
+                                                {
+                                                    "continuationItemRenderer": {
+                                                        "continuationEndpoint": {
+                                                            "continuationCommand": {
+                                                                "token": "PLAYLIST_PAGE_TOKEN_LONG_ENOUGH_TO_PASS_LEN_CHECK"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }]
+                                }
+                            }
+                        }
+                    }]
+                }
+            }
+        });
+        assert_eq!(
+            find_page_continuation(&v).as_deref(),
+            Some("PLAYLIST_PAGE_TOKEN_LONG_ENOUGH_TO_PASS_LEN_CHECK")
+        );
+    }
 }

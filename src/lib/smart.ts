@@ -38,6 +38,9 @@ export interface SmartPlaylist {
   rules: SmartRules;
 }
 
+/** Starter card on the empty page: same payload as a playlist, plus plain-language blurb. */
+export type SmartPreset = Omit<SmartPlaylist, 'id'> & { blurb: string };
+
 export const DEFAULT_RULES: SmartRules = {
   sources: ['liked', 'history', 'downloads'],
   bpmMin: null,
@@ -55,12 +58,28 @@ export const DEFAULT_RULES: SmartRules = {
 };
 
 /** Ready-made starting points shown on the empty page. */
-export function presets(): Omit<SmartPlaylist, 'id'>[] {
+export function presets(): SmartPreset[] {
   return [
-    { name: 'Top 50 this month', rules: { ...DEFAULT_RULES, sources: ['history'], minPlays: 1, playsDays: 30, sort: 'plays', limit: 50 } },
-    { name: '120-130 BPM', rules: { ...DEFAULT_RULES, bpmMin: 120, bpmMax: 130, bpmFold: true, sort: 'bpm_asc', limit: 0 } },
-    { name: 'Never played likes', rules: { ...DEFAULT_RULES, sources: ['liked'], neverPlayed: true, sort: 'random', limit: 100 } },
-    { name: 'Forgotten favourites', rules: { ...DEFAULT_RULES, sources: ['history'], minPlays: 3, playsDays: 0, notPlayedDays: 60, sort: 'plays', limit: 50 } },
+    {
+      name: 'Top 50 this month',
+      blurb: 'What you played most in the last 30 days.',
+      rules: { ...DEFAULT_RULES, sources: ['history'], minPlays: 1, playsDays: 30, sort: 'plays', limit: 50 },
+    },
+    {
+      name: '120-130 BPM',
+      blurb: 'A steady mid-tempo set from songs Tarn has measured.',
+      rules: { ...DEFAULT_RULES, bpmMin: 120, bpmMax: 130, bpmFold: true, sort: 'bpm_asc', limit: 0 },
+    },
+    {
+      name: 'Never played likes',
+      blurb: 'Liked songs you have not listened to yet.',
+      rules: { ...DEFAULT_RULES, sources: ['liked'], neverPlayed: true, sort: 'random', limit: 100 },
+    },
+    {
+      name: 'Forgotten favourites',
+      blurb: 'Songs you used to play a lot, quiet for 60 days.',
+      rules: { ...DEFAULT_RULES, sources: ['history'], minPlays: 3, playsDays: 0, notPlayedDays: 60, sort: 'plays', limit: 50 },
+    },
   ];
 }
 
@@ -188,20 +207,20 @@ export function evaluate(rules: SmartRules, pool: Pool, ctx: SmartContext): Trac
   return rules.limit > 0 ? out.slice(0, rules.limit) : out;
 }
 
-/** Short human summary of the rules, e.g. "120-130 BPM · never played". */
+/** Plain-language summary of the rules for list headers and cards. */
 export function describe(r: SmartRules, t: (s: string, v?: Record<string, string | number>) => string): string {
   const parts: string[] = [];
   if (r.bpmMin != null || r.bpmMax != null) {
     parts.push(r.bpmMin != null && r.bpmMax != null
       ? t('{a}-{b} BPM', { a: r.bpmMin, b: r.bpmMax })
-      : r.bpmMin != null ? t('≥ {a} BPM', { a: r.bpmMin }) : t('≤ {b} BPM', { b: r.bpmMax ?? 0 }));
+      : r.bpmMin != null ? t('{a}+ BPM', { a: r.bpmMin }) : t('up to {b} BPM', { b: r.bpmMax ?? 0 }));
   }
   if (r.neverPlayed) parts.push(t('never played'));
   if (r.minPlays > 0) parts.push(r.playsDays > 0
-    ? t('{n}+ plays in {d} days', { n: r.minPlays, d: r.playsDays })
-    : t('{n}+ plays', { n: r.minPlays }));
-  if (r.notPlayedDays > 0) parts.push(t('not played in {d} days', { d: r.notPlayedDays }));
-  if (r.artist.trim()) parts.push(t('artist: {a}', { a: r.artist.trim() }));
-  if (r.limit > 0) parts.push(t('max {n}', { n: r.limit }));
-  return parts.join(' · ') || t('All songs');
+    ? t('played {n}+ times in {d} days', { n: r.minPlays, d: r.playsDays })
+    : t('played {n}+ times', { n: r.minPlays }));
+  if (r.notPlayedDays > 0) parts.push(t('quiet for {d}+ days', { d: r.notPlayedDays }));
+  if (r.artist.trim()) parts.push(t('artist includes “{a}”', { a: r.artist.trim() }));
+  if (r.limit > 0) parts.push(t('up to {n} songs', { n: r.limit }));
+  return parts.join(', ') || t('Everything in your library');
 }

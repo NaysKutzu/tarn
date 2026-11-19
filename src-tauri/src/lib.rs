@@ -14,6 +14,7 @@ mod login;
 mod mix;
 mod transition;
 mod stats;
+mod jumplist;
 mod analysis;
 mod lrclib;
 mod key;
@@ -25,6 +26,10 @@ mod mpris;
 mod discord;
 #[cfg(desktop)]
 mod tray;
+#[cfg(windows)]
+mod thumbbar;
+#[cfg(target_os = "macos")]
+mod dock;
 #[cfg(desktop)]
 mod remote;
 mod jam;
@@ -101,6 +106,11 @@ pub struct App {
     /// Serialises library loads; callers that waited reuse the fresh result.
     library_slot: tokio::sync::Mutex<(u64, Option<Library>)>,
     library_calls: std::sync::atomic::AtomicU64,
+    /// Serialises default Home loads (no chip params) so refresh spam shares one fetch.
+    home_slot: tokio::sync::Mutex<(u64, Option<Home>)>,
+    home_calls: std::sync::atomic::AtomicU64,
+    /// Set when `restore_session` finishes (ok or empty) so Home doesn't race cookies.
+    session_ready: std::sync::atomic::AtomicBool,
     /// Seed id currently being fetched for autoplay queue growth.
     autoplay_fetching: Mutex<Option<String>>,
     /// Video ids known to be in Liked Music (from library + like toggles).
@@ -114,6 +124,8 @@ pub struct App {
     blend_retry: Mutex<Option<std::time::Instant>>,
     /// Local listening history for the Stats page.
     pub stats: stats::Stats,
+    /// Recently played tracks for the Windows taskbar Jump List.
+    pub recent: jumplist::Recent,
     /// Per-track loudness / beat-grid cache.
     pub analysis: std::sync::Arc<analysis::Analyzer>,
     /// SponsorBlock "music_offtopic" segments (used when the setting is on).
@@ -175,6 +187,9 @@ impl App {
             player.set_repeat(&sess.repeat);
         }
         let stats = stats::Stats::open(store.data_dir(), settings.listening_stats);
+        let recent = jumplist::Recent::open(store.data_dir());
+        // First run / empty file: fill from the local listen log.
+        recent.seed_from_listens(&stats.listens(0));
         Ok(Self {
             ytm,
             player,
@@ -191,6 +206,9 @@ impl App {
             skip_fails: std::sync::atomic::AtomicU32::new(0),
             library_slot: tokio::sync::Mutex::new((0, None)),
             library_calls: std::sync::atomic::AtomicU64::new(0),
+            home_slot: tokio::sync::Mutex::new((0, None)),
+            home_calls: std::sync::atomic::AtomicU64::new(0),
+            session_ready: std::sync::atomic::AtomicBool::new(is_mock()),
             autoplay_fetching: Mutex::new(None),
             liked_ids: Mutex::new(std::collections::HashSet::new()),
             liked_tracks: Mutex::new(Vec::new()),
@@ -198,6 +216,7 @@ impl App {
             net_down: std::sync::atomic::AtomicBool::new(false),
             blend_retry: Mutex::new(None),
             stats,
+            recent,
             analysis,
             sponsorblock: sponsorblock::SponsorBlock::new(),
         })
@@ -246,9 +265,28 @@ impl App {
         }
     }
 
+    /// Replace the liked-id set from a full Liked Music snapshot.
+    /// Insert-only refresh left unliked ids sticky for the whole session.
+    /// An empty replace is ignored so a failed/partial library fetch cannot
+    /// wipe every heart mid-play (that made likes flash then disappear).
     pub fn remember_liked_tracks(&self, tracks: Vec<Track>) {
-        self.remember_liked(tracks.iter().map(|t| t.id.clone()));
+        if tracks.is_empty() {
+            return;
+        }
+        let mut g = self.liked_ids.lock();
+        g.clear();
+        for t in &tracks {
+            if !t.id.is_empty() {
+                g.insert(t.id.clone());
+            }
+        }
+        drop(g);
         *self.liked_tracks.lock() = tracks;
+    }
+
+    pub fn clear_liked(&self) {
+        self.liked_ids.lock().clear();
+        self.liked_tracks.lock().clear();
     }
 
     pub fn liked_music_snapshot(&self) -> Option<Collection> {
@@ -395,6 +433,8 @@ fn mock_library() -> Library {
 
 async fn restore_session(app: &App) {
     if is_mock() {
+        app.session_ready
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         return;
     }
     match app.store.load() {
@@ -402,27 +442,41 @@ async fn restore_session(app: &App) {
             if auth::session_ready_from_header(&header) {
                 if let Err(e) = app.ytm.set_cookie_header(Some(header)).await {
                     eprintln!("restore session: {e}");
-                    return;
+                } else {
+                    let account = app.ytm.account().await.ok().flatten();
+                    if account.is_none() {
+                        eprintln!("restore session: account menu looks logged out; clearing");
+                        let _ = app.ytm.set_cookie_header(None).await;
+                        let _ = app.store.clear();
+                    } else {
+                        let mut a = app.auth.lock();
+                        a.signed_in = true;
+                        a.mock = false;
+                        a.account = account;
+                        a.store = Some(match kind {
+                            auth::StoreKind::Keyring => "keyring".into(),
+                            auth::StoreKind::EncryptedFile => "encrypted_file".into(),
+                        });
+                    }
                 }
-                let account = app.ytm.account().await.ok().flatten();
-                if account.is_none() {
-                    eprintln!("restore session: account menu looks logged out; clearing");
-                    let _ = app.ytm.set_cookie_header(None).await;
-                    let _ = app.store.clear();
-                    return;
-                }
-                let mut a = app.auth.lock();
-                a.signed_in = true;
-                a.mock = false;
-                a.account = account;
-                a.store = Some(match kind {
-                    auth::StoreKind::Keyring => "keyring".into(),
-                    auth::StoreKind::EncryptedFile => "encrypted_file".into(),
-                });
             }
         }
         Ok(None) => {}
         Err(e) => eprintln!("session load: {e}"),
+    }
+    app.session_ready
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+async fn wait_session_ready(app: &App) {
+    for _ in 0..100 {
+        if app
+            .session_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
     }
 }
 
@@ -447,12 +501,202 @@ async fn search_all(app: State<'_, Arc<App>>, query: String) -> Result<SearchRes
 #[tauri::command]
 async fn get_home(
     app: State<'_, Arc<App>>,
+    handle: tauri::AppHandle,
     params: Option<String>,
 ) -> Result<Home, String> {
-    app.ytm
-        .home(params.as_deref())
-        .await
-        .map_err(|e| e.to_string())
+    // Chip filters are one-shot; default Home is single-flight + disk-cached.
+    if params.is_some() {
+        wait_session_ready(&app).await;
+        return app
+            .ytm
+            .home(params.as_deref(), |_| {})
+            .await
+            .map_err(|e| e.to_string());
+    }
+
+    // Don't race session restore - that was painting a logged-out 3-shelf Home
+    // over the personalized cache (Listen again / New releases / …).
+    wait_session_ready(&app).await;
+    for _ in 0..30 {
+        let signed = app.auth.lock().signed_in;
+        let cookies = app.ytm.cookie_header().is_some();
+        if cookies || !signed {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+
+    let ticket = app
+        .home_calls
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let mut slot = app.home_slot.lock().await;
+    let home = match &slot.1 {
+        Some(h) if slot.0 > ticket && home_feed_ok(h) => h.clone(),
+        _ => {
+            let handle2 = handle.clone();
+            let h = app
+                .ytm
+                .home(None, move |partial| {
+                    if home_feed_ok(partial) {
+                        let _ = handle2.emit("home-partial", partial.clone());
+                    }
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            slot.0 = app
+                .home_calls
+                .load(std::sync::atomic::Ordering::SeqCst);
+            slot.1 = Some(h.clone());
+            save_home_cache(&app, &h);
+            h
+        }
+    };
+    // Mix-art placeholders need a few `next` lookups - do them after the UI
+    // already has Home, then push a partial with real covers.
+    if home.signed_in {
+        let app2 = app.inner().clone();
+        let handle2 = handle.clone();
+        let mut home2 = home.clone();
+        tauri::async_runtime::spawn(async move {
+            app2.ytm.fill_mix_covers(&mut home2).await;
+            if home_feed_ok(&home2) {
+                {
+                    let mut slot = app2.home_slot.lock().await;
+                    if let Some(cur) = slot.1.as_mut() {
+                        // Keep shelf structure; only patch covers we resolved.
+                        for (i, sh) in home2.shelves.iter().enumerate() {
+                            if let Some(dst) = cur.shelves.get_mut(i) {
+                                for (j, it) in sh.items.iter().enumerate() {
+                                    if let Some(slot_it) = dst.items.get_mut(j) {
+                                        if slot_it.id == it.id {
+                                            if let Some(c) = it.cover.clone() {
+                                                slot_it.cover = Some(c);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        home2 = cur.clone();
+                    }
+                }
+                save_home_cache(&app2, &home2);
+                let _ = handle2.emit("home-partial", home2);
+            }
+        });
+    }
+    Ok(home)
+}
+
+/// Personalized Home is usually fat; a 3-shelf Throwback/Quick picks blob is
+/// the logged-out race we must not treat as a successful refresh.
+pub(crate) fn home_feed_ok(h: &Home) -> bool {
+    if h.shelves.is_empty() {
+        return false;
+    }
+    if h.shelves.len() >= 6 {
+        return true;
+    }
+    h.shelves.iter().any(|s| {
+        let t = s.title.to_lowercase();
+        t.contains("listen again")
+            || t.contains("mixed for you")
+            || t.contains("forgotten")
+            || t.contains("covers and remix")
+            || t.contains("daily discover")
+            || t.contains("new release")
+    })
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct HomeCacheFile {
+    account: Option<String>,
+    home: Home,
+}
+
+fn home_cache_path(app: &App) -> std::path::PathBuf {
+    app.store.data_dir().join("home-cache.json")
+}
+
+fn save_home_cache(app: &App, home: &Home) {
+    if !home_feed_ok(home) {
+        crate::diag::log(format!(
+            "home cache: skip thin feed ({} shelves)",
+            home.shelves.len()
+        ));
+        return;
+    }
+    let account = app.auth.lock().account.as_ref().map(|a| a.name.clone());
+    // Don't persist a logged-out snapshot over a signed-in account.
+    if account.is_some() && !home.signed_in {
+        return;
+    }
+    // Keep a richer disk snapshot if this live result is thinner.
+    if let Ok(bytes) = std::fs::read(home_cache_path(app)) {
+        if let Ok(prev) = serde_json::from_slice::<HomeCacheFile>(&bytes) {
+            if prev.home.shelves.len() > home.shelves.len().saturating_add(2) {
+                crate::diag::log(format!(
+                    "home cache: keep richer snapshot ({} > {} shelves)",
+                    prev.home.shelves.len(),
+                    home.shelves.len()
+                ));
+                return;
+            }
+        }
+    }
+    let path = home_cache_path(app);
+    let file = HomeCacheFile {
+        account,
+        home: home.clone(),
+    };
+    if let Ok(json) = serde_json::to_vec(&file) {
+        std::thread::spawn(move || {
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        });
+    }
+}
+
+/// Instant Home paint while the live feed refreshes in the background.
+#[tauri::command]
+fn get_home_cached(app: State<'_, Arc<App>>) -> Option<Home> {
+    let bytes = std::fs::read(home_cache_path(&app)).ok()?;
+    let file: HomeCacheFile = serde_json::from_slice(&bytes).ok()?;
+    if file.home.shelves.is_empty() {
+        return None;
+    }
+    let auth = app.auth.lock();
+    let name = auth.account.as_ref().map(|a| a.name.clone());
+    let signed = auth.signed_in;
+    drop(auth);
+    if signed {
+        match (name.as_deref(), file.account.as_deref()) {
+            // Same account.
+            (Some(n), Some(a)) if n == a => Some(file.home),
+            // Different named account - never flash the wrong feed.
+            (Some(_), Some(_)) => None,
+            // Account name not restored yet, or cache written before name landed:
+            // still paint the last signed-in snapshot so Home isn't blank.
+            (_, _) if file.home.signed_in => Some(file.home),
+            _ => None,
+        }
+    } else if file.account.is_none() && !file.home.signed_in {
+        Some(file.home)
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
+fn clear_home_cache(app: State<'_, Arc<App>>) -> Result<(), String> {
+    let path = home_cache_path(&app);
+    let _ = std::fs::remove_file(path);
+    if let Ok(mut slot) = app.home_slot.try_lock() {
+        slot.1 = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -478,6 +722,12 @@ async fn get_new_releases(app: State<'_, Arc<App>>) -> Result<Home, String> {
 #[tauri::command]
 async fn get_artist(app: State<'_, Arc<App>>, id: String) -> Result<ArtistPage, String> {
     app.ytm.artist(&id).await.map_err(|e| e.to_string())
+}
+
+/// Lightweight artist portrait for Stats (and similar) - no full page payload.
+#[tauri::command]
+async fn get_artist_cover(app: State<'_, Arc<App>>, id: String) -> Result<Option<String>, String> {
+    app.ytm.artist_cover(&id).await.map_err(|e| e.to_string())
 }
 
 /// Session restore runs in the background after launch. A page restored from
@@ -644,6 +894,24 @@ pub(crate) async fn start_playback(
     start_playback_at(app, track, queue, index, 0.0, false, true, false).await
 }
 
+/// Jump List / second-instance `--play <id>`: look up metadata we stored, then play.
+fn play_from_jumplist(handle: AppHandle, app: Arc<App>, id: String) {
+    tauri::async_runtime::spawn(async move {
+        let mut track = app.recent.get(&id).unwrap_or_else(|| Track {
+            id: id.clone(),
+            title: id.clone(),
+            ..Default::default()
+        });
+        track.ensure_cover();
+        let queue = vec![track.clone()];
+        if let Err(e) = start_playback(&app, track, queue, 0).await {
+            eprintln!("jumplist play {id}: {e}");
+            *app.pending_toast.lock() = Some(format!("Couldn't play from Jump List: {e}"));
+        }
+        let _ = handle.emit("player", app.player.snapshot());
+    });
+}
+
 pub(crate) async fn start_playback_at(
     app: &App,
     track: Track,
@@ -705,12 +973,44 @@ pub(crate) async fn start_playback_at(
     } else {
         crate::player::PlayStyle::Fresh
     };
-    if let Some(d) = track.duration {
-        app.player.set_duration(d as f64);
+    if manual {
+        // After the decision so a resolve retry cannot trip the rapid window.
+        app.player.note_manual_nav();
     }
-    // Keep heart state if this id is already in Liked Music.
-    app.apply_known_rating(&id);
-    app.player.prepare(track.clone(), queue.clone(), index, start, true);
+    diag::log(format!(
+        "play: {:?}{} {} → {}",
+        style,
+        if manual { " (manual)" } else { "" },
+        snap.track.as_ref().map(|t| t.id.as_str()).unwrap_or("-"),
+        track.id,
+    ));
+    // Overlap styles: keep the outgoing UI/clock until the mixer starts the
+    // fade (same idea as natural end-blend). Swapping early made the seek bar
+    // jump to the end of the next song while the old one was still audible.
+    let defer_ui = matches!(
+        style,
+        crate::player::PlayStyle::Crossfade(_) | crate::player::PlayStyle::Cut
+    ) && snap.playing
+        && snap.track.is_some();
+    // Heart follows the audible/UI track. During crossfade/cut the outgoing
+    // title stays on screen, so stash the next rating and apply it on adopt.
+    // For Fresh/Armed, apply *after* prepare so we don't briefly keep the
+    // previous track's heart (prepare leaves liked untouched).
+    let known_liked = app.is_liked_id(&id);
+    if defer_ui {
+        app.player.set_pending_rating(known_liked, false);
+    }
+    let index = if defer_ui {
+        app.player.begin_manual_blend(queue.clone(), index)
+    } else {
+        if let Some(d) = track.duration {
+            app.player.set_duration(d as f64);
+        }
+        app.player
+            .prepare(track.clone(), queue.clone(), index, start, true);
+        app.apply_known_rating(&id);
+        index
+    };
     let gen = app.player.play_gen();
 
     // Cover/accent is decorative - never block the play path on it.
@@ -733,14 +1033,28 @@ pub(crate) async fn start_playback_at(
             if app.player.play_gen() != gen {
                 return Ok(());
             }
-            if let Some(d) = stream.duration {
-                app.player.set_duration(d);
+            let next_dur = stream.duration;
+            if !defer_ui {
+                if let Some(d) = next_dur {
+                    app.player.set_duration(d);
+                    app.player.fill_track_duration(&id, d);
+                }
+            } else if let Some(d) = next_dur {
+                // Don't touch the outgoing duration; stash on the body so the
+                // first snapshot after adopt is right.
                 app.player.fill_track_duration(&id, d);
             }
             match app.ytm.start_audio(&id, &stream).await {
                 Ok(audio) => {
                     if app.player.play_gen() != gen {
                         return Ok(());
+                    }
+                    if defer_ui {
+                        if let Some(d) = next_dur {
+                            audio.set_duration(d);
+                            track.duration = Some(d.round().max(0.0) as u32);
+                        }
+                        app.player.queue_adopt(track.clone(), index);
                     }
                     let r = app
                         .player
@@ -752,6 +1066,14 @@ pub(crate) async fn start_playback_at(
                     }
                     if r.is_ok() {
                         app.skip_fails.store(0, std::sync::atomic::Ordering::Relaxed);
+                        if defer_ui {
+                            if let Some(d) = next_dur {
+                                // If adopt already flushed, keep duration in sync.
+                                app.player.set_duration(d);
+                            }
+                        }
+                    } else if defer_ui {
+                        app.player.clear_blending();
                     }
                     prefetch_ahead(app, &queue, index);
                     r
@@ -759,6 +1081,9 @@ pub(crate) async fn start_playback_at(
                 Err(e) => {
                     if app.player.play_gen() != gen {
                         return Ok(());
+                    }
+                    if defer_ui {
+                        app.player.clear_blending();
                     }
                     let msg = short_err(&e.to_string());
                     playback_failed(app, &track, msg, skip_on_fail).await
@@ -768,6 +1093,9 @@ pub(crate) async fn start_playback_at(
         Err(e) => {
             if app.player.play_gen() != gen {
                 return Ok(());
+            }
+            if defer_ui {
+                app.player.clear_blending();
             }
             let msg = short_err(&e.to_string());
             playback_failed(app, &track, msg, skip_on_fail).await
@@ -953,13 +1281,28 @@ pub(crate) fn analyze_prefetched(ytm: &std::sync::Arc<Ytm>, player: &Player, id:
 #[cfg(desktop)]
 #[tauri::command]
 async fn remote_start(app: State<'_, Arc<App>>, handle: AppHandle) -> Result<remote::RemoteInfo, String> {
-    Ok(remote::start(app.inner().clone(), handle).await)
+    let info = remote::start(app.inner().clone(), handle).await;
+    if info.running {
+        let mut s = app.settings.lock().clone();
+        if !s.phone_remote {
+            s.phone_remote = true;
+            save_settings(app.store.data_dir(), &s);
+            *app.settings.lock() = s;
+        }
+    }
+    Ok(info)
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn remote_stop() {
+fn remote_stop(app: State<'_, Arc<App>>) {
     remote::stop();
+    let mut s = app.settings.lock().clone();
+    if s.phone_remote {
+        s.phone_remote = false;
+        save_settings(app.store.data_dir(), &s);
+        *app.settings.lock() = s;
+    }
 }
 
 #[cfg(desktop)]
@@ -1335,6 +1678,17 @@ async fn like_track(
         };
         app.player.set_rating(st.liked, st.disliked);
         app.set_liked_id(&id, st.liked);
+        if st.liked {
+            if let Some(t) = track.clone() {
+                let mut g = app.liked_tracks.lock();
+                if !g.iter().any(|x| x.id == t.id) {
+                    g.insert(0, t);
+                }
+            }
+        } else {
+            app.liked_tracks.lock().retain(|t| t.id != id);
+        }
+        patch_library_liked(&app, &id, st.liked, track.as_ref()).await;
         return Ok(st);
     }
     let st = app
@@ -1347,7 +1701,7 @@ async fn like_track(
     if st.liked {
         // Show the new like in the Liked Music list right away instead of
         // waiting for the next library reload (the list is a cached snapshot).
-        if let Some(t) = track {
+        if let Some(t) = track.clone() {
             let mut g = app.liked_tracks.lock();
             if !g.iter().any(|x| x.id == t.id) {
                 g.insert(0, t);
@@ -1356,6 +1710,9 @@ async fn like_track(
     } else {
         app.liked_tracks.lock().retain(|t| t.id != id);
     }
+    // Keep the in-memory library slot + disk cache in sync so a later paint
+    // (or the player "known liked" fallback) does not revive a removed like.
+    patch_library_liked(&app, &id, st.liked, track.as_ref()).await;
     Ok(st)
 }
 
@@ -1437,15 +1794,54 @@ fn save_library_cache(app: &App, lib: &Library) {
     }
 }
 
+async fn patch_library_liked(app: &App, id: &str, liked: bool, track: Option<&Track>) {
+    let mut slot = app.library_slot.lock().await;
+    let Some(lib) = slot.1.as_mut() else {
+        return;
+    };
+    if liked {
+        if let Some(t) = track {
+            if !lib.liked.iter().any(|x| x.id == t.id) {
+                lib.liked.insert(0, t.clone());
+            }
+        }
+    } else {
+        lib.liked.retain(|t| t.id != id);
+    }
+    save_library_cache(app, lib);
+}
+
 /// Last full library from disk, for an instant sidebar / Liked list while
-/// the fresh one loads. Only returned for the account that saved it.
+/// the fresh one loads. Prefer the matching account; if auth has no name
+/// yet (session still settling), still return a signed-in cache so the
+/// playlist sidebar is not skeletons for seconds.
 #[tauri::command]
 fn get_library_cached(app: State<'_, Arc<App>>) -> Option<Library> {
-    let name = app.auth.lock().account.as_ref().map(|a| a.name.clone())?;
+    let auth = app.auth.lock().clone();
+    if !auth.signed_in {
+        return None;
+    }
     let bytes = std::fs::read(library_cache_path(&app)).ok()?;
     let lib: Library = serde_json::from_slice(&bytes).ok()?;
-    if lib.account.as_ref().map(|a| a.name.as_str()) != Some(name.as_str()) {
+    if !lib.signed_in {
         return None;
+    }
+    if let Some(name) = auth.account.as_ref().map(|a| a.name.as_str()) {
+        if let Some(saved) = lib.account.as_ref().map(|a| a.name.as_str()) {
+            if saved != name {
+                return None;
+            }
+        }
+    }
+    if lib.playlists.is_empty() && lib.liked.is_empty() {
+        return None;
+    }
+    // Seed hearts before the full library round-trip finishes.
+    if !lib.liked.is_empty() {
+        app.remember_liked_tracks(lib.liked.clone());
+        if let Some(id) = app.player.snapshot().track.as_ref().map(|t| t.id.clone()) {
+            app.apply_known_rating(&id);
+        }
     }
     Some(lib)
 }
@@ -1598,6 +1994,8 @@ async fn sign_out(app: State<'_, Arc<App>>) -> Result<(), String> {
     let _ = app.store.clear();
     let _ = app.ytm.set_cookie_header(None).await;
     *app.auth.lock() = AuthStatus::default();
+    app.clear_liked();
+    app.player.set_rating(false, false);
     Ok(())
 }
 
@@ -1611,6 +2009,9 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     let mut settings = settings;
     // Keep the one-shot flag so a later load does not flip the user off again.
     settings.notifications_migrated = true;
+    // Phone remote on/off is owned by remote_start / remote_stop so a stale
+    // frontend settings blob cannot wipe the remembered preference.
+    settings.phone_remote = app.settings.lock().phone_remote;
     app.ytm.apply_settings(&settings);
     *app.notify.lock() = settings.notifications;
     *app.discord.lock() = settings.discord_presence;
@@ -1918,6 +2319,9 @@ fn maybe_blend(app: &Arc<App>) {
             }
             // Queue the UI swap before the mixer command so XfReady can
             // adopt as soon as audio actually starts - never before.
+            // Heart must flip with the title, not while the outgoing song shows.
+            app.player
+                .set_pending_rating(app.is_liked_id(&id), false);
             app.player.queue_adopt(track, index);
             if let Some(d) = next_dur {
                 // Stash on the body so the first snapshot after adopt is right.
@@ -2048,6 +2452,8 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
         let mut last_queue_sig: Option<u64> = None;
         let mut last_queue_sent = std::time::Instant::now();
         loop {
+            // Keep a steady 200 ms tick even during audio crossfade. A 50 ms
+            // emit storm was thrashing WebView2 (dual-layer morph + tray).
             std::thread::sleep(std::time::Duration::from_millis(200));
             if let Some(header) = app.ytm.harvest_cookies() {
                 if let Err(e) = app.store.save(&header) {
@@ -2091,6 +2497,12 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
             }
             let mut st = app.player.snapshot();
             app.stats.tick(&st);
+            if let Some(t) = st.track.as_ref() {
+                if app.recent.note(t) {
+                    let list = app.recent.list();
+                    std::thread::spawn(move || jumplist::publish(&list));
+                }
+            }
             let sig = queue_signature(&st.queue);
             if last_queue_sig == Some(sig)
                 && last_queue_sent.elapsed() < std::time::Duration::from_secs(10)
@@ -2103,6 +2515,10 @@ fn emit_loop(handle: AppHandle, app: Arc<App>) {
             }
             #[cfg(desktop)]
             tray::update(&handle, &st);
+            #[cfg(windows)]
+            thumbbar::update(&st);
+            #[cfg(target_os = "macos")]
+            dock::update(&handle, &st);
             let _ = handle.emit("player", st);
             if last_save.elapsed() >= std::time::Duration::from_secs(3) {
                 persist::save(&handle);
@@ -2165,6 +2581,9 @@ pub fn run() {
         }
     };
 
+    let launch_play = jumplist::play_id_from_args(
+        &std::env::args().collect::<Vec<_>>(),
+    );
     let app_for_setup = app.clone();
     let mut builder = tauri::Builder::default().manage(app);
     #[cfg(desktop)]
@@ -2173,8 +2592,13 @@ pub fn run() {
             // Must be the first plugin: a second launch hands over to the
             // running instance (brings its window back, even from the tray)
             // and exits instead of opening another copy.
-            .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
                 tray::show_window(app);
+                if let Some(id) = jumplist::play_id_from_args(&argv) {
+                    if let Some(state) = app.try_state::<Arc<App>>() {
+                        play_from_jumplist(app.clone(), state.inner().clone(), id);
+                    }
+                }
             }))
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init());
@@ -2223,6 +2647,7 @@ pub fn run() {
             }
             let app_restore = app.clone();
             let handle_restore = handle.clone();
+            let cold_play = launch_play.clone();
             tauri::async_runtime::spawn(async move {
                 restore_session(&app_restore).await;
                 // Frontend often mounts before restore finishes and would keep
@@ -2234,12 +2659,24 @@ pub fn run() {
                         serde_json::json!({ "signed_in": true, "restored": true }),
                     );
                 }
-                restore_playback(&app_restore).await;
+                // Jump List / CLI `--play` wins over the previous session.
+                if let Some(id) = cold_play {
+                    play_from_jumplist(handle_restore.clone(), app_restore, id);
+                } else {
+                    restore_playback(&app_restore).await;
+                }
             });
             app.ytm.prewarm_players();
             tauri::async_runtime::spawn(async {
                 crate::ytdlp::maybe_update().await;
             });
+            // Populate the taskbar Jump List from disk (or seeded listens).
+            {
+                let list = app.recent.list();
+                if !list.is_empty() {
+                    std::thread::spawn(move || jumplist::publish(&list));
+                }
+            }
             emit_loop(handle.clone(), app.clone());
             autodj::start(app.clone());
             output::watch(app.player.clone());
@@ -2258,8 +2695,20 @@ pub fn run() {
             }
             #[cfg(desktop)]
             tray::apply(&handle, app.settings.lock().tray_icon);
+            #[cfg(desktop)]
+            if app.settings.lock().phone_remote {
+                let app2 = app.clone();
+                let h = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = remote::start(app2, h).await;
+                });
+            }
             let hwnd = main_hwnd(tauri_app);
             mpris::start(app.clone(), handle.clone(), hwnd);
+            #[cfg(windows)]
+            thumbbar::start(app.clone(), handle.clone(), hwnd);
+            #[cfg(target_os = "macos")]
+            dock::start(app.clone(), &handle);
             discord::start(app.clone());
             Ok(())
         })
@@ -2268,11 +2717,14 @@ pub fn run() {
             search_suggestions,
             search_all,
             get_home,
+            get_home_cached,
+            clear_home_cache,
             get_explore,
             get_genre,
             get_charts,
             get_new_releases,
             get_artist,
+            get_artist_cover,
             get_album,
             get_playlist,
             get_playlist_head,

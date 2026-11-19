@@ -340,7 +340,10 @@ impl Ytm {
 
     /// Auto mixes ship a `/mixart` cover the webview can't load (needs
     /// session cookies), so they render as "?". Use the first track's art.
-    async fn fill_mix_covers(&self, home: &mut Home) {
+    ///
+    /// Keep this off the Home critical path: each mix hits `next` (~300KB),
+    /// and doing a dozen in parallel at boot froze the UI for seconds.
+    pub async fn fill_mix_covers(&self, home: &mut Home) {
         {
             let mut g = self.mix_titles.lock().unwrap();
             for sh in &home.shelves {
@@ -360,10 +363,13 @@ impl Ytm {
                 }
             }
         }
-        ids.truncate(12);
+        // A few visible mixes is enough; the rest keep their placeholder until
+        // the user opens them. Was 12 parallel `next` calls at every Home load.
+        ids.truncate(4);
         if ids.is_empty() {
             return;
         }
+        crate::diag::log(format!("home: filling {} mix covers in background", ids.len()));
         let mut set = tokio::task::JoinSet::new();
         for id in ids {
             let it = self.it();
@@ -390,8 +396,13 @@ impl Ytm {
         }
     }
 
-    pub async fn home(&self, params: Option<&str>) -> Result<Home> {
-        let mut home = match self.it().home(params).await {
+    pub async fn home<F>(&self, params: Option<&str>, mut on_partial: F) -> Result<Home>
+    where
+        F: FnMut(&Home) + Send,
+    {
+        let it = self.it();
+        let had_cookie = it.has_cookie();
+        let mut home = match it.home_progressive(params, &mut on_partial).await {
             Ok(h) if !h.shelves.is_empty() => h,
             Ok(h) => h,
             Err(e) => {
@@ -400,12 +411,33 @@ impl Ytm {
             }
         };
         let signed = self.cookie_header().is_some();
+        // Cookies landed mid-flight (session restore race): first browse was the
+        // thin logged-out Home (Throwback / Quick picks / 100% Hits). Retry once.
+        let retry = signed && (!had_cookie || !crate::home_feed_ok(&home));
+        if retry {
+            crate::diag::log(format!(
+                "home: weak feed ({} shelves, cookie_on_browse={had_cookie}) - retrying",
+                home.shelves.len()
+            ));
+            let again = match self.it().home_progressive(params, &mut on_partial).await {
+                Ok(h) if !h.shelves.is_empty() => h,
+                Ok(h) => h,
+                Err(e) => {
+                    crate::diag::log(format!("home browse retry: {e}"));
+                    Home::default()
+                }
+            };
+            if crate::home_feed_ok(&again) || again.shelves.len() >= home.shelves.len() {
+                home = again;
+            }
+        }
         home.signed_in = signed;
         self.harvest_cookies();
         // When signed in, the InnerTube feed IS the product - do not pad
         // it with the logged-out charts/trending filler.
         if signed {
-            self.fill_mix_covers(&mut home).await;
+            // Mix covers are filled AFTER the UI gets this Home (see get_home).
+            // Awaiting them here blocked first paint on a dozen `next` calls.
             crate::diag::log(format!(
                 "home feed (signed-in): {} shelves, {} chips",
                 home.shelves.len(),
@@ -746,6 +778,20 @@ impl Ytm {
             videos_playlist_id: a.videos_playlist_id,
             subscribed: false,
         })
+    }
+
+    /// Artist portrait only - skips albums-more / videos / duration enrichment.
+    /// Used by Stats so top-artist circles aren't album or video thumbs.
+    pub async fn artist_cover(&self, id: &str) -> Result<Option<String>> {
+        let a = self
+            .rp
+            .query()
+            .music_artist(id, false)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+        Ok(best_thumb(&a.header_image)
+            .or_else(|| a.tracks.first().and_then(|t| best_thumb(&t.cover)))
+            .or_else(|| a.albums.first().and_then(|t| best_thumb(&t.cover))))
     }
 
     /// rustypipe's artist page often omits track length. Fill from the artist's
@@ -1245,7 +1291,23 @@ impl Ytm {
     }
 
     pub async fn library_save(&self, id: &str, save: bool) -> Result<()> {
-        self.it().library_save(id, save).await
+        // like/like|removelike needs a playlistId (OLAK5…) or channelId.
+        // Album cards / context menus often pass the browse id (MPREb…),
+        // which YouTube rejects with 404 NOT_FOUND. Resolve first.
+        let target = if id.starts_with("MPREb") {
+            let a = self
+                .rp
+                .query()
+                .music_album(id)
+                .await
+                .map_err(|e| anyhow!("library_save album resolve {id}: {e}"))?;
+            a.playlist_id.filter(|p| !p.is_empty()).ok_or_else(|| {
+                anyhow!("album {id}: no playlist id to save/remove from library")
+            })?
+        } else {
+            id.strip_prefix("VL").unwrap_or(id).to_string()
+        };
+        self.it().library_save(&target, save).await
     }
 
     /// Liked Music as the official app shows it. `FEmusic_liked_videos` alone
@@ -2665,13 +2727,21 @@ async fn download_into(
                 }
             }
             Err(e) if is_freshness_error(&e) => {
+                // Count consecutive 403/410s with no byte progress. Do NOT
+                // reset on a "successful" re-resolve - googlevideo can hand
+                // back a fresh URL that still 403s at the same offset, and
+                // resetting made this an infinite log flood.
                 stale_tries += 1;
                 same_client_hits += 1;
                 eprintln!(
                     "audio chunk {}-{}: {e}; re-resolving from byte {offset} ({stale_tries})",
                     offset, end
                 );
+                if stale_tries > 8 {
+                    return Err(e);
+                }
                 body.touch();
+                tokio::time::sleep(Duration::from_millis(300 * stale_tries as u64)).await;
                 match reresolve_from(
                     rp,
                     video_id,
@@ -2687,15 +2757,10 @@ async fn download_into(
                         stream = next;
                         ua = stream_ua(&stream);
                         client = download_client(&stream)?;
-                        stale_tries = 0;
                         net_tries = 0;
                     }
                     Err(e2) => {
-                        if stale_tries > 8 {
-                            return Err(e);
-                        }
                         eprintln!("audio: re-resolve failed: {e2}; retrying");
-                        tokio::time::sleep(Duration::from_millis(300 * stale_tries as u64)).await;
                     }
                 }
             }
@@ -3377,7 +3442,7 @@ async fn ytdlp_stream(
             let mut msg = last_err.unwrap_or_else(|| "failed".into());
             if js.is_none() && (age_or_login_err(&msg) || format_unavailable_err(&msg)) {
                 msg = format!(
-                    "{msg} (install deno or node and restart — yt-dlp needs a JS runtime for age-restricted / ciphered streams)"
+                    "{msg} (install deno or node and restart - yt-dlp needs a JS runtime for age-restricted / ciphered streams)"
                 );
             }
             return Err(anyhow!("yt-dlp: {msg}"));

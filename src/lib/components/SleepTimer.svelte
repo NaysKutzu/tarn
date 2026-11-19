@@ -10,6 +10,8 @@
     position,
     duration,
     onStop,
+    /** When false, only the menu / badge are used. Parent opens via openMenu(). */
+    showButton = true,
   }: {
     /** Id of the track that is playing now (null when nothing plays). */
     trackId: string | null;
@@ -17,6 +19,7 @@
     duration: number;
     /** Called when the timer fires: pause playback. */
     onStop: () => void;
+    showButton?: boolean;
   } = $props();
 
   // Either "after N minutes" (deadline in ms) or "when this track ends".
@@ -26,6 +29,19 @@
   let menu = $state<{ x: number; y: number } | null>(null);
 
   const PRESETS = [15, 30, 45, 60, 90];
+
+  export function openMenu(anchor: HTMLElement) {
+    const r = anchor.getBoundingClientRect();
+    // Prefer above the player button; ContextMenu clamps if the estimate is off.
+    menu = {
+      x: Math.max(8, Math.min(r.right - 228, window.innerWidth - 236)),
+      y: Math.max(8, r.top - 280),
+    };
+  }
+
+  export function active(): boolean {
+    return !!mode;
+  }
 
   function fire() {
     mode = null;
@@ -77,21 +93,27 @@
   }
 
   function open(e: MouseEvent) {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    // Open above the player bar, aligned to the button.
-    menu = { x: r.left, y: Math.max(8, r.top - 260) };
+    e.preventDefault();
+    e.stopPropagation();
+    if (menu) {
+      menu = null;
+      return;
+    }
+    openMenu(e.currentTarget as HTMLElement);
   }
 </script>
 
-<div class="st">
-  <IconBtn
-    icon={MoonSleepIcon}
-    size={22}
-    btnSize="lg"
-    on={!!mode}
-    onclick={open}
-    title={mode ? `Sleep timer: ${left}` : 'Sleep timer'}
-  />
+<div class="st" class:badge-only={!showButton}>
+  {#if showButton}
+    <IconBtn
+      icon={MoonSleepIcon}
+      size={22}
+      btnSize="lg"
+      on={!!mode || !!menu}
+      onclick={open}
+      title={mode ? `Sleep timer: ${left}` : 'Sleep timer'}
+    />
+  {/if}
   {#if mode}<span class="left">{left}</span>{/if}
 </div>
 
@@ -101,6 +123,17 @@
 
 <style>
   .st { position: relative; display: inline-flex; align-items: center; }
+  .st.badge-only {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .st.badge-only .left {
+    right: 6px;
+    bottom: 4px;
+  }
   .left {
     position: absolute;
     right: -2px;

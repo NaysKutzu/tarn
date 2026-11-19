@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t as tr } from '../i18n.svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { onMount } from 'svelte';
+  import { onMount, type Snippet } from 'svelte';
   import Hi from './Hi.svelte';
   import { ArrowLeft01Icon, ArrowRight01Icon } from '../icons';
 
@@ -10,11 +10,15 @@
     canFwd = false,
     onBack,
     onFwd,
+    search,
+    actions,
   }: {
     canBack?: boolean;
     canFwd?: boolean;
     onBack?: () => void;
     onFwd?: () => void;
+    search?: Snippet;
+    actions?: Snippet;
   } = $props();
 
   const isMac =
@@ -77,8 +81,16 @@
       <Hi icon={ArrowRight01Icon} size={16} />
     </button>
   </div>
-  <div class="tb-title">Tarn</div>
-  <div class="tb-drag"></div>
+  <div class="tb-center">
+    {#if search}
+      {@render search()}
+    {/if}
+  </div>
+  {#if actions}
+    <div class="tb-actions">
+      {@render actions()}
+    </div>
+  {/if}
   {#if !isMac}
     <div class="tb-btns">
       <button class="tb-btn min" type="button" title={tr('Minimize')} onclick={minimize} aria-label={tr('Minimize')}>

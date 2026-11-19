@@ -1,9 +1,9 @@
-//! Phone remote (desktop only, off by default): a tiny LAN-only HTTP server
-//! that serves one control page. The desktop shows a QR code with
+//! Phone remote (desktop only): a tiny LAN-only HTTP server that serves one
+//! control page. The desktop shows a QR code with
 //! `http://<lan-ip>:<port>/#<token>`; every API call must carry that random
 //! token in the `X-Tarn-Token` header. The token is regenerated each time the
-//! remote is turned on and lives only in memory. Connections from public
-//! (non-LAN) addresses are refused.
+//! server starts. Preference to keep it on is stored in settings and restored
+//! on launch. Connections from public (non-LAN) addresses are refused.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -18,11 +18,12 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::models::{Lyrics, Track};
 
+/// Built from `src/remote` via `pnpm run build:remote` (Svelte → single HTML).
 const PAGE: &str = include_str!("remote/index.html");
-/// Tried first so the QR stays the same between runs; falls back to any port.
+/// Tried first so the port (and QR host) stay stable between runs; falls back to any port.
 const DEFAULT_PORT: u16 = 47_801;
 const MAX_HEADER: usize = 8 * 1024;
-const MAX_BODY: usize = 4 * 1024;
+const MAX_BODY: usize = 16 * 1024;
 const MAX_CONNS: usize = 16;
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -244,6 +245,7 @@ struct RemoteState<'a> {
     duration: f64,
     volume: f32,
     liked: bool,
+    disliked: bool,
     shuffle: bool,
     repeat: &'a str,
     index: usize,
@@ -257,11 +259,58 @@ struct Cmd {
     cmd: String,
     #[serde(default)]
     value: Option<f64>,
+    #[serde(default)]
+    track: Option<Track>,
+}
+
+fn query_param<'a>(path: &'a str, key: &str) -> Option<&'a str> {
+    let q = path.split_once('?')?.1;
+    for part in q.split('&') {
+        let (k, v) = part.split_once('=')?;
+        if k == key {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let h = || -> Option<u8> {
+                    let a = (bytes[i + 1] as char).to_digit(16)?;
+                    let b = (bytes[i + 2] as char).to_digit(16)?;
+                    Some(((a as u8) << 4) | (b as u8))
+                };
+                if let Some(b) = h() {
+                    out.push(b);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 async fn handle_conn(srv: &Server, mut sock: TcpStream) {
     let Some(req) = read_request(&mut sock).await else { return };
-    let path = req.path.split('?').next().unwrap_or("/");
+    let raw_path = req.path.as_str();
+    let path = raw_path.split('?').next().unwrap_or("/");
     if req.method == "GET" && (path == "/" || path == "/index.html") {
         respond(&mut sock, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()).await;
         return;
@@ -288,6 +337,7 @@ async fn handle_conn(srv: &Server, mut sock: TcpStream) {
                 duration: s.duration,
                 volume: s.volume,
                 liked: s.liked,
+                disliked: s.disliked,
                 shuffle: s.shuffle,
                 repeat: &s.repeat,
                 index,
@@ -295,6 +345,31 @@ async fn handle_conn(srv: &Server, mut sock: TcpStream) {
                 queue_start: start,
             })
             .await;
+        }
+        ("GET", "/api/search") => {
+            let q = query_param(raw_path, "q").map(url_decode).unwrap_or_default();
+            let q = q.trim().to_string();
+            if q.is_empty() {
+                json(&mut sock, &Vec::<Track>::new()).await;
+                return;
+            }
+            if app.settings.lock().offline_mode {
+                respond(&mut sock, "503 Service Unavailable", "text/plain", b"offline").await;
+                return;
+            }
+            match app.ytm.search_tracks(&q).await {
+                Ok(mut tracks) => {
+                    tracks.truncate(25);
+                    for t in &mut tracks {
+                        t.ensure_cover();
+                    }
+                    json(&mut sock, &tracks).await;
+                }
+                Err(e) => {
+                    crate::diag::log(format!("remote: search failed: {e}"));
+                    respond(&mut sock, "502 Bad Gateway", "text/plain", b"search failed").await;
+                }
+            }
         }
         ("GET", "/api/lyrics") => {
             let id = app.player.snapshot().track.map(|t| t.id).unwrap_or_default();
@@ -340,13 +415,26 @@ async fn run_cmd(srv: &Server, c: Cmd) {
         "volume" => {
             if let Some(v) = c.value.filter(|v| v.is_finite()) {
                 let v = v.clamp(0.0, 1.0) as f32;
-                // The window's slider follows the player state.
                 app.player.set_volume(v);
             }
         }
-        // The page owns like state (optimistic UI, local likes), as with the tray.
         "like" => {
             let _ = srv.handle.emit("tray", "like");
+        }
+        "dislike" => {
+            let _ = srv.handle.emit("tray", "dislike");
+        }
+        "shuffle" => {
+            let on = !app.player.snapshot().shuffle;
+            app.player.set_shuffle(on);
+        }
+        "repeat" => {
+            let next = match app.player.snapshot().repeat.as_str() {
+                "off" => "all",
+                "all" => "one",
+                _ => "off",
+            };
+            app.player.set_repeat(next);
         }
         "play_index" => {
             let Some(i) = c.value.filter(|v| v.is_finite() && *v >= 0.0).map(|v| v as usize) else { return };
@@ -356,6 +444,33 @@ async fn run_cmd(srv: &Server, c: Cmd) {
                     crate::diag::log(format!("remote: play_index failed: {e}"));
                 }
             }
+        }
+        "play_track" => {
+            let Some(mut t) = c.track else { return };
+            if t.id.trim().is_empty() {
+                return;
+            }
+            t.ensure_cover();
+            let queue = vec![t.clone()];
+            if let Err(e) = crate::start_playback(app, t, queue, 0).await {
+                crate::diag::log(format!("remote: play_track failed: {e}"));
+            }
+        }
+        "queue_next" => {
+            let Some(mut t) = c.track else { return };
+            if t.id.trim().is_empty() {
+                return;
+            }
+            t.ensure_cover();
+            app.player.insert_next(vec![t]);
+        }
+        "queue_add" => {
+            let Some(mut t) = c.track else { return };
+            if t.id.trim().is_empty() {
+                return;
+            }
+            t.ensure_cover();
+            app.player.append(vec![t]);
         }
         _ => {}
     }
@@ -412,6 +527,8 @@ mod tests {
     fn page_has_no_external_assets() {
         assert!(!PAGE.contains("src=\"http"));
         assert!(PAGE.contains("X-Tarn-Token"));
+        assert!(PAGE.contains("/api/search"));
+        assert!(PAGE.contains("play_track"));
     }
 
     #[test]

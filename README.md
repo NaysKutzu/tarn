@@ -76,7 +76,7 @@ Grab the latest build from the [releases page](https://github.com/rexsystems/tar
 
 ## Build from source
 
-You need Rust 1.77 or newer, Node.js 20 or newer, and on Linux the Tauri system libraries:
+You need Rust 1.77 or newer, Node.js 20 or newer, [pnpm](https://pnpm.io) 12, and on Linux the Tauri system libraries:
 
 ```sh
 # Fedora
@@ -89,9 +89,9 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev
 Then:
 
 ```sh
-npm install
-npm run tauri dev      # development session
-npm run tauri build    # packages land in src-tauri/target/release/bundle/
+pnpm install
+pnpm run tauri dev      # development session
+pnpm run tauri build    # packages land in src-tauri/target/release/bundle/
 ```
 
 The build downloads an official [yt-dlp](https://github.com/yt-dlp/yt-dlp) sidecar automatically. End users of the packages don't need it.
@@ -109,7 +109,7 @@ The build downloads an official [yt-dlp](https://github.com/yt-dlp/yt-dlp) sidec
 
 ## Contributing
 
-Issues and pull requests are welcome. For a change to the player or the backend, run `npm run tauri dev` and try it in the real app before opening a PR.
+Issues and pull requests are welcome. For a change to the player or the backend, run `pnpm run tauri dev` and try it in the real app before opening a PR.
 
 ## Disclaimer
 

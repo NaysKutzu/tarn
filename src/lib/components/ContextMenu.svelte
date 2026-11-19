@@ -19,6 +19,16 @@
   let el: HTMLDivElement | undefined = $state();
   let pos = $state({ left: 0, top: 0 });
 
+  /** Escape player/panel stacking. Menus must sit above the whole chrome. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
+
   // Keep the menu on screen, whatever its height turns out to be.
   $effect(() => {
     void entries;
@@ -32,37 +42,53 @@
   });
 
   $effect(() => {
-    const on = (e: MouseEvent) => {
-      if (el && !el.contains(e.target as Node)) onClose();
-    };
-    const esc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('mousedown', on);
-    window.addEventListener('keydown', esc);
-    window.addEventListener('blur', onClose);
+    // Defer so the opening click cannot immediately dismiss the menu.
+    // No window blur listener. Tauri focus blips were killing nested menus (sleep).
+    let alive = true;
+    let cleanup: (() => void) | undefined;
+    const arm = window.setTimeout(() => {
+      if (!alive) return;
+      const on = (e: MouseEvent) => {
+        if (el && !el.contains(e.target as Node)) onClose();
+      };
+      const esc = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') onClose();
+      };
+      window.addEventListener('mousedown', on);
+      window.addEventListener('keydown', esc);
+      cleanup = () => {
+        window.removeEventListener('mousedown', on);
+        window.removeEventListener('keydown', esc);
+      };
+    }, 0);
     return () => {
-      window.removeEventListener('mousedown', on);
-      window.removeEventListener('keydown', esc);
-      window.removeEventListener('blur', onClose);
+      alive = false;
+      window.clearTimeout(arm);
+      cleanup?.();
     };
   });
 
-  function run(e: MenuEntry) {
-    if ('sep' in e || e.disabled) return;
-    e.onclick?.();
+  function run(entry: MenuEntry, ev?: MouseEvent) {
+    if ('sep' in entry || entry.disabled) return;
+    ev?.preventDefault();
+    ev?.stopPropagation();
+    const fn = entry.onclick;
+    // Close first so nested menus (sleep) can open cleanly, then fire.
     onClose();
+    queueMicrotask(() => fn?.());
   }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="ctx"
+  use:portal
   bind:this={el}
   style="left:{Math.round(pos.left)}px;top:{Math.round(pos.top)}px"
   role="menu"
   tabindex="-1"
   oncontextmenu={(e) => e.preventDefault()}
+  onmousedown={(e) => e.stopPropagation()}
 >
   {#each entries as e, i}
     {#if 'sep' in e}
@@ -79,13 +105,13 @@
             {#if 'sep' in c}
               <div class="sep"></div>
             {:else}
-              <button type="button" role="menuitem" disabled={c.disabled} onclick={() => run(c)}>{c.label}</button>
+              <button type="button" role="menuitem" disabled={c.disabled} onclick={(ev) => run(c, ev)}>{c.label}</button>
             {/if}
           {/each}
         </div>
       {/if}
     {:else}
-      <button type="button" role="menuitem" class:danger={e.danger} disabled={e.disabled} onclick={() => run(e)}>
+      <button type="button" role="menuitem" class:danger={e.danger} disabled={e.disabled} onclick={(ev) => run(e, ev)}>
         <span class="ic">{#if e.icon}<Hi icon={e.icon} size={18} />{/if}</span>
         <span class="lbl">{e.label}</span>
       </button>

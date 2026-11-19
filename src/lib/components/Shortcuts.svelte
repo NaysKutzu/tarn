@@ -64,11 +64,9 @@
 
 <svelte:window onkeydowncapture={onKey} />
 
-<div class="set-row" style="flex-direction:column;align-items:stretch;gap:10px">
+<div class="set-row set-stack">
   <span class="lb">{tr('Keyboard shortcuts')}
-    <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">
-      {tr('Click a shortcut, then press the keys. Backspace clears it, Esc cancels.')}
-    </span>
+    <span class="set-meta">{tr('Click a shortcut, then press the keys. Backspace clears it, Esc cancels.')}</span>
   </span>
   <div class="sc-grid">
     {#each APP_ACTIONS as a}
@@ -82,9 +80,7 @@
 
   {#if desktop}
     <span class="lb" style="margin-top:8px">{tr('Global hotkeys')}
-      <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">
-        {tr('Work even when Tarn is in the background. Pick combos other apps don\'t use.')}
-      </span>
+      <span class="set-meta">{tr('Work even when Tarn is in the background. Pick combos other apps don\'t use.')}</span>
     </span>
     <div class="sc-grid">
       {#each GLOBAL_ACTIONS as a}
