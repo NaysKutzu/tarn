@@ -16,7 +16,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="np-scrim" onclick={onClose}>
-  <div class="np-box" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
+  <div class="np-box" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
     <h3>{tr('New playlist')}</h3>
     <!-- svelte-ignore a11y_autofocus -->
     <input

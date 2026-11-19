@@ -25,11 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12
+
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
 
       - name: Setup Java
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
@@ -61,11 +66,8 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
             libssl-dev pkg-config libdbus-1-dev libasound2-dev libclang-dev
 
-      - name: Upgrade npm
-        run: npm install -g npm@11
-
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Init and build APK
         run: |
@@ -82,8 +84,8 @@ jobs:
           CL=$(ls -d "$T"/lib/clang/*/include | head -1)
           export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$T/sysroot -nostdinc -isystem $CL -isystem $T/sysroot/usr/include/aarch64-linux-android -isystem $T/sysroot/usr/include"
           # gen/android is committed (it holds the media service + login activity).
-          [ -d src-tauri/gen/android ] || npx tauri android init --ci || npx tauri android init
-          npx tauri android build --apk --debug --target aarch64
+          [ -d src-tauri/gen/android ] || pnpm exec tauri android init --ci || pnpm exec tauri android init
+          pnpm exec tauri android build --apk --debug --target aarch64
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -111,11 +113,16 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12
+
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable @ 2026-10
@@ -130,15 +137,12 @@ jobs:
           shared-key: mobile-ios
           cache-on-failure: true
 
-      - name: Upgrade npm
-        run: npm install -g npm@11
-
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Init and build (unsigned)
         run: |
-          npx tauri ios init --ci || npx tauri ios init
+          pnpm exec tauri ios init --ci || pnpm exec tauri ios init
           # `ios init` builds the icon set from icon.png (white corners); use our opaque ones.
           SET=src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset
           [ -d "$SET" ] || { echo "::error::AppIcon.appiconset not found"; exit 1; }
@@ -166,7 +170,7 @@ jobs:
           chmod +x "$RUNNER_TEMP/bin/xcodebuild"
           export PATH="$RUNNER_TEMP/bin:$PATH"
           # The export step needs signing and may fail; the .app is still built.
-          npx tauri ios build --debug || echo "tauri ios build exited non-zero"
+          pnpm exec tauri ios build --debug || echo "tauri ios build exited non-zero"
 
       - name: Package unsigned IPA (for sideloading)
         run: |

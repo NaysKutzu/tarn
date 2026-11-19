@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../api';
+  import { t as tr } from '../i18n.svelte';
   import { jam, refreshJam } from '../jam.svelte';
   import { toast } from '../toast';
 
@@ -32,14 +33,16 @@
 </script>
 
 <div class="set-row">
-  <span class="lb">Listen together <span class="beta">Beta</span>
-    <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">
+  <span class="lb">{tr('Listen together')} <span class="beta">Beta</span>
+    <span class="set-meta">
       {#if jam.info.mode === 'hosting'}
-        Hosting · {jam.info.guests} {jam.info.guests === 1 ? 'guest' : 'guests'} listening. Guests follow your playback and can add songs to your queue
+        {jam.info.guests === 1
+          ? tr('Hosting · 1 guest listening. Guests follow your playback and can add songs to your queue')
+          : tr('Hosting · {n} guests listening. Guests follow your playback and can add songs to your queue', { n: jam.info.guests })}
       {:else if jam.info.mode === 'joined'}
-        {#if jam.info.error}{jam.info.error}{:else}Following the host{jam.info.following ? ` · ${jam.info.following}` : ''}{jam.info.rtt_ms != null ? ` · ${jam.info.rtt_ms} ms` : ''}{/if}
+        {#if jam.info.error}{jam.info.error}{:else}{tr('Following the host')}{jam.info.following ? ` · ${jam.info.following}` : ''}{jam.info.rtt_ms != null ? ` · ${jam.info.rtt_ms} ms` : ''}{/if}
       {:else}
-        Play the same music in sync with other Tarn apps on this network
+        {tr('Play the same music in sync with other Tarn apps on this network')}
       {/if}
     </span>
   </span>

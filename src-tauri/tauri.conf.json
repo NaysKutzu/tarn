@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "node scripts/fetch-ytdlp.mjs && npm run dev",
-    "beforeBuildCommand": "node scripts/fetch-ytdlp.mjs && npm run build"
+    "beforeDevCommand": "pnpm run dev",
+    "beforeBuildCommand": "pnpm run build"
   },
   "app": {
     "windows": [
@@ -44,9 +44,6 @@
       "icons/icon.ico"
     ],
     "category": "Music",
-    "externalBin": [
-      "binaries/yt-dlp"
-    ],
     "createUpdaterArtifacts": true
   },
   "plugins": {

@@ -11,6 +11,7 @@
     format = (v: number) => String(v),
     buffered = 0,
     wave = null,
+    label = undefined,
     oninput,
     onchange,
     onpreview,
@@ -28,6 +29,7 @@
     buffered?: number;
     /** Optional waveform overview (0..255 per bar) drawn instead of the track. */
     wave?: number[] | null;
+    label?: string;
     oninput?: (v: number) => void;
     onchange?: (v: number) => void;
     onpreview?: (v: number | null) => void;
@@ -178,6 +180,7 @@
   class:disabled
   class:has-wave={!!wavePath}
   role="slider"
+  aria-label={label}
   aria-valuemin={0}
   aria-valuemax={max}
   aria-valuenow={shown}

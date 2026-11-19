@@ -5,7 +5,7 @@
 Regenerate from brand colors:
 
 ```bash
-npm run dmg:bg
+pnpm run dmg:bg
 ```
 
 CI builds the DMG with `.github/create-macos-dmg.sh`:

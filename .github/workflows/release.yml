@@ -23,7 +23,7 @@ permissions:
 
 # Publicly-safe values only. TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) is
 # intentionally NOT in the top-level env - scoped per-step to build/sign
-# steps so a compromised curl or npm script elsewhere cannot read it.
+# steps so a compromised curl or install script elsewhere cannot read it.
 env:
   NODE_VERSION: "22"
 
@@ -55,11 +55,16 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12
+
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable @ 2026-10
@@ -73,23 +78,12 @@ jobs:
           shared-key: desktop-windows
           cache-on-failure: true
 
-      - name: Upgrade npm (optional native binding install fix)
-        shell: bash
-        run: npm install -g npm@11
-
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
-      - name: Reinstall platform-native bindings
-        # npm#4828: optional rollup/esbuild/cli binaries can be skipped
+      - name: Verify native bindings
         shell: bash
-        run: |
-          R=$(node -p "require('./node_modules/rollup/package.json').version")
-          E=$(node -p "require('./node_modules/esbuild/package.json').version")
-          C=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
-          echo "pinning rollup@$R esbuild@$E @tauri-apps/cli@$C"
-          npm install --no-save --force "rollup@$R" "esbuild@$E" "@tauri-apps/cli@$C"
-          node -e "require('rollup'); require('@tauri-apps/cli'); console.log('native bindings ok')"
+        run: node -e "require('rollup'); require('@tauri-apps/cli'); console.log('native bindings ok')"
 
       - name: Stamp release version
         shell: bash
@@ -99,7 +93,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build:ci -- --bundles nsis,msi
+        run: pnpm run build:ci -- --bundles nsis,msi
 
       - name: Read version
         id: meta
@@ -151,11 +145,16 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12
+
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable @ 2026-10
@@ -198,41 +197,11 @@ jobs:
             rpm \
             libfuse2
 
-      - name: Upgrade npm (optional native binding install fix)
-        # npm < 11.3 can skip platform optionalDeps (npm/cli#4828), which breaks
-        # @tauri-apps/cli / rollup / esbuild on linux-arm64 runners.
-        run: npm install -g npm@11
-
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
-      - name: Reinstall platform-native bindings
-        run: |
-          R=$(node -p "require('./node_modules/rollup/package.json').version")
-          E=$(node -p "require('./node_modules/esbuild/package.json').version")
-          C=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
-          echo "pinning rollup@$R esbuild@$E @tauri-apps/cli@$C"
-          npm install --no-save --force "rollup@$R" "esbuild@$E" "@tauri-apps/cli@$C"
-          arch="$(uname -m)"
-          case "$arch" in
-            aarch64|arm64)
-              npm install --no-save --force \
-                "@tauri-apps/cli-linux-arm64-gnu@$C" \
-                "@rollup/rollup-linux-arm64-gnu@$R" \
-                "@esbuild/linux-arm64@$E"
-              ;;
-            x86_64|amd64)
-              npm install --no-save --force \
-                "@tauri-apps/cli-linux-x64-gnu@$C" \
-                "@rollup/rollup-linux-x64-gnu@$R" \
-                "@esbuild/linux-x64@$E"
-              ;;
-            *)
-              echo "Unknown arch: $arch" >&2
-              exit 1
-              ;;
-          esac
-          node -e "require('rollup'); require('@tauri-apps/cli'); console.log('native bindings ok')"
+      - name: Verify native bindings
+        run: node -e "require('rollup'); require('@tauri-apps/cli'); console.log('native bindings ok')"
 
       - name: Stamp release version
         run: node .github/stamp-release-version.mjs "${{ needs.version.outputs.build }}"
@@ -241,7 +210,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build:linux:ci
+        run: pnpm run build:linux:ci
 
       - name: Sign Linux package updaters
         # createUpdaterArtifacts signs AppImage; rpm/deb need an explicit sign for
@@ -257,7 +226,7 @@ jobs:
           do
             if [ ! -f "${pkg}.sig" ]; then
               echo "Signing $pkg"
-              npm exec -- tauri signer sign "$pkg"
+              pnpm exec tauri signer sign "$pkg"
             else
               echo "Already signed: $pkg"
             fi
@@ -316,11 +285,16 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12
+
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable @ 2026-10
@@ -335,20 +309,11 @@ jobs:
           shared-key: desktop-macos-${{ matrix.rust_target }}
           cache-on-failure: true
 
-      - name: Upgrade npm (optional native binding install fix)
-        run: npm install -g npm@11
-
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
-      - name: Reinstall platform-native bindings
-        run: |
-          R=$(node -p "require('./node_modules/rollup/package.json').version")
-          E=$(node -p "require('./node_modules/esbuild/package.json').version")
-          C=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
-          echo "pinning rollup@$R esbuild@$E @tauri-apps/cli@$C"
-          npm install --no-save --force "rollup@$R" "esbuild@$E" "@tauri-apps/cli@$C"
-          node -e "require('rollup'); require('@tauri-apps/cli'); console.log('native bindings ok')"
+      - name: Verify native bindings
+        run: node -e "require('rollup'); require('@tauri-apps/cli'); console.log('native bindings ok')"
 
       - name: Stamp release version
         run: node .github/stamp-release-version.mjs "${{ needs.version.outputs.build }}"
@@ -358,7 +323,7 @@ jobs:
           CI: "true"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build:macos:ci -- --target ${{ matrix.rust_target }}
+        run: pnpm run build:macos:ci -- --target ${{ matrix.rust_target }}
 
       - name: Read version
         id: meta

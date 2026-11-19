@@ -2877,7 +2877,9 @@
             <div class="set-h"><h2>{tr('General')}</h2><p>{tr('Language, region and sound quality')}</p></div>
             <div class="set-card">
           <div class="set-row">
-            <span class="lb"><Hi icon={LanguageCircleIcon} size={20} /> <span>{tr('Interface language')}<span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Menus and buttons in Tarn (song info stays in the YouTube Music language)')}</span></span></span>
+            <span class="lb"><Hi icon={LanguageCircleIcon} size={20} /> {tr('Interface language')}
+              <span class="set-meta">{tr('Menus and buttons in Tarn (song info stays in the YouTube Music language)')}</span>
+            </span>
             <Dropdown value={settings.ui_language || 'system'} options={localeOptions()} onchange={(v) => { settings.ui_language = v; api.setSettings(settings); setLocale(v); }} />
           </div>
           <div class="set-row">
@@ -2908,26 +2910,26 @@
             ]} onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
-            <span class="lb"><Hi icon={PaintBoardIcon} size={20} /> Theme</span>
+            <span class="lb"><Hi icon={PaintBoardIcon} size={20} /> {tr('Theme')}</span>
             <Dropdown value={settings.theme ?? 'dark'} options={[
-              { value: 'dark', label: 'Dark' },
-              { value: 'light', label: 'Light' },
-              { value: 'oled', label: 'OLED black' },
-              { value: 'system', label: 'Match system' },
+              { value: 'dark', label: tr('Dark') },
+              { value: 'light', label: tr('Light') },
+              { value: 'oled', label: tr('OLED black') },
+              { value: 'system', label: tr('Match system') },
             ]} onchange={(v) => { settings.theme = v as Theme; api.setSettings(settings); }} />
           </div>
           <div class="set-row">
-            <span class="lb">Accent colour
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{settings.accent_color ? 'Fixed colour' : 'From the cover of the song playing'}</span>
+            <span class="lb"><Hi icon={PaintBoardIcon} size={20} /> {tr('Accent colour')}
+              <span class="set-meta">{settings.accent_color ? tr('Fixed colour') : tr('From the cover of the song playing')}</span>
             </span>
-            <div class="accent-pick" role="radiogroup" aria-label="Accent colour">
-              <button class="acc-sw auto" class:on={!settings.accent_color} title="From cover art" aria-label="From cover art"
+            <div class="accent-pick" role="radiogroup" aria-label={tr('Accent colour')}>
+              <button class="acc-sw auto" class:on={!settings.accent_color} title={tr('From cover art')} aria-label={tr('From cover art')}
                 onclick={() => { settings.accent_color = null; api.setSettings(settings); }}></button>
               {#each ACCENTS as c (c)}
                 <button class="acc-sw" class:on={settings.accent_color === c} style:background={c} title={c} aria-label={c}
                   onclick={() => { settings.accent_color = c; api.setSettings(settings); }}></button>
               {/each}
-              <label class="acc-sw custom" class:on={!!settings.accent_color && !ACCENTS.includes(settings.accent_color)} title="Custom colour"
+              <label class="acc-sw custom" class:on={!!settings.accent_color && !ACCENTS.includes(settings.accent_color)} title={tr('Custom colour')}
                 style:background={settings.accent_color && !ACCENTS.includes(settings.accent_color) ? settings.accent_color : null}>
                 <input type="color" value={settings.accent_color ?? '#e0a45a'}
                   onchange={(e) => { settings.accent_color = (e.currentTarget as HTMLInputElement).value; api.setSettings(settings); }} />
@@ -2935,8 +2937,6 @@
             </div>
           </div>
           <div class="set-row">
-            <span class="lb"><Hi icon={Notification01Icon} size={20} /> Notifications</span>
-            <Toggle bind:checked={settings.notifications} label="Notifications" onchange={() => api.setSettings(settings)} />
             <span class="lb"><Hi icon={Notification01Icon} size={20} /> {tr('Notifications')}</span>
             <Toggle bind:checked={settings.notifications} label={tr('Notifications')} onchange={() => api.setSettings(settings)} />
           </div>
@@ -2947,29 +2947,27 @@
             <div class="set-card">
           <div class="set-row">
             <span class="lb"><Hi icon={Radio02Icon} size={20} /> {tr('Autoplay')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Continue with similar music when the queue ends')}</span>
+              <span class="set-meta">{tr('Continue with similar music when the queue ends')}</span>
             </span>
             <Toggle bind:checked={settings.autoplay} label={tr('Autoplay')} onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
-            <span class="lb"><Hi icon={Forward01Icon} size={20} /> Skip non-music sections
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Jump over skits, talking and credits in music videos using community data from SponsorBlock (sends a short hash of the video id)</span>
+            <span class="lb"><Hi icon={Forward01Icon} size={20} /> {tr('Skip non-music sections')}
+              <span class="set-meta">{tr('Jump over skits, talking and credits using SponsorBlock community data')}</span>
             </span>
-            <Toggle checked={settings.sponsorblock ?? false} label="Skip non-music sections" onchange={(v) => { settings.sponsorblock = v; api.setSettings(settings); }} />
+            <Toggle checked={settings.sponsorblock ?? false} label={tr('Skip non-music sections')} onchange={(v) => { settings.sponsorblock = v; api.setSettings(settings); }} />
           </div>
           <div class="set-row">
-            <span class="lb"><Hi icon={PlayIcon} size={20} /> Resume on start
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Start playing the last session when Tarn opens</span>
             <span class="lb"><Hi icon={PlayIcon} size={20} /> {tr('Resume on start')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Start playing the last session when Tarn opens')}</span>
+              <span class="set-meta">{tr('Start playing the last session when Tarn opens')}</span>
             </span>
             <Toggle bind:checked={settings.resume_on_start} label={tr('Resume on start')} onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
-            <span class="lb"><Hi icon={AudioWave01Icon} size={20} /> Waveform seek bar
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Show the shape of the song in the seek bar (each song is analysed once on this device)</span>
+            <span class="lb"><Hi icon={AudioWave01Icon} size={20} /> {tr('Waveform seek bar')}
+              <span class="set-meta">{tr('Show the shape of the song in the seek bar (analysed once on this device)')}</span>
             </span>
-            <Toggle checked={!!settings.seek_waveform} label="Waveform seek bar" onchange={(v) => { settings.seek_waveform = v; api.setSettings(settings); }} />
+            <Toggle checked={!!settings.seek_waveform} label={tr('Waveform seek bar')} onchange={(v) => { settings.seek_waveform = v; api.setSettings(settings); }} />
           </div>
             </div>
           </section>
@@ -2983,9 +2981,9 @@
           {#if settings.crossfade}
           <div class="set-row">
             <span class="lb">{tr('Crossfade duration')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{settings.crossfade_seconds.toFixed(1)}s</span>
+              <span class="set-meta">{settings.crossfade_seconds.toFixed(1)}s</span>
             </span>
-            <div style="width:200px">
+            <div class="set-ctl">
               <Slider
                 value={settings.crossfade_seconds}
                 max={20}
@@ -2999,21 +2997,21 @@
           </div>
           <div class="set-row">
             <span class="lb">{tr('Fade-out curve')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('How the ending track fades away')}</span>
+              <span class="set-meta">{tr('How the ending track fades away')}</span>
             </span>
             <Dropdown bind:value={settings.crossfade_curve_out} options={XF_CURVES} onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
             <span class="lb">{tr('Fade-in curve')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('How the next track comes in')}</span>
+              <span class="set-meta">{tr('How the next track comes in')}</span>
             </span>
             <Dropdown bind:value={settings.crossfade_curve_in} options={XF_CURVES} onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
             <span class="lb">{tr('Fade-out length')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{Math.round(settings.crossfade_out_len)}% of the crossfade, at the end</span>
+              <span class="set-meta">{Math.round(settings.crossfade_out_len)}% of the crossfade, at the end</span>
             </span>
-            <div style="width:200px">
+            <div class="set-ctl">
               <Slider
                 value={settings.crossfade_out_len - 10}
                 max={90}
@@ -3027,9 +3025,9 @@
           </div>
           <div class="set-row">
             <span class="lb">{tr('Fade-in length')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{Math.round(settings.crossfade_in_len)}% of the crossfade, from the start</span>
+              <span class="set-meta">{Math.round(settings.crossfade_in_len)}% of the crossfade, from the start</span>
             </span>
-            <div style="width:200px">
+            <div class="set-ctl">
               <Slider
                 value={settings.crossfade_in_len - 10}
                 max={90}
@@ -3043,7 +3041,7 @@
           </div>
           <div class="set-row">
             <span class="lb">{tr('Filter sweep')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('DJ-style EQ movement during the blend')}</span>
+              <span class="set-meta">{tr('DJ-style EQ movement during the blend')}</span>
             </span>
             <Dropdown bind:value={settings.crossfade_filter} options={[
               { value: 'off', label: tr('Off') },
@@ -3054,13 +3052,13 @@
           </div>
           <div class="set-row">
             <span class="lb">{tr('Smart start')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Skip silence at the end and start of tracks')}</span>
+              <span class="set-meta">{tr('Skip silence at the end and start of tracks')}</span>
             </span>
             <Toggle bind:checked={settings.crossfade_smart} label={tr('Smart start')} onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
             <span class="lb">{tr('Also on skip')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Same fade when you skip or pick another song')}</span>
+              <span class="set-meta">{tr('Same fade when you skip or pick another song')}</span>
             </span>
             <Toggle
               bind:checked={settings.crossfade_manual}
@@ -3071,22 +3069,22 @@
           </div>
           <div class="set-row">
             <span class="lb">{tr('Album continuity')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('No crossfade between tracks on the same album')}</span>
+              <span class="set-meta">{tr('No crossfade between tracks on the same album')}</span>
             </span>
             <Toggle bind:checked={settings.album_continuity} label={tr('Album continuity')} onchange={() => api.setSettings(settings)} />
           </div>
           <div class="set-row">
             <span class="lb">{tr('BPM matching')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Detect tempo and match the next track to the current one')}</span>
+              <span class="set-meta">{tr('Detect tempo and match the next track to the current one')}</span>
             </span>
             <Toggle bind:checked={settings.bpm_match} label={tr('BPM matching')} onchange={() => api.setSettings(settings)} />
           </div>
           {#if settings.bpm_match}
             <div class="set-row">
               <span class="lb">{tr('Max tempo change')}
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">±{settings.bpm_max_change.toFixed(1)}% - larger gaps blend without matching</span>
+                <span class="set-meta">±{settings.bpm_max_change.toFixed(1)}% - larger gaps blend without matching</span>
               </span>
-              <div style="width:200px">
+              <div class="set-ctl">
                 <Slider
                   value={settings.bpm_max_change}
                   max={16}
@@ -3100,21 +3098,21 @@
             </div>
             <div class="set-row">
               <span class="lb">{tr('Beat-aligned start')}
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Start the blend on a beat so kicks line up')}</span>
+                <span class="set-meta">{tr('Start the blend on a beat so kicks line up')}</span>
               </span>
               <Toggle bind:checked={settings.bpm_beat_align} label={tr('Beat-aligned start')} onchange={() => api.setSettings(settings)} />
             </div>
             <div class="set-row">
               <span class="lb">{tr('Keep pitch')}
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Time-stretch instead of speeding up, so vocals don\'t change key')}</span>
+                <span class="set-meta">{tr('Time-stretch instead of speeding up, so vocals don\'t change key')}</span>
               </span>
               <Toggle bind:checked={settings.bpm_keylock} label={tr('Keep pitch')} onchange={() => api.setSettings(settings)} />
             </div>
             <div class="set-row">
               <span class="lb">{tr('Tempo return')}
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr("Glide back to the track's own tempo over {s}s", { s: settings.bpm_return_seconds.toFixed(0) })}</span>
+                <span class="set-meta">{tr("Glide back to the track's own tempo over {s}s", { s: settings.bpm_return_seconds.toFixed(0) })}</span>
               </span>
-              <div style="width:200px">
+              <div class="set-ctl">
                 <Slider
                   value={settings.bpm_return_seconds}
                   max={30}
@@ -3129,21 +3127,21 @@
           {/if}
           <div class="set-row">
             <span class="lb">{tr('Crossfade defaults')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Restore every crossfade option above')}</span>
+              <span class="set-meta">{tr('Restore every crossfade option above')}</span>
             </span>
             <button class="btn ghost" type="button" onclick={resetCrossfade}>{tr('Reset')}</button>
           </div>
           {/if}
           <div class="set-row">
             <span class="lb">{tr('Auto-DJ')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{player.shuffle ? tr('Reorder upcoming songs by tempo so transitions flow (paused while shuffle is on). Works best with BPM matching') : tr('Reorder upcoming songs by tempo so transitions flow. Works best with BPM matching')}</span>
+              <span class="set-meta">{player.shuffle ? tr('Reorder upcoming songs by tempo so transitions flow (paused while shuffle is on). Works best with BPM matching') : tr('Reorder upcoming songs by tempo so transitions flow. Works best with BPM matching')}</span>
             </span>
             <Toggle bind:checked={settings.auto_dj} label={tr('Auto-DJ')} onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
           </div>
           {#if settings.auto_dj}
             <div class="set-row">
               <span class="lb">Harmonic mixing
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Also detect each song's key and prefer ones that blend in key (Camelot wheel)</span>
+                <span class="set-meta">Also detect each song's key and prefer ones that blend in key (Camelot wheel)</span>
               </span>
               <Toggle checked={!!settings.harmonic_mix} label="Harmonic mixing" onchange={(v) => { settings.harmonic_mix = v; api.setSettings(settings); }} />
             </div>
@@ -3151,7 +3149,7 @@
           {#if settings.normalize || settings.bpm_match || settings.auto_dj}
             <div class="set-row">
               <span class="lb">{tr('Track analysis')}
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{analysisCount === 1 ? tr('Loudness and tempo saved for 1 track') : tr('Loudness and tempo saved for {n} tracks', { n: analysisCount })}</span>
+                <span class="set-meta">{analysisCount === 1 ? tr('Loudness and tempo saved for 1 track') : tr('Loudness and tempo saved for {n} tracks', { n: analysisCount })}</span>
               </span>
               <button class="btn ghost" type="button" onclick={clearAnalysis} disabled={analysisCount === 0}>{tr('Clear')}</button>
             </div>
@@ -3164,7 +3162,7 @@
           {#if !isPhone}
             <div class="set-row">
               <span class="lb">Output device
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{outputs.current ? `Playing through ${outputs.current}` : `System default${outputs.default ? ` (${outputs.default})` : ''}`}</span>
+                <span class="set-meta">{outputs.current ? `Playing through ${outputs.current}` : `System default${outputs.default ? ` (${outputs.default})` : ''}`}</span>
               </span>
               <Dropdown value={settings.output_device ?? ''} options={[
                 { value: '', label: 'System default' },
@@ -3173,23 +3171,23 @@
             </div>
             <div class="set-row">
               <span class="lb">Switch automatically
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Move to headphones or Bluetooth when they connect, and back when they come back</span>
+                <span class="set-meta">Move to headphones or Bluetooth when they connect, and back when they come back</span>
               </span>
               <Toggle checked={!!settings.output_auto_switch} label="Switch output automatically" onchange={(v) => { settings.output_auto_switch = v; api.setSettings(settings); }} />
             </div>
           {/if}
           <div class="set-row">
             <span class="lb">{tr('Volume normalization')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Measure each track and play them all at about the same loudness')}</span>
+              <span class="set-meta">{tr('Measure each track and play them all at about the same loudness')}</span>
             </span>
             <Toggle bind:checked={settings.normalize} label={tr('Volume normalization')} onchange={() => { api.setSettings(settings); void refreshAnalysisCount(); }} />
           </div>
           {#if settings.normalize}
             <div class="set-row">
               <span class="lb">{tr('Target loudness')}
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{settings.normalize_target} LUFS - lower is quieter with more headroom</span>
+                <span class="set-meta">{settings.normalize_target} LUFS - lower is quieter with more headroom</span>
               </span>
-              <div style="width:200px">
+              <div class="set-ctl">
                 <Slider
                   value={settings.normalize_target + 23}
                   max={15}
@@ -3204,7 +3202,7 @@
           {/if}
           <div class="set-row">
             <span class="lb">Speed & effects
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Nightcore, slowed + reverb, or your own mix</span>
+              <span class="set-meta">Nightcore, slowed + reverb, or your own mix</span>
             </span>
             <Dropdown value={fxPreset} options={[
               { value: 'normal', label: 'Normal' },
@@ -3216,9 +3214,9 @@
           {#if fxPreset !== 'normal'}
             <div class="set-row">
               <span class="lb">Speed
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{fmtSpeed(settings.speed ?? 1)}</span>
+                <span class="set-meta">{fmtSpeed(settings.speed ?? 1)}</span>
               </span>
-              <div style="width:200px">
+              <div class="set-ctl">
                 <Slider
                   value={Math.round(((settings.speed ?? 1) - 0.5) * 100)}
                   max={150}
@@ -3233,15 +3231,15 @@
             </div>
             <div class="set-row">
               <span class="lb">Keep pitch
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Off: pitch follows the speed, like a record (nightcore / slowed)</span>
+                <span class="set-meta">Off: pitch follows the speed, like a record (nightcore / slowed)</span>
               </span>
               <Toggle checked={!!settings.speed_keep_pitch} label="Keep pitch" onchange={(v) => { settings.speed_keep_pitch = v; api.setSettings(settings); }} />
             </div>
             <div class="set-row">
               <span class="lb">Reverb
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{Math.round((settings.reverb ?? 0) * 100)}%</span>
+                <span class="set-meta">{Math.round((settings.reverb ?? 0) * 100)}%</span>
               </span>
-              <div style="width:200px">
+              <div class="set-ctl">
                 <Slider
                   value={Math.round((settings.reverb ?? 0) * 100)}
                   max={100}
@@ -3257,7 +3255,7 @@
           <div class="set-row set-eq">
             <div class="set-eq-head">
               <span class="lb"><Hi icon={SlidersHorizontalIcon} size={20} /> {tr('Equalizer')}
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Five bands, −12 to +12 dB')}</span>
+                <span class="set-meta">{tr('Five bands, −12 to +12 dB')}</span>
               </span>
               <Toggle bind:checked={settings.eq_enabled} label={tr('Equalizer')} onchange={() => api.setSettings(settings)} />
             </div>
@@ -3305,57 +3303,55 @@
             <div class="set-card">
               <div class="set-row">
                 <span class="lb">{tr('Letter-by-letter fill')}
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Shows where in the line the singer is')}</span>
+                  <span class="set-meta">{tr('Shows where in the line the singer is')}</span>
                 </span>
                 <Toggle bind:checked={settings.lyrics_karaoke} label={tr('Letter-by-letter fill')} onchange={() => api.setSettings(settings)} />
               </div>
               <div class="set-row">
-                <span class="lb">Synced lyrics from LRCLIB
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">When YouTube Music has no timed lyrics, look the song up on lrclib.net</span>
+                <span class="lb">{tr('Synced lyrics from LRCLIB')}
+                  <span class="set-meta">{tr('When YouTube Music has no timed lyrics, look the song up on lrclib.net')}</span>
                 </span>
-                <Toggle checked={settings.lyrics_lrclib !== false} label="Synced lyrics from LRCLIB" onchange={(v) => { settings.lyrics_lrclib = v; api.setSettings(settings); }} />
+                <Toggle checked={settings.lyrics_lrclib !== false} label={tr('Synced lyrics from LRCLIB')} onchange={(v) => { settings.lyrics_lrclib = v; api.setSettings(settings); }} />
               </div>
               <div class="set-row">
-                <span class="lb">Glow
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Soft light on the letters being sung</span>
                 <span class="lb">{tr('Glow')}
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Soft light on the letters being sung')}</span>
+                  <span class="set-meta">{tr('Soft light on the letters being sung')}</span>
                 </span>
                 <Toggle bind:checked={settings.lyrics_glow} label={tr('Glow')} onchange={() => api.setSettings(settings)} />
               </div>
               <div class="set-row">
                 <span class="lb">{tr('Blur distant lines')}
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Fullscreen only: lines fade out of focus the further they are')}</span>
+                  <span class="set-meta">{tr('Fullscreen only: lines fade out of focus the further they are')}</span>
                 </span>
                 <Toggle bind:checked={settings.lyrics_blur} label={tr('Blur distant lines')} onchange={() => api.setSettings(settings)} />
               </div>
               <div class="set-row">
                 <span class="lb">{tr('Instrumental dots')}
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Three dots fill up during long gaps between lines')}</span>
+                  <span class="set-meta">{tr('Three dots fill up during long gaps between lines')}</span>
                 </span>
                 <Toggle bind:checked={settings.lyrics_dots} label={tr('Instrumental dots')} onchange={() => api.setSettings(settings)} />
               </div>
               <div class="set-row">
-                <span class="lb">Visualizer
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Fullscreen only: the music's spectrum, live, in the cover's colour</span>
+                <span class="lb">{tr('Visualizer')}
+                  <span class="set-meta">{tr("Fullscreen only: the music's spectrum, live, in the cover's colour")}</span>
                 </span>
                 <Dropdown value={settings.visualizer ?? 'off'} options={[
-                  { value: 'off', label: 'Off' },
-                  { value: 'bars', label: 'Bars' },
-                  { value: 'wave', label: 'Wave' },
+                  { value: 'off', label: tr('Off') },
+                  { value: 'bars', label: tr('Bars') },
+                  { value: 'wave', label: tr('Wave') },
                 ]} onchange={(v) => { settings.visualizer = v as 'off' | 'bars' | 'wave'; api.setSettings(settings); }} />
               </div>
               <div class="set-row">
-                <span class="lb">Text size
                 <span class="lb">{tr('Text size')}
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{Math.round(settings.lyrics_size)}%</span>
+                  <span class="set-meta">{Math.round(settings.lyrics_size)}%</span>
                 </span>
-                <div style="width:200px">
+                <div class="set-ctl">
                   <Slider
                     value={settings.lyrics_size - 70}
                     max={80}
                     live={true}
                     showTip={true}
+                    label={tr('Text size')}
                     format={(v) => `${Math.round(v) + 70}%`}
                     oninput={(v) => { settings.lyrics_size = Math.round(v) + 70; }}
                     onchange={(v) => { settings.lyrics_size = Math.round(v) + 70; api.setSettings(settings); }}
@@ -3369,15 +3365,15 @@
             <div class="set-card">
           <div class="set-row">
             <span class="lb"><Hi icon={WifiOff01Icon} size={20} /> {tr('Offline mode')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{off.netDown && !off.mode ? tr('Play only downloaded songs and never touch the network (no connection detected right now)') : tr('Play only downloaded songs and never touch the network')}</span>
+              <span class="set-meta">{off.netDown && !off.mode ? tr('Play only downloaded songs and never touch the network (no connection detected right now)') : tr('Play only downloaded songs and never touch the network')}</span>
             </span>
             <Toggle checked={off.mode} label={tr('Offline mode')} onchange={(v) => api.setOfflineMode(v)} />
           </div>
           <div class="set-row">
             <span class="lb"><Hi icon={Download04Icon} size={20} /> {tr('Downloads')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('{n} collections · {size} on this device', { n: off.status?.sources.length ?? 0, size: fmtBytes(off.status?.bytes ?? 0) })}</span>
+              <span class="set-meta">{tr('{n} collections · {size} on this device', { n: off.status?.sources.length ?? 0, size: fmtBytes(off.status?.bytes ?? 0) })}</span>
             </span>
-            <span style="display:flex;gap:8px">
+            <span class="set-actions">
               <button class="btn ghost sm" type="button" onclick={() => go({ id: 'downloads' })}>{tr('Manage')}</button>
               {#if off.status?.sources.length}
                 <button class="btn ghost sm" type="button" class:on={confirmRm === 'all'} onclick={() => { if (confirmRm === 'all') { api.offlineRemoveAll(); confirmRm = null; } else { confirmRm = 'all'; setTimeout(() => { if (confirmRm === 'all') confirmRm = null; }, 3000); } }}>{confirmRm === 'all' ? tr('Really remove all?') : tr('Remove all')}</button>
@@ -3386,7 +3382,7 @@
           </div>
           <div class="set-row set-cache">
             <span class="lb"><Hi icon={Bookmark02Icon} size={20} /> {tr('Offline cache')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{fmtCache(cacheUsed)} of {fmtCache(cacheMax)}</span>
+              <span class="set-meta">{fmtCache(cacheUsed)} of {fmtCache(cacheMax)}</span>
             </span>
             <div class="cache-ctl">
               <Dropdown
@@ -3428,14 +3424,14 @@
             <div class="set-card">
           <div class="set-row">
             <span class="lb"><Hi icon={DiscordIcon} size={20} /> {tr('Discord presence')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Show the track and cover on your Discord profile')}</span>
+              <span class="set-meta">{tr('Show the track and cover on your Discord profile')}</span>
             </span>
             <Toggle bind:checked={settings.discord_presence} label={tr('Discord presence')} onchange={() => api.setSettings(settings)} />
           </div>
           <Scrobbling onChange={() => scrobbler.reload()} />
           <div class="set-row">
             <span class="lb">{tr('Listening stats')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Keep a private history on this device for the Stats page')}</span>
+              <span class="set-meta">{tr('Keep a private history on this device for the Stats page')}</span>
             </span>
             <Toggle bind:checked={settings.listening_stats} label={tr('Listening stats')} onchange={() => api.setSettings(settings)} />
           </div>
@@ -3458,14 +3454,14 @@
           {#if !isPhone}
             <div class="set-row">
               <span class="lb">{tr('Tray icon')}
-                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Play/pause, next, previous and like from the {isMac ? 'menu bar' : 'system tray'}</span>
+                <span class="set-meta">Play/pause, next, previous and like from the {isMac ? 'menu bar' : 'system tray'}</span>
               </span>
               <Toggle bind:checked={settings.tray_icon} label={tr('Tray icon')} onchange={() => { if (!settings.tray_icon) settings.close_to_tray = false; api.setSettings(settings); }} />
             </div>
             {#if settings.tray_icon}
               <div class="set-row">
                 <span class="lb">{tr('Close to tray')}
-                  <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Closing the window keeps the music playing; quit from the tray menu')}</span>
+                  <span class="set-meta">{tr('Closing the window keeps the music playing; quit from the tray menu')}</span>
                 </span>
                 <Toggle bind:checked={settings.close_to_tray} label={tr('Close to tray')} onchange={() => api.setSettings(settings)} />
               </div>
@@ -3478,13 +3474,13 @@
             <div class="set-card">
           <div class="set-row">
             <span class="lb">{tr('Updates')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Tarn {appVersion}</span>
+              <span class="set-meta">Tarn {appVersion}</span>
             </span>
             <button class="upd-check" type="button" onclick={() => (updateCheck += 1)}>{tr('Check for updates')}</button>
           </div>
           <div class="set-row">
             <span class="lb">{tr('Diagnostics')}
-              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{tr('Auth, library, and recent logs - no cookie values.')}</span>
+              <span class="set-meta">{tr('Auth, library, and recent logs - no cookie values.')}</span>
             </span>
             <button class="btn ghost" type="button" onclick={copyDiagnostics}>{tr('Copy diagnostics')}</button>
           </div>

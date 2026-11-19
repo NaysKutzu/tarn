@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, type RemoteInfo } from '../api';
+  import { t as tr } from '../i18n.svelte';
   import Toggle from './Toggle.svelte';
 
   let info = $state<RemoteInfo>({ running: false, url: null, qr_svg: null, error: null });
@@ -27,10 +28,10 @@
 </script>
 
 <div class="set-row">
-  <span class="lb">Phone remote
-    <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Control Tarn from your phone's browser on the same Wi-Fi. Turns off when Tarn closes</span>
+  <span class="lb">{tr('Phone remote')}
+    <span class="set-meta">{tr("Control Tarn from your phone's browser on the same Wi-Fi. Turns off when Tarn closes")}</span>
   </span>
-  <Toggle checked={info.running} disabled={busy} label="Phone remote" onchange={(v) => set(v)} />
+  <Toggle checked={info.running} disabled={busy} label={tr('Phone remote')} onchange={(v) => set(v)} />
 </div>
 {#if info.error}
   <p class="t-meta pr-err">{info.error}</p>
