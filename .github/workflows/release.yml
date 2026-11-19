@@ -59,9 +59,13 @@ jobs:
     needs: [version]
     runs-on: ubuntu-24.04
     steps:
+      # No checkout: this job only talks to the Releases API. Pass GH_REPO so
+      # `gh` does not shell out to git (no .git here → "not a git repository").
+      # Custom --notes already cover the release body; do not use --generate-notes.
       - name: Create draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ needs.version.outputs.tag }}"
           TITLE="Tarn v${{ needs.version.outputs.stamped }} (build ${{ needs.version.outputs.build }})"
@@ -81,8 +85,7 @@ jobs:
             gh release create "$TAG" \
               --draft \
               --title "$TITLE" \
-              --notes "$NOTES" \
-              --generate-notes
+              --notes "$NOTES"
           fi
 
   build-windows:
