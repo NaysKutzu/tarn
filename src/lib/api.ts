@@ -21,6 +21,7 @@ export const api = {
   lyrics: (id: string) => invoke<Lyrics>('get_lyrics', { id }),
   related: (id: string) => invoke<Related>('get_related', { id }),
   trackWave: (id: string) => invoke<number[] | null>('track_wave', { id }),
+  outputDevices: () => invoke<{ devices: string[]; default: string | null; current: string | null }>('output_devices'),
   play: (track: Track, queue: Track[], index: number) =>
     invoke<void>('play', { track, queue, index }),
   radio: (id: string) => invoke<void>('start_radio', { id }),

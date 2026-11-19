@@ -201,6 +201,10 @@ export interface Settings {
   theme?: 'dark' | 'light' | 'oled' | 'system';
   /** Fixed accent "#rrggbb"; null = from the cover art. */
   accent_color?: string | null;
+  /** Output device name; null = system default. */
+  output_device?: string | null;
+  /** Follow devices as they connect / disconnect. */
+  output_auto_switch?: boolean;
   cache_max_mb: number;
   /** Only downloaded / cached songs play; nothing touches the network. */
   offline_mode: boolean;

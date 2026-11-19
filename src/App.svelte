@@ -1967,6 +1967,18 @@
     void refreshAnalysisCount();
   });
 
+  // Audio output devices (desktop picker in Settings → Sound).
+  let outputs = $state<{ devices: string[]; default: string | null; current: string | null }>({ devices: [], default: null, current: null });
+  async function refreshOutputs() {
+    try { outputs = await api.outputDevices(); } catch {}
+  }
+  $effect(() => {
+    if (view.id !== 'settings' || isPhone) return;
+    void refreshOutputs();
+    const t = setInterval(refreshOutputs, 5000);
+    return () => clearInterval(t);
+  });
+
   let navOn = (id: string) => view.id === id;
 
   let winFocused = $state(true);
@@ -3112,6 +3124,23 @@
           <section class="set-sec" id="set-sound">
             <div class="set-h"><h2>Sound</h2><p>Loudness and equalizer</p></div>
             <div class="set-card">
+          {#if !isPhone}
+            <div class="set-row">
+              <span class="lb">Output device
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">{outputs.current ? `Playing through ${outputs.current}` : `System default${outputs.default ? ` (${outputs.default})` : ''}`}</span>
+              </span>
+              <Dropdown value={settings.output_device ?? ''} options={[
+                { value: '', label: 'System default' },
+                ...[...new Set([...outputs.devices, ...(settings.output_device ? [settings.output_device] : [])])].map((d) => ({ value: d, label: outputs.devices.includes(d) ? d : `${d} (not connected)` })),
+              ]} onchange={(v) => { settings.output_device = v || null; api.setSettings(settings); setTimeout(refreshOutputs, 600); }} />
+            </div>
+            <div class="set-row">
+              <span class="lb">Switch automatically
+                <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Move to headphones or Bluetooth when they connect, and back when they come back</span>
+              </span>
+              <Toggle checked={!!settings.output_auto_switch} label="Switch output automatically" onchange={(v) => { settings.output_auto_switch = v; api.setSettings(settings); }} />
+            </div>
+          {/if}
           <div class="set-row">
             <span class="lb">Volume normalization
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Measure each track and play them all at about the same loudness</span>

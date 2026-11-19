@@ -7,6 +7,7 @@ pub mod decode;
 mod eq;
 mod fx;
 mod viz;
+mod output;
 mod innertube;
 mod player_client;
 mod login;
@@ -150,6 +151,10 @@ impl App {
         );
         player.set_eq(settings.eq_bands, settings.eq_enabled);
         player.set_fx(settings.speed, settings.speed_keep_pitch, settings.reverb);
+        output::set_prefs(settings.output_device.clone(), settings.output_auto_switch);
+        if settings.output_device.is_some() {
+            player.set_output_device(settings.output_device.clone());
+        }
         player.set_transition(settings.transition());
         let analysis = analysis::Analyzer::open(store.data_dir());
         player.set_analyzer(analysis.clone());
@@ -974,6 +979,10 @@ fn viz_frame(bands: usize) -> Vec<f32> {
         return Vec::new();
     }
     viz::spectrum(bands)
+/// Output devices for the settings picker.
+#[tauri::command]
+fn output_devices() -> output::Devices {
+    output::list()
 }
 
 #[tauri::command]
@@ -1508,6 +1517,14 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     settings.eq_bands = bands;
     app.player.set_eq(settings.eq_bands, settings.eq_enabled);
     app.player.set_fx(settings.speed, settings.speed_keep_pitch, settings.reverb);
+    {
+        let before = output::prefs().0;
+        output::set_prefs(settings.output_device.clone(), settings.output_auto_switch);
+        let now = output::prefs().0;
+        if before != now {
+            app.player.set_output_device(now);
+        }
+    }
     app.player.set_transition(settings.transition());
     app.stats.set_enabled(settings.listening_stats);
     #[cfg(desktop)]
@@ -2114,6 +2131,7 @@ pub fn run() {
             });
             emit_loop(handle.clone(), app.clone());
             autodj::start(app.clone());
+            output::watch(app.player.clone());
             net_loop(handle.clone(), app.clone());
             {
                 let h = handle.clone();
@@ -2203,6 +2221,7 @@ pub fn run() {
             track_wave,
             set_visualizer,
             viz_frame,
+            output_devices,
             clear_analysis,
             cache_stats,
             get_listens,

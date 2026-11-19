@@ -326,6 +326,13 @@ pub struct Settings {
     /// Reverb amount 0..=1 (0 = off).
     #[serde(default)]
     pub reverb: f64,
+    /// Output device name (None = system default).
+    #[serde(default)]
+    pub output_device: Option<String>,
+    /// Follow output devices as they come and go: back to the chosen
+    /// device when it reconnects, or to a new system default.
+    #[serde(default)]
+    pub output_auto_switch: bool,
     /// Fade-out shape of the outgoing track: "equal_power" | "linear" |
     /// "logarithmic" | "exponential" | "s_curve".
     #[serde(default = "default_curve")]
@@ -439,6 +446,8 @@ impl Default for Settings {
             speed: default_speed(),
             speed_keep_pitch: false,
             reverb: 0.0,
+            output_device: None,
+            output_auto_switch: false,
             crossfade_curve_out: default_curve(),
             crossfade_curve_in: default_curve(),
             crossfade_out_len: default_pct(),
