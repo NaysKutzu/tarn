@@ -983,6 +983,10 @@ fn viz_frame(bands: usize) -> Vec<f32> {
 #[tauri::command]
 fn output_devices() -> output::Devices {
     output::list()
+/// Cached tempo for each of `ids` that has been analysed (smart playlists).
+#[tauri::command]
+fn track_bpms(app: State<Arc<App>>, ids: Vec<String>) -> std::collections::HashMap<String, f64> {
+    app.analysis.bpms(&ids)
 }
 
 #[tauri::command]
@@ -2222,6 +2226,7 @@ pub fn run() {
             set_visualizer,
             viz_frame,
             output_devices,
+            track_bpms,
             clear_analysis,
             cache_stats,
             get_listens,

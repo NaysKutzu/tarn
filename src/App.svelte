@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t as tr, setLocale, localeOptions } from './lib/i18n.svelte';
   import Stats from './lib/components/Stats.svelte';
+  import SmartPlaylists from './lib/components/SmartPlaylists.svelte';
   import Shortcuts from './lib/components/Shortcuts.svelte';
   import { appCombo, actionFor, appShortcuts } from './lib/shortcuts';
   import { onMount } from 'svelte';
@@ -53,6 +54,7 @@
     Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon,
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
     Download04Icon, ChartColumnIcon, Forward01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
+    Download04Icon, ChartColumnIcon, MagicWand01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
     PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon,
     AudioWave01Icon,
     PaintBoardIcon,
@@ -2127,6 +2129,9 @@
       <button class="nav-item {navOn('stats') ? 'on' : ''}" onclick={() => go({ id: 'stats' })} type="button">
         <span class="ic"><Hi icon={ChartColumnIcon} size={24} /></span> {tr('Stats')}
       </button>
+      <button class="nav-item {navOn('smart') ? 'on' : ''}" onclick={() => go({ id: 'smart' })} type="button">
+        <span class="ic"><Hi icon={MagicWand01Icon} size={24} /></span> Smart playlists
+      </button>
     </nav>
     <div class="side-scroll">
       {#if auth.signed_in && !off.offline && !library?.playlists?.length && (libLoading || libPartial || !library)}
@@ -2531,6 +2536,18 @@
           onArtist={(id) => go({ id: 'artist', artistId: id })}
           onAlbum={(id) => go({ id: 'album', albumId: id })}
           onEnable={() => { settings.listening_stats = true; api.setSettings(settings); }}
+        />
+
+      {:else if view.id === 'smart'}
+        <SmartPlaylists
+          liked={library?.liked ?? []}
+          currentId={player.track?.id}
+          playing={player.playing}
+          statsEnabled={settings.listening_stats}
+          onPlay={(tracks, i, shuffle) => { void playTracks(tracks, i).then(() => api.setShuffle(!!shuffle)); }}
+          onContext={(e, t) => contextTrack(e, t)}
+          onArtist={(id, n) => goArtist(id, n)}
+          onAlbum={(id) => go({ id: 'album', albumId: id })}
         />
 
       {:else if view.id === 'downloads'}

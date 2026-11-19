@@ -71,6 +71,8 @@ export const api = {
   /** Global hotkeys that failed to register ("action: reason"). */
   hotkeyErrors: () => invoke<string[]>('hotkey_errors'),
   /** Tracks with cached loudness / tempo analysis. */
+  /** Cached BPM per track id (only analysed tracks are present). */
+  trackBpms: (ids: string[]) => invoke<Record<string, number>>('track_bpms', { ids }),
   analysisCount: () => invoke<number>('analysis_count'),
   clearAnalysis: () => invoke<void>('clear_analysis'),
   savedSession: () => invoke<SavedSession | null>('saved_session'),
