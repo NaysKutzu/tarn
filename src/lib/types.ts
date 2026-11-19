@@ -232,6 +232,8 @@ export interface Settings {
   /** Reorder upcoming tracks by tempo (only when shuffle is off). */
   auto_dj: boolean;
   lyrics_karaoke: boolean;
+  /** Fall back to LRCLIB when YouTube Music has no synced lyrics (default on). */
+  lyrics_lrclib?: boolean;
   lyrics_glow: boolean;
   lyrics_blur: boolean;
   lyrics_dots: boolean;
