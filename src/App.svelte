@@ -49,19 +49,7 @@
   import { fail, authPrompt, toast } from './lib/toast';
   import { friendlyError, isAuthError } from './lib/errors';
   import { localLikes, isLocalLiked, setLocalLiked, localRecents, recordRecent } from './lib/local';
-  import {
-    Home01Icon, Search01Icon, Compass01Icon, LibraryIcon, Settings02Icon,
-    PlayIcon, PauseIcon, PreviousIcon, NextIcon, ShuffleIcon, RepeatIcon, RepeatOne01Icon,
-    VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, FavouriteFilledIcon, ThumbsDownIcon, Queue02Icon,
-    Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon,
-    Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon,
-    LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
-    Download04Icon, ChartColumnIcon, Forward01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
-    Download04Icon, ChartColumnIcon, MagicWand01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
-    PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon,
-    AudioWave01Icon,
-    PaintBoardIcon,
-  } from './lib/icons';
+  import {Home01Icon, Search01Icon, Compass01Icon, LibraryIcon, Settings02Icon, PlayIcon, PauseIcon, PreviousIcon, NextIcon, ShuffleIcon, RepeatIcon, RepeatOne01Icon, VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, FavouriteFilledIcon, ThumbsDownIcon, Queue02Icon, Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon, Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon, LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon, Download04Icon, ChartColumnIcon, Forward01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon, MagicWand01Icon, PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon, AudioWave01Icon, PaintBoardIcon} from './lib/icons';
   import { applyTheme, ACCENTS, hexRgb, type Theme } from './lib/theme';
 
   const isMac =
