@@ -536,10 +536,13 @@ fn default_bpm_return() -> f64 {
 }
 fn default_speed() -> f64 {
     1.0
+}
 fn default_visualizer() -> String {
     "off".into()
+}
 fn default_theme() -> String {
     "dark".into()
+}
 fn default_ui_language() -> String {
     "system".into()
 }

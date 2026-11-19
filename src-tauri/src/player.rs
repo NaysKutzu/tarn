@@ -827,6 +827,7 @@ impl Player {
         let speed = if speed.is_finite() { (speed.clamp(0.5, 2.0) * 100.0).round() / 100.0 } else { 1.0 };
         let reverb = if reverb.is_finite() { reverb.clamp(0.0, 1.0) as f32 } else { 0.0 };
         let _ = self.tx.send(Cmd::Fx(crate::mix::Fx { speed, keep_pitch, reverb }));
+    }
     /// Reopen the audio output on `name` (None = system default).
     pub fn set_output_device(&self, name: Option<String>) {
         let _ = self.tx.send(Cmd::Output(name));

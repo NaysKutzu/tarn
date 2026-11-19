@@ -479,11 +479,15 @@ mod tests {
         assert_eq!(overview(&[10, 20], 6).len(), 6);
         assert!(overview(&[], 6).is_empty());
         assert_eq!(overview(&[0, 0], 3), vec![0, 0, 0]);
+    }
+
+    #[test]
     fn bpm_prefers_confident_grid() {
         let g = |bpm, confidence| Some(Grid { bpm, phase_s: 0.0, confidence });
         let mut a = TrackAnalysis {
             v: 0, lufs: -14.0, peak: 1.0, duration_s: 200.0, lead_silence_s: 0.0,
             music_end_s: 200.0, head: g(120.0, 0.3), tail: g(128.0, 0.8), at: 0,
+            wave: Vec::new(), key: None,
         };
         assert_eq!(a.bpm(), Some(128.0));
         a.tail = None;
