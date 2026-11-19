@@ -28,7 +28,7 @@ export const api = {
   searchTracks: (query: string) => invoke<Track[]>('search_tracks', { query }),
   suggestions: (query: string) => invoke<string[]>('search_suggestions', { query }),
   home: (params?: string | null) => invoke<Home>('get_home', { params: params ?? null }),
-  /** Last Home feed from disk — instant paint while live refresh runs. */
+  /** Last Home feed from disk - instant paint while live refresh runs. */
   homeCached: () => invoke<Home | null>('get_home_cached'),
   clearHomeCache: () => invoke<void>('clear_home_cache'),
   explore: () => invoke<Explore>('get_explore'),

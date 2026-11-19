@@ -12,7 +12,7 @@ use discord_rich_presence::{
 use crate::ytm::upgrade_cover;
 
 /// Public Discord Application ID for Tarn (Rich Presence).
-/// Create at https://discord.com/developers/applications (name it Tarn) — no secret needed.
+/// Create at https://discord.com/developers/applications (name it Tarn) - no secret needed.
 /// Override with env `TARN_DISCORD_CLIENT_ID` for local testing.
 fn client_id() -> String {
     std::env::var("TARN_DISCORD_CLIENT_ID").unwrap_or_else(|_| CLIENT_ID.to_string())
@@ -72,7 +72,7 @@ fn run(app: Arc<crate::App>) -> Result<(), String> {
                         crate::diag::log(format!("discord presence: {e}"));
                         last_conn_err = Some(e.clone());
                     }
-                    // Missing app id / Discord closed — quiet backoff.
+                    // Missing app id / Discord closed - quiet backoff.
                     if e.contains("CLIENT_ID") {
                         std::thread::sleep(Duration::from_secs(30));
                     } else {

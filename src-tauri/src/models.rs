@@ -422,6 +422,15 @@ pub struct Settings {
     /// Lyrics text size, percent (70..=150).
     #[serde(default = "default_pct")]
     pub lyrics_size: f64,
+    /// Desktop frosted-glass strength 0..=100 (0 = off). Older builds stored a bool.
+    #[serde(default, deserialize_with = "de_transparency")]
+    pub transparency: u8,
+    /// Inset sidebar / player / titlebar with gaps and rounded corners.
+    #[serde(default)]
+    pub floating_ui: bool,
+    /// Desktop: keep the phone remote LAN server on across launches.
+    #[serde(default)]
+    pub phone_remote: bool,
 }
 
 impl Default for Settings {
@@ -480,8 +489,22 @@ impl Default for Settings {
             lyrics_dots: true,
             lyrics_size: 100.0,
             visualizer: default_visualizer(),
+            transparency: 0,
+            floating_ui: false,
+            phone_remote: false,
         }
     }
+}
+
+fn de_transparency<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Bool(true) => 70,
+        serde_json::Value::Bool(false) => 0,
+        serde_json::Value::Number(n) => n.as_u64().unwrap_or(0).min(100) as u8,
+        serde_json::Value::String(s) => s.parse::<u8>().ok().map(|n| n.min(100)).unwrap_or(0),
+        _ => 0,
+    })
 }
 
 impl Settings {

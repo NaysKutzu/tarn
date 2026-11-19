@@ -37,7 +37,7 @@ pub fn update(handle: &AppHandle, st: &PlayerState) {
 
     let tip = match st.track.as_ref() {
         Some(t) if t.artists.is_empty() => t.title.clone(),
-        Some(t) => format!("{} — {}", t.title, t.artists.join(", ")),
+        Some(t) => format!("{} - {}", t.title, t.artists.join(", ")),
         None => String::new(),
     };
     let now = (tip, st.playing, st.liked);

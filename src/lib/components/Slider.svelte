@@ -6,6 +6,8 @@
     live = false,
     wheel = false,
     showTip = false,
+    /** Tip follows cursor on hover (seek). Off = tip sticks to the real value (volume). */
+    scrubTip = true,
     /** Absolute wheel/keyboard step. Defaults to 5% of max for wheel, 2% for keys. */
     step = 0,
     format = (v: number) => String(v),
@@ -23,6 +25,7 @@
     live?: boolean;
     wheel?: boolean;
     showTip?: boolean;
+    scrubTip?: boolean;
     step?: number;
     format?: (v: number) => string;
     /** Seconds (or same unit as max) already downloaded ahead. */
@@ -49,10 +52,14 @@
     if (!max || max <= 0 || !isFinite(max)) return 0;
     return Math.max(0, Math.min(100, (shown / max) * 100));
   });
-  // While dragging/wheeling, pin the tip to the thumb (real value), not the cursor.
-  let tipPct = $derived(dragging || preview != null || tipHold ? fillPct : hoverPct);
+  // Seek: tip can follow the cursor. Volume: tip always matches the thumb value.
+  let tipPct = $derived(
+    !scrubTip || dragging || preview != null || tipHold ? fillPct : hoverPct,
+  );
   let tipVal = $derived(
-    preview ?? (tipHold ? shown : hovering && max > 0 ? (hoverPct / 100) * max : shown),
+    !scrubTip
+      ? shown
+      : preview ?? (tipHold ? shown : hovering && max > 0 ? (hoverPct / 100) * max : shown),
   );
   let tipVisible = $derived(showTip && max > 0 && (hovering || dragging || tipHold));
   let bufPct = $derived.by(() => {

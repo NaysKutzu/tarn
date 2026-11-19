@@ -11,6 +11,9 @@
   import { artistsLine } from './lib/format';
 
   let player = $state<PlayerState | null>(null);
+  let titleClipEl = $state<HTMLDivElement | null>(null);
+  let titleEl = $state<HTMLDivElement | null>(null);
+  let titleOverflow = $state(false);
 
   // Opened from the tray: behave like a popup and go away when it loses focus.
   const popup = new URLSearchParams(location.search).has('pop');
@@ -43,6 +46,37 @@
     player && player.duration > 0 ? Math.min(100, (player.position / player.duration) * 100) : 0,
   );
 
+  function measureTitleOverflow() {
+    const clip = titleClipEl;
+    const text = titleEl;
+    if (!clip || !text) {
+      titleOverflow = false;
+      return;
+    }
+    const overflow = text.scrollWidth > clip.clientWidth + 1;
+    titleOverflow = overflow;
+    clip.style.setProperty(
+      '--title-shift',
+      overflow ? `${clip.clientWidth - text.scrollWidth}px` : '0px',
+    );
+  }
+
+  $effect(() => {
+    void player?.track?.title;
+    void titleClipEl;
+    void titleEl;
+    const clip = titleClipEl;
+    if (!clip) {
+      titleOverflow = false;
+      return;
+    }
+    measureTitleOverflow();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => measureTitleOverflow());
+    ro.observe(clip);
+    return () => ro.disconnect();
+  });
+
   function close() {
     getCurrentWindow().close().catch(() => {});
   }
@@ -53,7 +87,9 @@
     <Cover src={player?.track?.cover ?? null} videoId={player?.track?.id ?? null} size={72} alt="" />
   </div>
   <div class="mid" data-tauri-drag-region>
-    <div class="tn" data-tauri-drag-region>{player?.track?.title ?? tr('Nothing playing')}</div>
+    <div class="tn-clip" class:scrolling={titleOverflow} bind:this={titleClipEl} data-tauri-drag-region>
+      <div class="tn" bind:this={titleEl} data-tauri-drag-region>{player?.track?.title ?? tr('Nothing playing')}</div>
+    </div>
     <div class="ta" data-tauri-drag-region>{player?.track ? artistsLine(player.track.artists) : ''}</div>
     <div class="ctl">
       <button type="button" title={tr('Previous')} onclick={() => api.prev().catch(() => {})}><Hi icon={PreviousIcon} size={20} /></button>
@@ -78,12 +114,53 @@
     border: 1px solid var(--line-2, rgba(255, 255, 255, 0.12));
     border-radius: 12px;
     overflow: hidden;
+    /* WebView2 transparent windows often ignore overflow+radius; clip-path holds. */
+    clip-path: inset(0 round 12px);
     user-select: none;
   }
-  .cv { flex: 0 0 auto; display: grid; }
-  .cv :global(img), .cv :global(.ph) { border-radius: 8px; }
-  .mid { min-width: 0; flex: 1; }
-  .tn { font-size: 14px; font-weight: 600; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cv {
+    flex: 0 0 72px;
+    width: 72px;
+    height: 72px;
+    display: grid;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-active, rgba(255, 255, 255, 0.08));
+  }
+  .cv :global(img), .cv :global(.ph) {
+    width: 72px;
+    height: 72px;
+    border-radius: 8px;
+    object-fit: cover;
+    object-position: center;
+  }
+  .mid { min-width: 0; flex: 1; padding-right: 18px; }
+  .tn-clip {
+    max-width: 100%;
+    overflow: hidden;
+    mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 18px), transparent 100%);
+    -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 18px), transparent 100%);
+  }
+  .tn-clip:not(.scrolling) {
+    mask-image: none;
+    -webkit-mask-image: none;
+  }
+  .tn {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 18px;
+    white-space: nowrap;
+    display: inline-block;
+    max-width: none;
+    width: max-content;
+  }
+  .tn-clip.scrolling .tn {
+    animation: mini-title-marquee 10s ease-in-out infinite;
+  }
+  @keyframes mini-title-marquee {
+    0%, 14% { transform: translateX(0); }
+    86%, 100% { transform: translateX(var(--title-shift, 0px)); }
+  }
   .ta { font-size: 12px; line-height: 16px; color: var(--text-2, #c9c6c0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ctl { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
   .ctl button, .x {

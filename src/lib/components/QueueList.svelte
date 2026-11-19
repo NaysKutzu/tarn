@@ -302,7 +302,7 @@
         <span class="dl" title={tr('Downloaded')}><Hi icon={Download04Icon} size={13} /></span>
       {/if}
       {#if i === index}
-        <span class="now-tag">{tr('Now')}</span>
+        <span class="now-tag">{tr('Playing')}</span>
       {:else}
         {#if t.duration}<span class="dur">{fmtTime(t.duration)}</span>{/if}
         <button
@@ -327,50 +327,58 @@
   .qsearch {
     width: 100%;
     box-sizing: border-box;
-    margin: 0 0 8px;
-    padding: 8px 12px;
+    margin: 0 0 10px;
+    padding: 9px 12px;
     font: inherit;
     font-size: 13px;
     color: var(--text);
-    background: var(--bg-hover);
-    border: 1px solid transparent;
-    border-radius: 8px;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: 10px;
     outline: none;
   }
-  .qsearch:focus { border-color: rgba(var(--accent-rgb), 0.6); }
-  .qnone { padding: 14px 8px; font-size: 13px; color: var(--text-2); }
+  .qsearch::placeholder { color: var(--text-3); }
+  .qsearch:focus {
+    border-color: color-mix(in srgb, var(--text) 28%, transparent);
+  }
+  .qnone { padding: 14px 4px; font-size: 13px; color: var(--text-3); }
   .more {
     display: block;
     width: 100%;
-    padding: 8px;
-    margin-bottom: 4px;
+    padding: 8px 4px;
+    margin-bottom: 2px;
     font-size: 12px;
-    color: var(--text-2);
-    border-radius: 8px;
+    color: var(--text-3);
+    border-radius: 0;
+    text-align: left;
   }
-  .more:hover { background: var(--bg-hover); color: var(--text); }
+  .more:hover { background: transparent; color: var(--text); }
   .more-sentinel { height: 1px; }
   .ql.dragging { user-select: none; cursor: grabbing; }
   .qr {
     position: relative;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     min-height: 52px;
-    padding: 4px 8px 4px 22px;
+    padding: 5px 6px 5px 22px;
     box-sizing: border-box;
     width: 100%;
-    margin-bottom: 2px;
+    margin-bottom: 0;
     border-radius: 8px;
     color: inherit;
     cursor: default;
     outline: none;
   }
-  .qr :global(img), .qr :global(.ph) { border-radius: 8px; flex: 0 0 auto; }
+  .qr :global(img), .qr :global(.ph) { border-radius: 6px; flex: 0 0 auto; }
   .npq .qr :global(img), .npq .qr :global(.ph) { border-radius: 12px; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4); }
   .qr:hover, .qr:focus-visible { background: var(--bg-hover); }
-  .qr.now { background: var(--accent-dim); }
-  .qr.played { opacity: 0.55; }
+  .qr.now {
+    background: transparent;
+  }
+  .qr.now .tn { color: var(--text); font-weight: 650; }
+  .qr.now .ta { color: var(--text-2); }
+  .qr.played { opacity: 0.48; }
   .qr.gone { opacity: 0.38; }
   .qr.lifted { opacity: 0.45; }
   .qr.drop-before::before,
@@ -406,20 +414,24 @@
   .grip:hover { color: var(--text); }
   .tx { min-width: 0; flex: 1; }
   .tn {
-    font-size: 14px; line-height: 18px; font-weight: 600;
+    font-size: 13px; line-height: 18px; font-weight: 550;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .ta {
-    font-size: 12px; line-height: 16px; color: var(--text-2);
+    font-size: 12px; line-height: 16px; color: var(--text-3);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .dur { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
-  .dl { color: var(--text-2); opacity: 0.8; display: grid; place-items: center; flex: 0 0 auto; }
+  .dur { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .dl { color: var(--text-3); opacity: 0.8; display: grid; place-items: center; flex: 0 0 auto; }
   .now-tag {
     flex: 0 0 auto;
-    font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-    color: rgb(var(--accent-rgb));
+    font-size: 11px;
+    font-weight: 550;
+    letter-spacing: 0.02em;
+    color: var(--text-3);
+    text-transform: none;
   }
+  .qr.now .now-tag { color: var(--text-2); }
   .rm {
     display: grid; place-items: center;
     width: 28px; height: 28px; border-radius: 50%;

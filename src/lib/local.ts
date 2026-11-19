@@ -83,3 +83,16 @@ export function clearSearchHistory(): string[] {
   write(SEARCH_HIST_KEY, []);
   return [];
 }
+
+const SIDE_PANEL_KEY = 'tarn.side_panel.v1';
+export type SidePanelId = 'queue' | 'lyrics' | 'related';
+
+/** Last open side panel tab (null = closed). Survives restarts. */
+export function loadSidePanel(): SidePanelId | null {
+  const v = read<unknown>(SIDE_PANEL_KEY, null);
+  return v === 'queue' || v === 'lyrics' || v === 'related' ? v : null;
+}
+
+export function saveSidePanel(id: SidePanelId | null) {
+  write(SIDE_PANEL_KEY, id);
+}

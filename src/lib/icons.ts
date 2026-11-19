@@ -63,6 +63,7 @@ export { PencilEdit01Icon } from '@hugeicons/core-free-icons';
 export { Download04Icon } from '@hugeicons/core-free-icons';
 export { DragDropVerticalIcon } from '@hugeicons/core-free-icons';
 export { WifiOff01Icon } from '@hugeicons/core-free-icons';
+export { SmartPhone01Icon } from '@hugeicons/core-free-icons';
 export { CheckmarkCircle02Icon } from '@hugeicons/core-free-icons';
 /** Crescent moon (sleep timer). Stroke icon, same shape format as the others. */
 export const MoonSleepIcon = [

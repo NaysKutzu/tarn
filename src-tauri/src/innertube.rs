@@ -1585,7 +1585,7 @@ fn response_has_account(v: &Value) -> bool {
 }
 
 fn find_page_continuation(v: &Value) -> Option<String> {
-    // Prefer playlist/library shelves and appendContinuationItemsAction —
+    // Prefer playlist/library shelves and appendContinuationItemsAction -
     // a deep walk of every `contents` array also hits unrelated UI (chips,
     // related, voting) and used to feed reload / non-browse tokens into
     // browse → HTTP 400 INVALID_ARGUMENT.
@@ -1693,7 +1693,7 @@ fn token_from_continuation_item(r: &Value) -> Option<String> {
         }
     }
     // Nested under commandExecutorCommand (alongside voting refresh, etc.).
-    // Only CONTINUATION_REQUEST_TYPE_BROWSE is valid for /browse — other
+    // Only CONTINUATION_REQUEST_TYPE_BROWSE is valid for /browse - other
     // command types (watch next, reload) return 400 INVALID_ARGUMENT.
     if let Some(cmds) = r
         .pointer("/continuationEndpoint/commandExecutorCommand/commands")
@@ -1775,7 +1775,7 @@ fn parse_continuation_items(v: &Value) -> (Vec<ShelfItem>, Option<String>) {
     )
 }
 
-/// Legacy `continuations[].nextContinuationData` only — never reload tokens.
+/// Legacy `continuations[].nextContinuationData` only - never reload tokens.
 fn next_continuation_data(v: &Value) -> Option<String> {
     let mut tok = None;
     walk(v, &mut |key, val| {
@@ -1792,7 +1792,7 @@ fn next_continuation_data(v: &Value) -> Option<String> {
 
 fn find_continuation(v: &Value) -> Option<String> {
     // Shelf "show more": last continuationItemRenderer, else nextContinuationData.
-    // Do NOT grab the first bare `"continuation"` string — that often belongs to
+    // Do NOT grab the first bare `"continuation"` string - that often belongs to
     // reloadContinuationData and /browse rejects it with 400 INVALID_ARGUMENT.
     if let Some(arr) = v["contents"]
         .as_array()
@@ -1882,7 +1882,7 @@ impl InnerTube {
             prev_tok = Some(token.clone());
             // A single transient failure (rate limit, dropped connection)
             // used to end the paging here and leave only the first 100 tracks.
-            // Do not retry hard 400 INVALID_ARGUMENT — that is a bad token.
+            // Do not retry hard 400 INVALID_ARGUMENT - that is a bad token.
             let mut page = self.browse_continuation(&token).await;
             for attempt in 1..=3u64 {
                 if page.is_ok() {
@@ -1952,7 +1952,7 @@ impl InnerTube {
                         tracks.len(),
                         token.len()
                     ));
-                    // ytmusicapi stops on an empty continuation page — chasing
+                    // ytmusicapi stops on an empty continuation page - chasing
                     // another token from a ~1KB empty body is what produced 400s.
                     if after == before {
                         break;

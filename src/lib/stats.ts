@@ -1,7 +1,6 @@
 // Turns the raw local listen log into "Wrapped"-style numbers. Everything
 // is computed in local time, on the device.
 import type { Track } from './types';
-import { t } from './i18n.svelte';
 
 export interface Listen {
   /** Unix seconds when the track started. */
@@ -131,20 +130,4 @@ export function fmtListen(secs: number): string {
   if (m < 60) return `${m} min`;
   const h = Math.floor(m / 60);
   return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
-}
-
-/** Label for the part of the day with the most listening. */
-export function listenerType(byHour: number[]): string {
-  const parts: [string, number[]][] = [
-    ['Early bird', [5, 6, 7, 8, 9]],
-    ['Daytime listener', [10, 11, 12, 13, 14, 15, 16]],
-    ['Evening listener', [17, 18, 19, 20, 21]],
-    ['Night owl', [22, 23, 0, 1, 2, 3, 4]],
-  ];
-  let best = parts[0][0], max = -1;
-  for (const [name, hours] of parts) {
-    const s = hours.reduce((a, h) => a + byHour[h], 0) / hours.length;
-    if (s > max) { max = s; best = name; }
-  }
-  return t(best);
 }

@@ -252,7 +252,7 @@ mod win {
             if artists.is_empty() {
                 track.title.clone()
             } else {
-                format!("{} — {}", track.title, artists)
+                format!("{} - {}", track.title, artists)
             }
         };
         unsafe { link.SetDescription(&HSTRING::from(tip)) }?;
@@ -276,9 +276,9 @@ mod win {
             title.to_string()
         } else {
             // Spotify-style: song first, then artist (truncated if huge).
-            let s = format!("{title} — {artists}");
+            let s = format!("{title} - {artists}");
             if s.chars().count() > 64 {
-                format!("{title} — {}", truncate(&artists, 24))
+                format!("{title} - {}", truncate(&artists, 24))
             } else {
                 s
             }

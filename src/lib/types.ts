@@ -263,6 +263,12 @@ export interface Settings {
   lyrics_dots: boolean;
   /** Lyrics text size, percent. */
   lyrics_size: number;
+  /** Desktop frosted-glass strength 0..=100 (0 = off). */
+  transparency?: number;
+  /** Inset chrome panels with gaps and rounded corners. */
+  floating_ui?: boolean;
+  /** Desktop: keep the phone remote on across launches. */
+  phone_remote?: boolean;
 }
 
 export interface PlayerState {

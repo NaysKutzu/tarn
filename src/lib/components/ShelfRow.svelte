@@ -4,7 +4,8 @@
   import { itemToTrack } from '../cover';
   import Cover from './Cover.svelte';
   import Hi from './Hi.svelte';
-  import { PlayIcon } from '../icons';
+  import ScrollRow from './ScrollRow.svelte';
+  import { ArrowLeft01Icon, ArrowRight01Icon, PlayIcon } from '../icons';
 
   let {
     shelf,
@@ -20,6 +21,10 @@
     /** Cover click for album/playlist/artist - play without opening. */
     onPlayCollection?: (item: ShelfItem) => void;
   } = $props();
+
+  let scroller = $state<{ page: (dir: -1 | 1) => void } | null>(null);
+  let canLeft = $state(false);
+  let canRight = $state(false);
 
   function tracksOf(items: ShelfItem[]): Track[] {
     return items.filter((i) => i.kind === 'track' || i.kind === 'video').map(itemToTrack);
@@ -50,6 +55,7 @@
       shelf.items.every((i) => i.kind === 'track' || i.kind === 'video'),
   );
   let moods = $derived(shelf.kind === 'moods' || shelf.items.every((i) => i.kind === 'mood'));
+  let carousel = $derived(!moods && !compact);
 
   function isArtistCard(item: ShelfItem) {
     return (
@@ -69,6 +75,30 @@
       {/if}
       <h2 class="shelf-title">{shelf.title}</h2>
     </div>
+    {#if carousel && (canLeft || canRight)}
+      <div class="shelf-nav">
+        <button
+          class="shelf-nav-btn"
+          type="button"
+          title={tr('Previous')}
+          aria-label={tr('Previous')}
+          disabled={!canLeft}
+          onclick={() => scroller?.page(-1)}
+        >
+          <Hi icon={ArrowLeft01Icon} size={18} />
+        </button>
+        <button
+          class="shelf-nav-btn"
+          type="button"
+          title={tr('Next')}
+          aria-label={tr('Next')}
+          disabled={!canRight}
+          onclick={() => scroller?.page(1)}
+        >
+          <Hi icon={ArrowRight01Icon} size={18} />
+        </button>
+      </div>
+    {/if}
   </div>
 
   {#if moods}
@@ -106,7 +136,7 @@
       {/each}
     </div>
   {:else}
-    <div class="row">
+    <ScrollRow bind:this={scroller} bind:canLeft bind:canRight>
       {#each shelf.items as item, i}
         <div
           class="card {isArtistCard(item) ? 'artist' : ''}"
@@ -135,6 +165,6 @@
           </button>
         </div>
       {/each}
-    </div>
+    </ScrollRow>
   {/if}
 </section>

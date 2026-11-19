@@ -3,11 +3,13 @@
   import Stats from './lib/components/Stats.svelte';
   import SmartPlaylists from './lib/components/SmartPlaylists.svelte';
   import PhoneRemote from './lib/components/PhoneRemote.svelte';
+  import RemoteQuick from './lib/components/RemoteQuick.svelte';
   import ListenTogether from './lib/components/ListenTogether.svelte';
   import { jam } from './lib/jam.svelte';
   import Shortcuts from './lib/components/Shortcuts.svelte';
   import { appCombo, actionFor, appShortcuts } from './lib/shortcuts';
   import { onMount } from 'svelte';
+  import { cubicOut } from 'svelte/easing';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { api } from './lib/api';
@@ -35,6 +37,7 @@
   import Hi from './lib/components/Hi.svelte';
   import IconBtn from './lib/components/IconBtn.svelte';
   import ShelfRow from './lib/components/ShelfRow.svelte';
+  import LibShelf from './lib/components/LibShelf.svelte';
   import TrackTable from './lib/components/TrackTable.svelte';
   import ContextMenu from './lib/components/ContextMenu.svelte';
   import SleepTimer from './lib/components/SleepTimer.svelte';
@@ -55,14 +58,14 @@
   import Toggle from './lib/components/Toggle.svelte';
   import Skeleton from './lib/components/Skeleton.svelte';
   import HomeBuilding from './lib/components/HomeBuilding.svelte';
-  import SearchBar from './lib/components/SearchBar.svelte';
+  import GlobalSearch from './lib/components/GlobalSearch.svelte';
   import Toast from './lib/components/Toast.svelte';
   import UpdatePrompt from './lib/components/UpdatePrompt.svelte';
   import { fail, authPrompt, toast } from './lib/toast';
   import { friendlyError, isAuthError } from './lib/errors';
-  import { localLikes, isLocalLiked, setLocalLiked, localRecents, recordRecent, localSearchHistory, recordSearch, removeSearch, clearSearchHistory } from './lib/local';
-  import {Home01Icon, Search01Icon, Compass01Icon, LibraryIcon, Settings02Icon, PlayIcon, PauseIcon, PreviousIcon, NextIcon, ShuffleIcon, RepeatIcon, RepeatOne01Icon, VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, FavouriteFilledIcon, ThumbsDownIcon, Queue02Icon, Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon, Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon, LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon, Download04Icon, ChartColumnIcon, Forward01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon, MagicWand01Icon, PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon, AudioWave01Icon, PaintBoardIcon} from './lib/icons';
-  import { applyTheme, ACCENTS, hexRgb, type Theme } from './lib/theme';
+  import { localLikes, isLocalLiked, setLocalLiked, localRecents, recordRecent, localSearchHistory, recordSearch, removeSearch, loadSidePanel, saveSidePanel, type SidePanelId } from './lib/local';
+  import {Home01Icon, Search01Icon, Compass01Icon, LibraryIcon, Settings02Icon, PlayIcon, PauseIcon, PreviousIcon, NextIcon, ShuffleIcon, RepeatIcon, RepeatOne01Icon, VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, FavouriteFilledIcon, ThumbsDownIcon, Queue02Icon, Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon, Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon, LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon, Download04Icon, ChartColumnIcon, Forward01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon, MagicWand01Icon, PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon, AudioWave01Icon, PaintBoardIcon, MoreHorizontalIcon} from './lib/icons';
+  import { applyTheme, applyTransparency, applyFloating, ACCENTS, hexRgb, type Theme } from './lib/theme';
 
   const isMac =
     typeof navigator !== 'undefined' &&
@@ -87,7 +90,7 @@
 
   let view = $state<View>({ id: 'home' });
   let home = $state<Home | null>(null);
-  /** True until first Home cache hydrate / fetch settles — avoids a blank flash on cold start. */
+  /** True until first Home cache hydrate / fetch settles - avoids a blank flash on cold start. */
   let homeBoot = $state(true);
   let explore = $state<Explore | null>(null);
   let searchQ = $state('');
@@ -126,7 +129,7 @@
     { value: 'logarithmic', label: tr('Logarithmic') },
     { value: 'exponential', label: tr('Exponential') },
   ]);
-  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], listening_stats: true, shortcuts: {}, global_hotkeys: {}, tray_icon: false, close_to_tray: false, normalize: false, normalize_target: -14, auto_dj: false, lyrics_karaoke: true, lyrics_glow: true, lyrics_blur: true, lyrics_dots: true, lyrics_size: 100, ...XF_DEFAULTS });
+  let settings = $state<SettingsT>({ quality: 'high', language: 'en', region: 'US', notifications: false, discord_presence: true, autoplay: true, resume_on_start: false, cache_max_mb: 1024, offline_mode: false, crossfade: true, eq_enabled: false, eq_bands: [0, 0, 0, 0, 0], listening_stats: true, shortcuts: {}, global_hotkeys: {}, tray_icon: false, close_to_tray: false, normalize: false, normalize_target: -14, auto_dj: false, lyrics_karaoke: true, lyrics_glow: true, lyrics_blur: true, lyrics_dots: true, lyrics_size: 100, phone_remote: false, ...XF_DEFAULTS });
   const eqPresetId = $derived(
     EQ_PRESETS.find((p) => eqBandsMatch(settings.eq_bands, p.bands))?.id ?? null,
   );
@@ -141,6 +144,16 @@
     shuffle: false, repeat: 'off', liked: false, disliked: false, autoplay: true,
   });
   let loading = $state(false);
+  // Shared page-loading flag: bump so a slower Home/search/etc. finish can't
+  // clear the skeleton while a newer page fetch is still in flight.
+  let pageLoad = 0;
+  function beginPageLoad() {
+    loading = true;
+    return ++pageLoad;
+  }
+  function endPageLoad(token: number) {
+    if (token === pageLoad) loading = false;
+  }
   // Local "find in this list" filters. Cleared whenever the view changes.
   let filterQ = $state('');
   let sideQ = $state('');
@@ -258,12 +271,13 @@
   let backStack = $state<HistEntry[]>([]);
   let fwdStack = $state<HistEntry[]>([]);
   let navLock = false;
-  type PanelId = 'queue' | 'lyrics' | 'related';
+  type PanelId = SidePanelId;
   let queueOn = $state(false);
   let lyricsOn = $state(false);
   let relatedOn = $state(false);
   /** Which side-panel body to show when not fullscreen. */
   let panelFocus = $state<PanelId | null>(null);
+  let panelRestored = false;
   let sidePanelOn = $derived(queueOn || lyricsOn || relatedOn);
   let sidePanelView = $derived.by((): PanelId | null => {
     if (panelFocus === 'queue' && queueOn) return 'queue';
@@ -275,15 +289,113 @@
     return null;
   });
   let expanded = $state(false);
+  /** Stays true through the NP outro so chrome/layout don't snap under the fade. */
+  let npLayer = $state(false);
+  /** One-shot class for staged art/meta enter (not re-fired on track skip). */
+  let npEntering = $state(false);
+  let npEnterTimer: ReturnType<typeof setTimeout> | null = null;
+  let npOutroTimer: ReturnType<typeof setTimeout> | null = null;
   let npShow = $state(true);
   let npHoverChrome = $state(false);
   let npHideTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Immersive open/close: fade + soft scale from the player. */
+  function npReveal(_node: Element, { duration = 460 }: { duration?: number } = {}) {
+    const reduce =
+      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const d = reduce ? 0 : duration;
+    return {
+      duration: d,
+      easing: cubicOut,
+      css: (t: number) => {
+        const s = 0.972 + 0.028 * t;
+        return `opacity:${t};transform:scale(${s});transform-origin:50% 62%`;
+      },
+    };
+  }
+
+  /** Side panel / Up Next rail: slide from the right on open and close. */
+  function sideReveal(
+    _node: Element,
+    { duration = 340, x = 22 }: { duration?: number; x?: number } = {},
+  ) {
+    const reduce =
+      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const d = reduce ? 0 : duration;
+    return {
+      duration: d,
+      easing: cubicOut,
+      css: (t: number) => {
+        const u = 1 - t;
+        return `opacity:${t};transform:translateX(${u * x}px) scale(${0.98 + 0.02 * t})`;
+      },
+    };
+  }
+
+  function clearNpTimers() {
+    if (npEnterTimer) {
+      clearTimeout(npEnterTimer);
+      npEnterTimer = null;
+    }
+    if (npOutroTimer) {
+      clearTimeout(npOutroTimer);
+      npOutroTimer = null;
+    }
+  }
+
+  function openExpanded() {
+    clearNpTimers();
+    expanded = true;
+    npLayer = true;
+    npShow = true;
+    npEntering = true;
+    npEnterTimer = setTimeout(() => {
+      npEntering = false;
+      npEnterTimer = null;
+    }, 620);
+  }
+
+  function closeExpanded() {
+    if (!expanded && !npLayer) return;
+    npShow = true;
+    npEntering = false;
+    clearNpTimers();
+    if (npHideTimer) clearTimeout(npHideTimer);
+    expanded = false;
+    // Safety if outroend never fires (duration 0 / interrupted).
+    npOutroTimer = setTimeout(() => {
+      if (!expanded) {
+        npLayer = false;
+        npEntering = false;
+      }
+      npOutroTimer = null;
+    }, 700);
+  }
+
+  function toggleExpanded() {
+    if (expanded) closeExpanded();
+    else openExpanded();
+  }
+
+  function onNpOutroEnd() {
+    npLayer = false;
+    npShow = true;
+    npEntering = false;
+    if (npOutroTimer) {
+      clearTimeout(npOutroTimer);
+      npOutroTimer = null;
+    }
+  }
   let npSlide = $state<'next' | 'prev' | null>(null);
   let npPrevId = '';
   let npPrevIndex = 0;
-  let scrub = $state<number | null>(null);
   let volHud = $state<number | null>(null);
   let volHudTimer: ReturnType<typeof setTimeout> | undefined;
+  let volBeforeMute = 0.85;
+  let remoteQuick = $state<{ openRemote: () => Promise<void>; running: () => boolean } | null>(null);
+  let titleClipEl: HTMLDivElement | null = $state(null);
+  let titleEl: HTMLDivElement | null = $state(null);
+  let titleOverflow = $state(false);
   let lyrics = $state<Lyrics | null>(null);
   let related = $state<Related | null>(null);
   let ctx = $state<CtxTarget | null>(null);
@@ -291,7 +403,7 @@
   let cacheUsed = $state(0);
   let cacheMax = $state(1024 * 1024 * 1024);
 
-  /** idle | out (fade stale) | in (fresh settle) — only for cache → live swaps */
+  /** idle | out (fade stale) | in (fresh settle) - only for cache → live swaps */
   let homeAnim = $state<'idle' | 'out' | 'in'>('idle');
   let homeApplyGen = 0;
   function dedupeTracks(list: Track[]): Track[] {
@@ -324,6 +436,12 @@
     // Undefined until the saved settings arrive (main.ts painted the last theme).
     if (settings.theme !== undefined) applyTheme(settings.theme);
   });
+  $effect(() => {
+    if (settings.transparency !== undefined) void applyTransparency(settings.transparency);
+  });
+  $effect(() => {
+    if (settings.floating_ui !== undefined) applyFloating(settings.floating_ui);
+  });
 
   onMount(() => {
     const unsubs: Array<() => void> = [];
@@ -331,12 +449,19 @@
       /* home cache is account-keyed; filled after auth() below */
       likes = localLikes();
       recents = localRecents();
+      if (!panelRestored && !isPhone) {
+        panelRestored = true;
+        const saved = loadSidePanel();
+        if (saved) applySidePanel(saved);
+      }
       try {
         player = await api.state();
         // Both the global hotkeys and the tray menu can ask to like the track.
         for (const ev of ['hotkey', 'tray']) {
           unsubs.push(await listen<string>(ev, (e) => {
-            if (e.payload === 'like' && player.track) void toggleLike();
+            if (!player.track) return;
+            if (e.payload === 'like') void toggleLike();
+            else if (e.payload === 'dislike') void toggleDislike();
           }));
         }
         unsubs.push(await listen<string>('toast', (e) => {
@@ -344,7 +469,7 @@
         }));
         await initOffline((offline, was) => {
           if (offline && !was) {
-            toast(off.mode ? tr('Offline mode - only downloaded songs play') : tr("You're offline - downloaded music still plays"), 'info', 4200);
+            toast(off.mode ? tr('Offline mode: only downloaded songs play') : tr("You're offline. Downloaded music still plays"), 'info', 4200);
             if (ONLINE_ONLY.has(view.id)) go({ id: 'downloads' }, { replace: true });
           } else if (!offline && was) {
             toast(tr('Back online'), 'info', 2500);
@@ -422,27 +547,21 @@
       // thousands of tracks): keep the same array so nothing is re-parsed,
       // re-proxied or re-rendered five times a second.
       if (next.queue_same) next.queue = player.queue;
-      // Only patch an empty heart while signed-out (local likes) or while the
-      // library is still painting. After that, trust the backend liked set —
-      // a one-way "force liked" from a stale list re-lit hearts after unlike.
-      if (next.track) {
-        const id = next.track.id;
-        const trustLocal = !auth.signed_in || libPartial || libLoading;
-        if (trustLocal) {
-          const known =
-            isLocalLiked(id) ||
-            !!library?.liked?.some((t) => t.id === id);
-          if (known && !next.liked) {
-            next.liked = true;
-            next.disliked = false;
-          }
-        }
-      }
-      if (next.track && !next.liked && isDisliked(next.track.id)) next.disliked = true;
-      // A like/dislike still in flight: keep showing what the user just chose.
+      // Heart: pending tap wins, else any known like (library / local) fills an
+      // empty backend heart. Unlike removes the id from those sets first, so
+      // this does not re-light after removelike. Stopping the patch after
+      // library load made liked songs flash then go empty whenever liked_ids
+      // lagged the list on screen.
       if (pendingRating && next.track?.id === pendingRating.id) {
         next.liked = pendingRating.liked;
         next.disliked = pendingRating.disliked;
+      } else if (next.track) {
+        const id = next.track.id;
+        if (!next.liked && knownLikedId(id)) {
+          next.liked = true;
+          next.disliked = false;
+        }
+        if (!next.liked && isDisliked(id)) next.disliked = true;
       }
       if (next.error) {
         if (isAuthError(next.error)) {
@@ -468,7 +587,7 @@
             home = null;
             homeBoot = true;
           } else {
-            // Sign-in: never wipe the cache — paint this account's snapshot if we have one.
+            // Sign-in: never wipe the cache - paint this account's snapshot if we have one.
             try { localStorage.removeItem(homeCacheKey('anon')); } catch {}
             const acct = a.account?.name ?? 'user';
             if (!home?.shelves?.length) {
@@ -516,7 +635,8 @@
       if (!isHomeUpgrade(h, home)) return;
       home = h;
       homeBoot = false;
-      loading = false;
+      // Don't kill Explore/artist/etc. skeletons when Home streams in the background.
+      if (view.id === 'home') loading = false;
       if (homeFeedOk(h)) writeHomeCache(h, auth.signed_in ? (auth.account?.name ?? 'user') : 'anon');
     }).then((u) => unsubs.push(u));
 
@@ -579,7 +699,7 @@
         e.preventDefault();
         void toggleWindowFullscreen();
       } else if (e.key === 'Escape') {
-        if (expanded) expanded = false;
+        if (expanded || npLayer) closeExpanded();
         else if (sidePanelOn) closePanels();
         else if (ctx) ctx = null;
       }
@@ -646,6 +766,8 @@
 
   function fillView(v: View) {
     ctx = null;
+    libAddMenu = null;
+    queueMenu = null;
     if (v.id === 'home' && !home) loadHome();
     if (v.id === 'explore' && !explore) loadExplore();
     if (v.id === 'library') loadLibrary();
@@ -748,6 +870,22 @@
   let setQuery = $state('');
   let setEl = $state<HTMLElement | null>(null);
   let setEmpty = $state(false);
+  let setSec = $state('general');
+  const SET_SECS: [string, string][] = [
+    ['general', 'General'],
+    ['playback', 'Playback'],
+    ['transitions', 'Transitions'],
+    ['sound', 'Sound'],
+    ['lyrics', 'Lyrics & visuals'],
+    ['storage', 'Storage'],
+    ['connect', 'Connections'],
+    ['system', 'System'],
+    ['about', 'About'],
+  ];
+  function jumpSetSec(id: string) {
+    setSec = id;
+    document.getElementById('set-' + id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   function applySetFilter() {
     if (!setEl) return;
     const q = setQuery.trim().toLowerCase();
@@ -774,6 +912,24 @@
     const mo = new MutationObserver(() => applySetFilter());
     mo.observe(setEl, { childList: true, subtree: true });
     return () => mo.disconnect();
+  });
+  $effect(() => {
+    if (view.id !== 'settings' || !setEl) return;
+    const root = setEl.closest('.main') ?? setEl;
+    const secs = [...setEl.querySelectorAll<HTMLElement>('.set-sec')];
+    if (!secs.length) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        const id = visible[0]?.target.id?.replace(/^set-/, '');
+        if (id) setSec = id;
+      },
+      { root: root instanceof Element ? root : null, rootMargin: '-12% 0px -70% 0px', threshold: 0 },
+    );
+    secs.forEach((s) => io.observe(s));
+    return () => io.disconnect();
   });
   async function copyDiagnostics() {
     let text = '';
@@ -850,7 +1006,8 @@
       return;
     }
     const quiet = !params && !!home;
-    if (!quiet) loading = true;
+    // Quiet refresh must not steal/clear another page's skeleton (Explore, etc.).
+    const token = quiet ? null : beginPageLoad();
     try {
       const h = await api.home(params);
       const before = home;
@@ -862,18 +1019,19 @@
     } catch (e) {
       if (!home) fail(e, "Couldn't load Home");
     } finally {
-      loading = false;
+      if (token != null) endPageLoad(token);
       homeBoot = false;
     }
   }
   async function loadExplore() {
     if (off.offline) return;
-    loading = true;
-    try { explore = await api.explore(); } catch (e) { fail(e, "Couldn't load Explore"); } finally { loading = false; }
+    const token = beginPageLoad();
+    try { explore = await api.explore(); } catch (e) { fail(e, "Couldn't load Explore"); } finally { endPageLoad(token); }
   }
   async function loadArtist(id: string) {
-    loading = true; artist = null;
-    try { artist = await api.artist(id); } catch (e) { fail(e, "Couldn't load this artist"); } finally { loading = false; }
+    const token = beginPageLoad();
+    artist = null;
+    try { artist = await api.artist(id); } catch (e) { fail(e, "Couldn't load this artist"); } finally { endPageLoad(token); }
   }
   /** Playlist/album with a downloaded copy as the offline (or failure) fallback. */
   async function openCollection(kind: 'album' | 'playlist', id: string): Promise<Collection> {
@@ -881,7 +1039,7 @@
     if (off.offline) {
       const c = await local();
       if (c) return c;
-      throw new Error("Not downloaded - available when you're back online");
+      throw new Error("Not downloaded. Available when you're back online");
     }
     try {
       return kind === 'album' ? await api.album(id) : await api.playlist(id);
@@ -953,8 +1111,9 @@
   }
   async function loadAlbum(id: string) {
     playlistSeq++; // an unfinished playlist load must not overwrite this album
-    loading = true; collection = null;
-    try { collection = await openCollection('album', id); } catch (e) { fail(e, "Couldn't load this album"); } finally { loading = false; }
+    const token = beginPageLoad();
+    collection = null;
+    try { collection = await openCollection('album', id); } catch (e) { fail(e, "Couldn't load this album"); } finally { endPageLoad(token); }
   }
   // A newer open (or leaving the page) makes the slower, older load drop its result.
   let playlistSeq = 0;
@@ -986,7 +1145,8 @@
   async function loadPlaylist(id: string) {
     const seq = ++playlistSeq;
     const stale = () => seq !== playlistSeq;
-    loading = true; collection = null;
+    const token = beginPageLoad();
+    collection = null;
     try {
       const isLiked = id === 'LM' || id === 'VLLM';
       if (isLiked && library?.liked?.length) {
@@ -999,17 +1159,17 @@
           year: null, description: null, track_count: all.length, album_type: null,
           tracks: all.slice(0, HEAD_TRACKS), related: [], owned: true, saved: true,
         };
-        loading = false;
+        endPageLoad(token);
       } else if (!isLiked && plCached(id)) {
         // Seen before: show it instantly, refresh below.
         collection = plCached(id);
-        loading = false;
+        endPageLoad(token);
       } else if (!isLiked && !off.offline) {
         // First page now, the rest right after, so a big playlist opens instantly.
         const head = await api.playlistHead(id);
         if (stale()) return;
         collection = head;
-        loading = false;
+        endPageLoad(token);
       }
       const full = await openCollection('playlist', id);
       if (stale()) return;
@@ -1020,20 +1180,21 @@
       // Keep whatever is already on screen if only the full load failed.
       if (!collection) fail(e, "Couldn't load this playlist");
     } finally {
-      if (!stale()) loading = false;
+      if (!stale()) endPageLoad(token);
     }
   }
   async function loadGenre(id: string) {
-    loading = true; genre = null;
-    try { genre = await api.genre(id); } catch (e) { fail(e, "Couldn't load this page"); } finally { loading = false; }
+    const token = beginPageLoad();
+    genre = null;
+    try { genre = await api.genre(id); } catch (e) { fail(e, "Couldn't load this page"); } finally { endPageLoad(token); }
   }
   async function loadCharts() {
-    loading = true;
-    try { charts = await api.charts(); } catch (e) { fail(e, "Couldn't load charts"); } finally { loading = false; }
+    const token = beginPageLoad();
+    try { charts = await api.charts(); } catch (e) { fail(e, "Couldn't load charts"); } finally { endPageLoad(token); }
   }
   async function loadReleases() {
-    loading = true;
-    try { releases = await api.newReleases(); } catch (e) { fail(e, "Couldn't load new releases"); } finally { loading = false; }
+    const token = beginPageLoad();
+    try { releases = await api.newReleases(); } catch (e) { fail(e, "Couldn't load new releases"); } finally { endPageLoad(token); }
   }
   async function loadLibrary(opts?: { retries?: number }) {
     if (!auth.signed_in) {
@@ -1084,6 +1245,11 @@
         last = await api.library();
       }
       library = last;
+      // Keep the now-playing heart lit if this song is in the liked list.
+      if (player.track && knownLikedId(player.track.id)) {
+        player.liked = true;
+        player.disliked = false;
+      }
     } catch (e) {
       fail(e, "Couldn't load your library");
       if (!library) {
@@ -1095,9 +1261,9 @@
     }
   }
   async function loadHistory() {
-    loading = true;
-    if (off.offline) { history = []; loading = false; return; }
-    try { history = await api.history(); } catch (e) { fail(e, "Couldn't load history"); history = []; } finally { loading = false; }
+    const token = beginPageLoad();
+    if (off.offline) { history = []; endPageLoad(token); return; }
+    try { history = await api.history(); } catch (e) { fail(e, "Couldn't load history"); history = []; } finally { endPageLoad(token); }
   }
 
   async function runSearch(q?: string, opts?: { replace?: boolean }) {
@@ -1105,7 +1271,8 @@
     if (!qq) return;
     searchQ = qq;
     searchHist = recordSearch(qq);
-    loading = true;
+    results = null;
+    const token = beginPageLoad();
     if (view.id !== 'search') go({ id: 'search' }, { replace: opts?.replace });
     else rememberUi();
     try {
@@ -1114,23 +1281,28 @@
     } catch (e) {
       fail(e, "Couldn't search");
     } finally {
-      loading = false;
+      endPageLoad(token);
     }
   }
 
+  /** Desktop: focus title-bar search in place. Phone: open the search page. */
   function openSearch() {
-    searchQ = '';
-    results = null;
-    go({ id: 'search' });
-    queueMicrotask(() => document.getElementById('q')?.focus());
+    if (isPhone) {
+      go({ id: 'search' });
+      return;
+    }
+    const el = document.getElementById('q') as HTMLInputElement | null;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }
+
+  function noteSearch(q: string) {
+    searchHist = recordSearch(q);
   }
 
   function dropSearchHist(q: string) {
     searchHist = removeSearch(q);
-  }
-
-  function wipeSearchHist() {
-    searchHist = clearSearchHistory();
   }
 
   function withCoverFallback(tracks: Track[], fallback?: string | null): Track[] {
@@ -1294,6 +1466,20 @@
     ctx = { x: e.clientX, y: e.clientY, track: t, albumId: t.album_id || undefined, artistId: t.artist_ids?.[0] };
   }
 
+  /** True if this id is liked in library and/or the local like mirror. */
+  function knownLikedId(id: string): boolean {
+    if (!id) return false;
+    if (isLocalLiked(id)) return true;
+    return !!library?.liked?.some((t) => t.id === id);
+  }
+
+  function trackIsLiked(track: Track | undefined | null): boolean {
+    if (!track?.id) return false;
+    if (pendingRating?.id === track.id) return pendingRating.liked;
+    if (player.track?.id === track.id && player.liked) return true;
+    return knownLikedId(track.id);
+  }
+
   function applyLocalLike(track: Track, liked: boolean) {
     likes = setLocalLiked(track, liked);
     if (player.track?.id === track.id) {
@@ -1353,7 +1539,7 @@
       : { liked: false, disliked: false };
     const current = player.track?.id === id;
     const was = {
-      liked: current ? player.liked : isLocalLiked(id) || !!library?.liked?.some((t) => t.id === id),
+      liked: trackIsLiked(track),
       disliked: current ? player.disliked : isDisliked(id),
     };
     setDisliked(id, want.disliked);
@@ -1404,17 +1590,40 @@
   async function toggleLike() {
     const t = player.track;
     if (!t) return;
-    await likeTrack(t, (player.liked || isLocalLiked(t.id)) ? 'removelike' : 'like');
+    await likeTrack(t, trackIsLiked(t) ? 'removelike' : 'like');
   }
   async function toggleDislike() {
     await like(player.disliked ? 'removelike' : 'dislike');
   }
 
+  function applySidePanel(tab: PanelId | null) {
+    queueOn = tab === 'queue';
+    lyricsOn = tab === 'lyrics';
+    relatedOn = tab === 'related';
+    panelFocus = tab;
+    saveSidePanel(tab);
+  }
+
   function closePanels() {
-    queueOn = false;
-    lyricsOn = false;
-    relatedOn = false;
-    panelFocus = null;
+    if (expanded) {
+      queueOn = false;
+      lyricsOn = false;
+      relatedOn = false;
+      panelFocus = null;
+      saveSidePanel(null);
+      return;
+    }
+    applySidePanel(null);
+  }
+
+  /** Side-panel tabs: switch to a tab (does not toggle closed). */
+  function showPanel(tab: PanelId) {
+    if (tab === 'lyrics' && lyricsReady && !lyricsOk) return;
+    if (expanded) {
+      void openPanel(tab);
+      return;
+    }
+    applySidePanel(tab);
   }
 
   async function openPanel(tab: PanelId) {
@@ -1424,11 +1633,13 @@
       if (tab === 'queue') {
         queueOn = !queueOn;
         if (queueOn) panelFocus = 'queue';
+        saveSidePanel(queueOn || lyricsOn || relatedOn ? (panelFocus ?? tab) : null);
         return;
       }
       if (tab === 'lyrics') {
         lyricsOn = !lyricsOn;
         if (lyricsOn) panelFocus = 'lyrics';
+        saveSidePanel(queueOn || lyricsOn || relatedOn ? (panelFocus ?? tab) : null);
         return;
       }
       relatedOn = !relatedOn;
@@ -1439,27 +1650,16 @@
       } else {
         panelFocus = queueOn ? 'queue' : lyricsOn ? 'lyrics' : null;
       }
+      saveSidePanel(panelFocus);
       return;
     }
-    // Side panel: exclusive tabs.
+    // Side panel: exclusive tabs - toggle from player chrome.
     if (tab === 'queue') {
-      const on = !queueOn;
-      queueOn = on;
-      lyricsOn = false;
-      relatedOn = false;
-      panelFocus = on ? 'queue' : null;
+      applySidePanel(queueOn ? null : 'queue');
     } else if (tab === 'lyrics') {
-      const on = !lyricsOn;
-      lyricsOn = on;
-      queueOn = false;
-      relatedOn = false;
-      panelFocus = on ? 'lyrics' : null;
+      applySidePanel(lyricsOn ? null : 'lyrics');
     } else {
-      const on = !relatedOn;
-      relatedOn = on;
-      queueOn = false;
-      lyricsOn = false;
-      panelFocus = on ? 'related' : null;
+      applySidePanel(relatedOn ? null : 'related');
     }
   }
 
@@ -1478,6 +1678,8 @@
       lyricsFor = '';
       lyricsOk = false;
       lyricsReady = false;
+      related = null;
+      relatedFor = '';
       return;
     }
     if (lyricsFor !== id) {
@@ -1501,6 +1703,7 @@
     }
     if (relatedOn && relatedFor !== id) {
       relatedFor = id;
+      related = null;
       const req = id;
       (off.offline ? Promise.reject(new Error('offline')) : api.related(id)).then((r) => {
         if (relatedFor !== req) return;
@@ -1512,13 +1715,40 @@
   });
 
   function commitSeek(seconds: number) {
-    scrub = null;
     api.seek(seconds);
   }
 
-  function previewSeek(seconds: number | null) {
-    scrub = seconds;
+  function measureTitleOverflow() {
+    const clip = titleClipEl;
+    const text = titleEl;
+    if (!clip || !text) {
+      titleOverflow = false;
+      return;
+    }
+    const overflow = text.scrollWidth > clip.clientWidth + 1;
+    titleOverflow = overflow;
+    clip.style.setProperty(
+      '--title-shift',
+      overflow ? `${clip.clientWidth - text.scrollWidth}px` : '0px',
+    );
   }
+
+  $effect(() => {
+    // Re-measure when the now-playing title (or its box) changes.
+    void player.track?.title;
+    void titleClipEl;
+    void titleEl;
+    const clip = titleClipEl;
+    if (!clip) {
+      titleOverflow = false;
+      return;
+    }
+    measureTitleOverflow();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => measureTitleOverflow());
+    ro.observe(clip);
+    return () => ro.disconnect();
+  });
 
   function showVolHud(v: number) {
     volHud = Math.round(Math.max(0, Math.min(1, v)) * 100);
@@ -1549,16 +1779,25 @@
     await new Promise((r) => setTimeout(r, 400));
     try {
       const errs = await api.hotkeyErrors();
-      if (errs.length) toast(tr("Couldn't register {keys} - try another combo", { keys: errs.map((e) => e.split(':')[0].replace(/_/g, ' ')).join(', ') }), 'error', 4200);
+      if (errs.length) toast(tr("Couldn't register {keys}. Try another combo", { keys: errs.map((e) => e.split(':')[0].replace(/_/g, ' ')).join(', ') }), 'error', 4200);
     } catch {}
   }
 
   function setVolumePrecise(v: number) {
     const next = Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
     if (Math.abs(next - player.volume) < 1e-6) return;
+    if (next > 0.009) volBeforeMute = next;
     player.volume = next;
     api.setVolume(next).catch(() => {});
     showVolHud(next);
+  }
+
+  function toggleMute() {
+    if (player.volume < 0.01) setVolumePrecise(volBeforeMute > 0.01 ? volBeforeMute : 0.85);
+    else {
+      volBeforeMute = player.volume;
+      setVolumePrecise(0);
+    }
   }
 
   function nudgeVolume(e: WheelEvent) {
@@ -1678,10 +1917,7 @@
       }
       if (online) {
         sep();
-        const likedNow = player.track?.id === t.id
-          ? player.liked
-          : isLocalLiked(t.id) || !!library?.liked?.some((x) => x.id === t.id);
-        if (likedNow) out.push({ label: tr('Liked'), icon: FavouriteFilledIcon, onclick: () => likeTrack(t, 'removelike') });
+        if (trackIsLiked(t)) out.push({ label: tr('Liked'), icon: FavouriteFilledIcon, onclick: () => likeTrack(t, 'removelike') });
         else out.push({ label: tr('Like'), icon: FavouriteIcon, onclick: () => likeTrack(t, 'like') });
         if (isDisliked(t.id)) out.push({ label: tr('Remove dislike'), icon: ThumbsDownIcon, onclick: () => likeTrack(t, 'removelike') });
         else out.push({ label: tr('Dislike'), icon: ThumbsDownIcon, onclick: () => likeTrack(t, 'dislike') });
@@ -1727,10 +1963,10 @@
         label: saved ? tr('Remove from library') : k.kind === 'artist' ? tr('Subscribe') : tr('Save to library'),
         icon: Bookmark02Icon,
         onclick: async () => {
-          toast(saved ? tr('Removed from library') : k.kind === 'artist' ? tr('Subscribed') : tr('Saved to library'), 'info', 2000);
           try {
             if (k.kind === 'artist') await api.subscribe(k.id, !saved);
             else await api.librarySave(k.id, !saved);
+            toast(saved ? tr('Removed from library') : k.kind === 'artist' ? tr('Subscribed') : tr('Saved to library'), 'info', 2000);
             loadLibrary({ retries: 0 });
           } catch (e) { fail(e, "Couldn't update your library", 'save'); }
         },
@@ -1745,6 +1981,9 @@
   let importOpen = $state(false);
   /** New-playlist dialog; `vid` = song to put in it right away. */
   let newPl = $state<{ vid?: string } | null>(null);
+  /** Compact Library “+” menu (new / import playlist). */
+  let libAddMenu = $state<{ x: number; y: number } | null>(null);
+  let queueMenu = $state<{ x: number; y: number } | null>(null);
   async function createPlaylist(title: string, vid?: string) {
     try {
       const id = await api.playlistCreate(title);
@@ -1935,13 +2174,13 @@
     });
     return { words, n: Math.max(1, off - 1) };
   });
-  /** Lyrics panel is active on fullscreen (kept across track changes). */
-  let npLyricsMode = $derived(expanded && lyricsOn);
+  /** Lyrics panel is active on fullscreen (kept across track changes / outro). */
+  let npLyricsMode = $derived(npLayer && lyricsOn);
   /** Synced karaoke column is ready to show. */
   let npLyricsOn = $derived(
     npLyricsMode && lyricsOk && !!lyrics?.synced && (lyrics?.lines.length ?? 0) > 0,
   );
-  let npQueueOn = $derived(expanded && queueOn);
+  let npQueueOn = $derived(npLayer && queueOn);
   let npLyricsEl: HTMLDivElement | null = $state(null);
 
   let scrollRaf = 0;
@@ -2223,9 +2462,9 @@
 
 <div
   class="app"
-  class:np-open={expanded}
-  class:np-idle={expanded && !npShow}
-  style="--player: 112px; --side: 248px; --titlebar: 36px;"
+  class:np-open={npLayer}
+  class:np-idle={npLayer && expanded && !npShow}
+  style="--player: 104px; --side: 240px; --titlebar: 36px;"
   role="application"
   onmousemove={onAppMove}
 >
@@ -2243,94 +2482,125 @@
       data-tauri-drag-region
     ></div>
     <div class="tb-fade">
-      <TitleBar canBack={backStack.length > 0} canFwd={fwdStack.length > 0} onBack={goBack} onFwd={goFwd} onSearch={openSearch} />
+      <TitleBar canBack={backStack.length > 0} canFwd={fwdStack.length > 0} onBack={goBack} onFwd={goFwd}>
+        {#snippet search()}
+          <GlobalSearch
+            bind:value={searchQ}
+            recent={searchHist}
+            onSeeAll={(q) => runSearch(q)}
+            onPlay={(t, queue) => playTracks(queue, Math.max(0, queue.findIndex((x) => x.id === t.id)))}
+            onOpen={openItem}
+            onContext={contextItem}
+            onRemoveRecent={dropSearchHist}
+            onRecord={noteSearch}
+          />
+        {/snippet}
+      </TitleBar>
     </div>
   </div>
-  <aside class="sidebar" class:is-hidden={expanded}>
+  <aside class="sidebar" class:is-hidden={npLayer}>
     <div class="brand">
-      <img src="/logo.png" width="44" height="44" alt="" />
+      <img src="/logo.png" width="36" height="36" alt="" />
       <span class="word">Tarn</span>
     </div>
     <nav class="nav">
       <button class="nav-item {navOn('home') ? 'on' : ''}" onclick={() => void goHome()} type="button">
-        <span class="ic"><Hi icon={Home01Icon} size={24} /></span> {tr('Home')}
+        <span class="ic"><Hi icon={Home01Icon} size={20} /></span> {tr('Home')}
       </button>
       <button class="nav-item {navOn('explore') || view.id === 'charts' || view.id === 'new-releases' || view.id === 'genre' ? 'on' : ''}" onclick={() => go({ id: 'explore' })} type="button">
-        <span class="ic"><Hi icon={Compass01Icon} size={24} /></span> {tr('Explore')}
+        <span class="ic"><Hi icon={Compass01Icon} size={20} /></span> {tr('Explore')}
       </button>
-      <button class="nav-item {navOn('search') ? 'on' : ''}" onclick={() => openSearch()} type="button">
-        <span class="ic"><Hi icon={Search01Icon} size={24} /></span> {tr('Search')}
+      <button class="nav-item nav-desk-hide {navOn('search') ? 'on' : ''}" onclick={() => openSearch()} type="button">
+        <span class="ic"><Hi icon={Search01Icon} size={20} /></span> {tr('Search')}
       </button>
       <button class="nav-item {navOn('library') || view.id === 'history' ? 'on' : ''}" onclick={() => go({ id: 'library' })} type="button">
-        <span class="ic"><Hi icon={LibraryIcon} size={24} /></span> {tr('Library')}
+        <span class="ic"><Hi icon={LibraryIcon} size={20} /></span> {tr('Library')}
       </button>
       <button class="nav-item {navOn('downloads') ? 'on' : ''}" onclick={() => go({ id: 'downloads' })} type="button">
-        <span class="ic"><Hi icon={Download04Icon} size={24} /></span> {tr('Downloads')}
+        <span class="ic"><Hi icon={Download04Icon} size={20} /></span> {tr('Downloads')}
         {#if dlBusy}<span class="nav-dot" title={tr('Downloading')}></span>{/if}
       </button>
+    </nav>
+    <nav class="nav nav-sec">
       <button class="nav-item {navOn('stats') ? 'on' : ''}" onclick={() => go({ id: 'stats' })} type="button">
-        <span class="ic"><Hi icon={ChartColumnIcon} size={24} /></span> {tr('Stats')}
+        <span class="ic"><Hi icon={ChartColumnIcon} size={18} /></span> {tr('Stats')}
       </button>
       <button class="nav-item {navOn('smart') ? 'on' : ''}" onclick={() => go({ id: 'smart' })} type="button">
-        <span class="ic"><Hi icon={MagicWand01Icon} size={24} /></span> Smart playlists
+        <span class="ic"><Hi icon={MagicWand01Icon} size={18} /></span> {tr('Smart playlists')}
       </button>
     </nav>
     <div class="side-scroll">
       {#if auth.signed_in && !off.offline && !library?.playlists?.length && (libLoading || libPartial || !library)}
-        <div class="side-label">{tr('Playlists')}</div>
-        {#each { length: 7 } as _, i (i)}
-          <div class="side-pl-sk" aria-hidden="true">
-            <div class="shimmer sk-sq"></div>
-            <div class="shimmer sk-ln" style="width:{[70, 55, 80, 62, 48, 74, 58][i]}%"></div>
-          </div>
-        {/each}
+        <div class="side-head">
+          <div class="side-label">{tr('Playlists')}</div>
+        </div>
+        <div class="side-pls">
+          {#each { length: 7 } as _, i (i)}
+            <div class="side-pl-sk" aria-hidden="true">
+              <div class="shimmer sk-sq"></div>
+              <div class="shimmer sk-ln" style="width:{[70, 55, 80, 62, 48, 74, 58][i]}%"></div>
+            </div>
+          {/each}
+        </div>
       {:else if auth.signed_in && (sidePlaylists.length > 0 || sideQ || (!off.offline && library?.playlists?.length))}
-        <div class="side-label">{tr('Playlists')}</div>
-        {#if (library?.playlists?.length ?? 0) > 7}
-          <FilterBar compact id="side-filter" bind:value={sideQ} placeholder={tr('Filter playlists')} />
-        {/if}
-        {#each sidePlaylists as p, i (p.id)}
-          <button class="side-pl pl-in" style="--i:{Math.min(i, 12)}" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })} oncontextmenu={(e) => ctxColl(e, { kind: 'playlist', id: p.id, title: p.name, cover: p.cover })}>
-            <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={36} alt="" />
-            <span class="clamp one">{p.name}</span>
-          </button>
-        {/each}
+        <div class="side-head">
+          <div class="side-label">{tr('Playlists')}</div>
+          {#if (library?.playlists?.length ?? 0) > 7}
+            <FilterBar compact id="side-filter" bind:value={sideQ} placeholder={tr('Filter playlists')} />
+          {/if}
+        </div>
+        <div class="side-pls">
+          {#each sidePlaylists as p, i (p.id)}
+            <button class="side-pl pl-in" style="--i:{Math.min(i, 12)}" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })} oncontextmenu={(e) => ctxColl(e, { kind: 'playlist', id: p.id, title: p.name, cover: p.cover })}>
+              <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={32} alt="" />
+              <span class="clamp one">{p.name}</span>
+            </button>
+          {/each}
+        </div>
       {/if}
     </div>
     <div class="side-foot">
-      <button class="nav-item {navOn('settings') ? 'on' : ''}" onclick={() => go({ id: 'settings' })} type="button">
-        <span class="ic"><Hi icon={Settings02Icon} size={22} /></span> {tr('Settings')}
-      </button>
-      {#if auth.signed_in && auth.account}
-        <div class="acct">
-          {#if auth.account.photo}
-            <Cover src={auth.account.photo} size={36} round class="av" alt="" />
-          {:else}
-            <span class="av"><Hi icon={UserCircle02Icon} size={22} /></span>
-          {/if}
-          <div style="min-width:0">
-            <div class="nm clamp one">
-              {auth.account.name}
-              {#if auth.mock}<span class="badge">{tr('Preview')}</span>{/if}
+      <div class="acct-row">
+        {#if auth.signed_in && auth.account}
+          <div class="acct">
+            {#if auth.account.photo}
+              <Cover src={auth.account.photo} size={32} round class="av" alt="" />
+            {:else}
+              <span class="av"><Hi icon={UserCircle02Icon} size={20} /></span>
+            {/if}
+            <div style="min-width:0">
+              <div class="nm clamp one">
+                {auth.account.name}
+                {#if auth.mock}<span class="badge">{tr('Preview')}</span>{/if}
+              </div>
+              {#if auth.account.handle}<div class="hd">{auth.account.handle}</div>{/if}
             </div>
-            {#if auth.account.handle}<div class="hd">{auth.account.handle}</div>{/if}
           </div>
-        </div>
-      {:else}
-        <button class="acct" type="button" onclick={() => api.openLogin()}>
-          <span class="av"><Hi icon={Login03Icon} size={22} /></span>
-          <div class="nm">{tr('Sign in')}</div>
+        {:else}
+          <button class="acct" type="button" onclick={() => api.openLogin()}>
+            <span class="av"><Hi icon={Login03Icon} size={20} /></span>
+            <div class="nm">{tr('Sign in')}</div>
+          </button>
+        {/if}
+        <button
+          class="acct-set {navOn('settings') ? 'on' : ''}"
+          type="button"
+          title={tr('Settings')}
+          aria-label={tr('Settings')}
+          onclick={() => go({ id: 'settings' })}
+        >
+          <Hi icon={Settings02Icon} size={18} />
         </button>
-      {/if}
+      </div>
     </div>
   </aside>
 
-  <main class="main {sidePanelOn && !expanded ? 'with-panel' : ''}" class:is-hidden={expanded} bind:this={mainEl}>
+  <main class="main {sidePanelOn && !npLayer ? 'with-panel' : ''}" class:is-hidden={npLayer} bind:this={mainEl}>
     <div class="page">
       {#if off.offline}
         <div class="off-banner" role="status">
           <Hi icon={WifiOff01Icon} size={18} />
-          <span>{off.mode ? tr('Offline mode is on - only downloaded songs play.') : tr("You're offline - only downloaded songs play.")}</span>
+          <span>{off.mode ? tr('Offline mode is on. Only downloaded songs play.') : tr("You're offline. Only downloaded songs play.")}</span>
           {#if off.mode}
             <button class="btn ghost sm" type="button" onclick={() => api.setOfflineMode(false)}>{tr('Go online')}</button>
           {/if}
@@ -2359,15 +2629,6 @@
         </div>
 
       {:else if view.id === 'explore'}
-        <SearchBar
-          bind:value={searchQ}
-          recent={searchHist}
-          onSubmit={(q) => runSearch(q)}
-          onPlay={(t, queue) => playTracks(queue, Math.max(0, queue.findIndex((x) => x.id === t.id)))}
-          onOpen={openItem}
-          onContext={contextItem}
-          onRemoveRecent={dropSearchHist}
-        />
         <h1 class="page-title">{tr('Explore')}</h1>
         <div class="explore-links">
           <button type="button" onclick={() => go({ id: 'new-releases' })}><Hi icon={Album02Icon} size={24} /> {tr('New releases')}</button>
@@ -2397,50 +2658,15 @@
         {/each}
 
       {:else if view.id === 'search'}
-        <SearchBar
-          bind:value={searchQ}
-          autofocus
-          recent={searchHist}
-          onSubmit={(q) => runSearch(q)}
-          onPlay={(t, queue) => playTracks(queue, Math.max(0, queue.findIndex((x) => x.id === t.id)))}
-          onOpen={openItem}
-          onContext={contextItem}
-          onRemoveRecent={dropSearchHist}
-        />
+        {#if searchQ}
+          <h1 class="page-title search-page-title">{tr('Results for “{q}”', { q: searchQ })}</h1>
+        {/if}
         {#if loading && !results}<Skeleton kind="search" />{/if}
         {#if !loading && !results}
-          <div class="search-landing">
-            {#if searchHist.length}
-              <div class="search-landing-head">
-                <h2 class="search-landing-title">{tr('Recent searches')}</h2>
-                <button class="q-clear" type="button" onclick={wipeSearchHist}>{tr('Clear all')}</button>
-              </div>
-              <div class="search-hist">
-                {#each searchHist as q}
-                  <div class="search-hist-row">
-                    <button class="search-hist-go" type="button" onclick={() => runSearch(q)}>
-                      <span class="search-hist-ico"><Hi icon={HistoryIcon} size={18} /></span>
-                      <span class="clamp one">{q}</span>
-                    </button>
-                    <button
-                      class="search-hist-x"
-                      type="button"
-                      title={tr('Remove')}
-                      aria-label={tr('Remove')}
-                      onclick={() => dropSearchHist(q)}
-                    >
-                      <Hi icon={Cancel01Icon} size={16} />
-                    </button>
-                  </div>
-                {/each}
-              </div>
-            {:else}
-              <div class="search-empty">
-                <span class="search-empty-ico"><Hi icon={Search01Icon} size={28} /></span>
-                <p class="search-empty-title">{tr('Find songs, artists, albums')}</p>
-                <p class="search-empty-sub">{tr('Type above, or press / from anywhere.')}</p>
-              </div>
-            {/if}
+          <div class="search-empty">
+            <span class="search-empty-ico"><Hi icon={Search01Icon} size={28} /></span>
+            <p class="search-empty-title">{tr('Find songs, artists, albums')}</p>
+            <p class="search-empty-sub">{tr('Type above, or press / from anywhere.')}</p>
           </div>
         {/if}
         {#if results}
@@ -2591,7 +2817,37 @@
         {/if}
 
       {:else if view.id === 'library'}
-        <h1 class="page-title">{tr('Library')} {#if auth.mock}<span class="badge">{tr('Preview')}</span>{/if}</h1>
+        <div class="lib-head">
+          <h1 class="page-title">{tr('Library')} {#if auth.mock}<span class="badge">{tr('Preview')}</span>{/if}</h1>
+          {#if auth.signed_in}
+            <div class="lib-tools">
+              {#if library && (library.liked.length || library.playlists.length || library.albums.length || library.artists.length)}
+                <FilterBar
+                  bind:value={filterQ}
+                  placeholder={tr('Search your library  (Ctrl+F)')}
+                  count={`${fLiked.length + fPlaylists.length + fAlbums.length + fArtists.length} results`}
+                />
+              {/if}
+              <IconBtn
+                icon={HistoryIcon}
+                size={18}
+                title={tr('History')}
+                onclick={() => go({ id: 'history' })}
+              />
+              {#if !off.offline}
+                <IconBtn
+                  icon={Add01Icon}
+                  size={18}
+                  title={tr('New playlist')}
+                  onclick={(e) => {
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    libAddMenu = { x: r.left, y: r.bottom + 6 };
+                  }}
+                />
+              {/if}
+            </div>
+          {/if}
+        </div>
         {#if !auth.signed_in}
           <div class="lib-guest">
             <img src="/logo.png" width="80" height="80" alt="" />
@@ -2626,27 +2882,11 @@
           {#if (libLoading && !library) || (libPartial && !library?.liked?.length)}
             <Skeleton kind="page" />
           {/if}
-          <div class="tabs" style="padding-top:0">
-            <button class="tab on" type="button" onclick={() => go({ id: 'history' })}><Hi icon={HistoryIcon} size={18} /> {tr('History')}</button>
-          </div>
-          {#if library && (library.liked.length || library.playlists.length || library.albums.length || library.artists.length)}
-            <div class="lib-filter">
-              <FilterBar bind:value={filterQ} placeholder={tr('Search your library  (Ctrl+F)')}
-                count={`${fLiked.length + fPlaylists.length + fAlbums.length + fArtists.length} results`} />
-            </div>
-          {/if}
           {#if filterQ && !fLiked.length && !fPlaylists.length && !fAlbums.length && !fArtists.length && library}
             <div class="no-match">Nothing in your library matches “{filterQ}”</div>
           {/if}
-          {#if auth.signed_in && !off.offline}
-            <div style="margin-top:20px">
-              <button class="btn ghost" type="button" onclick={() => (newPl = {})}>{tr('New playlist')}</button>
-              <button class="btn ghost" type="button" onclick={() => (importOpen = true)}>{tr('Import playlist')}</button>
-            </div>
-          {/if}
           {#if fPlaylists.length}
-            <h2 class="shelf-title" style="margin:28px 0 12px">{tr('Playlists')}</h2>
-            <div class="row">
+            <LibShelf title={tr('Playlists')}>
               {#each fPlaylists as p (p.id)}
                 <div class="card" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'playlist', id: p.id, title: p.name, cover: p.cover })}>
                   <button class="art" type="button" title={tr('Play')} onclick={() => playPlaylistId(p.id, p.cover, p.covers)}>
@@ -2659,11 +2899,10 @@
                   </button>
                 </div>
               {/each}
-            </div>
+            </LibShelf>
           {/if}
           {#if fAlbums.length}
-            <h2 class="shelf-title" style="margin:28px 0 12px">{tr('Albums')}</h2>
-            <div class="row">
+            <LibShelf title={tr('Albums')}>
               {#each fAlbums as a (a.id)}
                 <div class="card" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'album', id: a.id, title: a.name, cover: a.cover, subtitle: a.subtitle })}>
                   <button class="art" type="button" title={tr('Play')} onclick={() => playAlbumId(a.id, a.cover)}>
@@ -2676,11 +2915,10 @@
                   </button>
                 </div>
               {/each}
-            </div>
+            </LibShelf>
           {/if}
           {#if fArtists.length}
-            <h2 class="shelf-title" style="margin:28px 0 12px">{tr('Artists')}</h2>
-            <div class="row">
+            <LibShelf title={tr('Artists')}>
               {#each fArtists as a (a.id)}
                 <div class="card artist" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'artist', id: a.id, title: a.name, cover: a.cover })}>
                   <button class="art" type="button" title={tr('Play')} onclick={() => playArtistId(a.id, a.cover)}>
@@ -2692,10 +2930,10 @@
                   </button>
                 </div>
               {/each}
-            </div>
+            </LibShelf>
           {/if}
           {#if fLiked.length}
-            <div class="liked-h" style="margin-top:28px">
+            <div class="liked-h">
               <h2 class="shelf-title" style="margin:0">{tr('Liked')}{filterQ ? ` · ${tr('{a} of {b}', { a: fLiked.length, b: library?.liked.length ?? 0 })}` : ''}</h2>
               {#if !off.offline || sourceInfo('liked')}
                 {@const ls = sourceInfo('liked')}
@@ -3037,22 +3275,25 @@
 
       {:else if view.id === 'settings'}
         <div class="set" bind:this={setEl}>
-          <h1 class="page-title">{tr('Settings')}</h1>
-          <div class="set-search">
-            <Hi icon={Search01Icon} size={18} />
-            <input type="search" placeholder={tr('Search settings')} aria-label={tr('Search settings')} bind:value={setQuery} />
-            {#if setQuery}
-              <button type="button" class="set-clear" aria-label={tr('Clear search')} onclick={() => (setQuery = '')}>×</button>
+          <div class="set-head">
+            <h1 class="page-title">{tr('Settings')}</h1>
+            <div class="set-search">
+              <Hi icon={Search01Icon} size={18} />
+              <input type="search" placeholder={tr('Search settings')} aria-label={tr('Search settings')} bind:value={setQuery} />
+              {#if setQuery}
+                <button type="button" class="set-clear" aria-label={tr('Clear search')} onclick={() => (setQuery = '')}>×</button>
+              {/if}
+            </div>
+            {#if setEmpty}
+              <p class="set-none">No settings match “{setQuery}”.</p>
             {/if}
           </div>
-          {#if setEmpty}
-            <p class="set-none">No settings match “{setQuery}”.</p>
-          {/if}
           <nav class="set-nav" aria-label={tr('Settings sections')}>
-            {#each [['general','General'],['playback','Playback'],['transitions','Transitions'],['sound','Sound'],['lyrics','Lyrics & visuals'],['storage','Storage'],['connect','Connections'],['system','System'],['about','About']] as [sid, sl]}
-              <button type="button" class="set-chip" onclick={() => document.getElementById('set-' + sid)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>{tr(sl)}</button>
+            {#each SET_SECS as [sid, sl]}
+              <button type="button" class="set-chip" class:on={setSec === sid} aria-current={setSec === sid ? 'true' : undefined} onclick={() => jumpSetSec(sid)}>{tr(sl)}</button>
             {/each}
           </nav>
+          <div class="set-body">
           <section class="set-sec" id="set-general">
             <div class="set-h"><h2>{tr('General')}</h2><p>{tr('Language, region and sound quality')}</p></div>
             <div class="set-card">
@@ -3098,6 +3339,35 @@
               { value: 'system', label: tr('Match system') },
             ]} onchange={(v) => { settings.theme = v as Theme; api.setSettings(settings); }} />
           </div>
+          {#if !isPhone}
+            <div class="set-row">
+              <span class="lb"><Hi icon={PaintBoardIcon} size={20} /> {tr('Transparency')}
+                <span class="set-meta">{tr('Frosted glass strength. 0 = off. Works best on Windows 11')}</span>
+              </span>
+              <div class="set-ctl glass-ctl">
+                <Slider
+                  value={Number(settings.transparency) || 0}
+                  max={100}
+                  live
+                  showTip
+                  format={(v) => `${Math.round(v)}%`}
+                  oninput={(v) => { settings.transparency = Math.round(v); void applyTransparency(settings.transparency); }}
+                  onchange={(v) => { settings.transparency = Math.round(v); api.setSettings(settings); void applyTransparency(settings.transparency); }}
+                />
+                <span class="glass-pct">{Math.round(Number(settings.transparency) || 0)}%</span>
+              </div>
+            </div>
+            <div class="set-row">
+              <span class="lb"><Hi icon={PaintBoardIcon} size={20} /> {tr('Floating UI')}
+                <span class="set-meta">{tr('Inset sidebar, player and title bar with rounded corners')}</span>
+              </span>
+              <Toggle
+                checked={!!settings.floating_ui}
+                label={tr('Floating UI')}
+                onchange={(v) => { settings.floating_ui = v; api.setSettings(settings); applyFloating(v); }}
+              />
+            </div>
+          {/if}
           <div class="set-row">
             <span class="lb"><Hi icon={PaintBoardIcon} size={20} /> {tr('Accent colour')}
               <span class="set-meta">{settings.accent_color ? tr('Fixed colour') : tr('From the cover of the song playing')}</span>
@@ -3262,7 +3532,7 @@
           {#if settings.bpm_match}
             <div class="set-row">
               <span class="lb">{tr('Max tempo change')}
-                <span class="set-meta">±{settings.bpm_max_change.toFixed(1)}% - larger gaps blend without matching</span>
+                <span class="set-meta">±{settings.bpm_max_change.toFixed(1)}%. Larger gaps blend without matching</span>
               </span>
               <div class="set-ctl">
                 <Slider
@@ -3365,7 +3635,7 @@
           {#if settings.normalize}
             <div class="set-row">
               <span class="lb">{tr('Target loudness')}
-                <span class="set-meta">{settings.normalize_target} LUFS - lower is quieter with more headroom</span>
+                <span class="set-meta">{settings.normalize_target} LUFS. Lower is quieter with more headroom</span>
               </span>
               <div class="set-ctl">
                 <Slider
@@ -3666,7 +3936,7 @@
           </div>
           <div class="set-row">
             <span class="lb">{tr('Diagnostics')}
-              <span class="set-meta">{tr('Auth, library, and recent logs - no cookie values.')}</span>
+              <span class="set-meta">{tr('Auth, library, and recent logs. No cookie values.')}</span>
             </span>
             <button class="btn ghost" type="button" onclick={copyDiagnostics}>{tr('Copy diagnostics')}</button>
           </div>
@@ -3684,31 +3954,36 @@
           {/if}
             </div>
           </section>
+          </div>
         </div>
       {/if}
     </div>
   </main>
 
-  {#if sidePanelOn && !expanded && sidePanelView}
-    <aside class="panel">
+  {#if sidePanelOn && !npLayer && sidePanelView}
+    <aside class="panel" transition:sideReveal={{ duration: 320, x: 20 }}>
       <div class="panel-h">
-        <h2>{{ queue: 'Up next', lyrics: 'Lyrics', related: 'Related' }[sidePanelView]}</h2>
-        <IconBtn icon={Cancel01Icon} size={24} btnSize="lg" onclick={closePanels} title={tr('Close')} />
-      </div>
-      <div class="ptabs">
-        <button class="ptab {sidePanelView === 'queue' ? 'on' : ''}" type="button" onclick={() => openPanel('queue')}>{tr('Queue')}</button>
-        <button class="ptab {sidePanelView === 'lyrics' ? 'on' : ''}" type="button" disabled={lyricsReady && !lyricsOk} onclick={() => openPanel('lyrics')}>{tr('Lyrics')}</button>
-        <button class="ptab {sidePanelView === 'related' ? 'on' : ''}" type="button" onclick={() => openPanel('related')}>{tr('Related')}</button>
+        <div class="ptabs" role="tablist" aria-label={tr('Queue')}>
+          <button class="ptab" class:on={sidePanelView === 'queue'} type="button" role="tab" aria-selected={sidePanelView === 'queue'} onclick={() => showPanel('queue')}>{tr('Queue')}</button>
+          <button class="ptab" class:on={sidePanelView === 'lyrics'} type="button" role="tab" aria-selected={sidePanelView === 'lyrics'} disabled={lyricsReady && !lyricsOk} onclick={() => showPanel('lyrics')}>{tr('Lyrics')}</button>
+          <button class="ptab" class:on={sidePanelView === 'related'} type="button" role="tab" aria-selected={sidePanelView === 'related'} onclick={() => showPanel('related')}>{tr('Related')}</button>
+        </div>
+        <IconBtn icon={Cancel01Icon} size={22} btnSize="lg" onclick={closePanels} title={tr('Close')} />
       </div>
       <div class="panel-b">
         {#if sidePanelView === 'queue'}
           {#if player.queue.length}
             <div class="q-bar">
-              <span>{tr('{n} up next', { n: Math.max(0, player.queue.length - player.index - 1) })}</span>
-              <button class="q-clear" type="button" onclick={saveQueueAsPlaylist}>{tr('Save as playlist')}</button>
-              {#if player.queue.length - player.index > 1}
-                <button class="q-clear" type="button" onclick={() => api.queueClear()}>{tr('Clear')}</button>
-              {/if}
+              <span class="q-count">{tr('{n} up next', { n: Math.max(0, player.queue.length - player.index - 1) })}</span>
+              <IconBtn
+                icon={MoreHorizontalIcon}
+                size={18}
+                title={tr('More')}
+                onclick={(e) => {
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  queueMenu = { x: Math.max(8, r.right - 220), y: r.bottom + 6 };
+                }}
+              />
             </div>
           {/if}
           <QueueList
@@ -3741,25 +4016,84 @@
               <div class="empty"></div>
             {/if}
           </div>
-        {:else if sidePanelView === 'related' && related}
-          {#if related.tracks.length}
-            {#each related.tracks as t, i (t.id || i)}
-              <button class="q-item" type="button" onclick={() => playTracks(related!.tracks, i)} oncontextmenu={(e) => contextTrack(e, t)}>
-                <Cover src={t.cover} size={40} alt="" />
-                <div class="tx"><div class="tn">{t.title}</div><div class="ta">{artistsLine(t.artists)}</div></div>
-              </button>
-            {/each}
-          {/if}
-          {#if related.artists.length}
-            <div class="shelf-title" style="font-size:16px;margin:16px 8px 8px">{tr('Artists')}</div>
-            <div class="row">
-              {#each related.artists as a (a.id)}
-                <button class="card artist" type="button" onclick={() => go({ id: 'artist', artistId: a.id })} oncontextmenu={(e) => ctxColl(e, { kind: 'artist', id: a.id, title: a.name, cover: a.cover })}>
-                  <div class="art"><Cover src={a.cover} size={132} round alt="" /></div>
-                  <div class="c-a"><div class="title">{a.name}</div></div>
-                </button>
+        {:else if sidePanelView === 'related'}
+          {#if !related}
+            <div class="rel-skel" aria-busy="true" aria-hidden="true">
+              {#each { length: 8 } as _, i (i)}
+                <div class="skel-track">
+                  <div class="shimmer skel-sq"></div>
+                  <div class="skel-tmeta">
+                    <div class="shimmer skel-ln"></div>
+                    <div class="shimmer skel-ln short"></div>
+                  </div>
+                </div>
               {/each}
             </div>
+          {:else if !related.tracks.length && !(related.versions?.length) && !related.artists.length && !related.albums.length && !related.playlists.length}
+            <div class="empty">{tr('Nothing related for this track')}</div>
+          {:else}
+            {#if related.tracks.length}
+              {#each related.tracks as t, i (t.id || i)}
+                <button class="q-item" type="button" onclick={() => playTracks(related!.tracks, i)} oncontextmenu={(e) => contextTrack(e, t)}>
+                  <Cover src={t.cover} size={40} alt="" />
+                  <div class="tx"><div class="tn">{t.title}</div><div class="ta">{artistsLine(t.artists)}</div></div>
+                </button>
+              {/each}
+            {/if}
+            {#if related.versions?.length}
+              <div class="shelf-title" style="font-size:16px;margin:16px 8px 8px">{tr('Other versions')}</div>
+              {#each related.versions as t, i (t.id || i)}
+                <button class="q-item" type="button" onclick={() => playTracks(related!.versions, i)} oncontextmenu={(e) => contextTrack(e, t)}>
+                  <Cover src={t.cover} size={40} alt="" />
+                  <div class="tx"><div class="tn">{t.title}</div><div class="ta">{artistsLine(t.artists)}</div></div>
+                </button>
+              {/each}
+            {/if}
+            {#if related.artists.length}
+              <div class="shelf-title" style="font-size:16px;margin:16px 8px 8px">{tr('Artists')}</div>
+              <div class="row">
+                {#each related.artists as a (a.id)}
+                  <button class="card artist" type="button" onclick={() => go({ id: 'artist', artistId: a.id })} oncontextmenu={(e) => ctxColl(e, { kind: 'artist', id: a.id, title: a.name, cover: a.cover })}>
+                    <div class="art"><Cover src={a.cover} size={132} round alt="" /></div>
+                    <div class="c-a"><div class="title">{a.name}</div></div>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            {#if related.albums.length}
+              <div class="shelf-title" style="font-size:16px;margin:16px 8px 8px">{tr('Albums')}</div>
+              <div class="row">
+                {#each related.albums as a (a.id)}
+                  <div class="card" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'album', id: a.id, title: a.name, cover: a.cover, subtitle: a.subtitle })}>
+                    <button class="art" type="button" title={tr('Play')} onclick={() => playAlbumId(a.id, a.cover)}>
+                      <Cover src={a.cover} size={132} alt="" />
+                      <span class="play-ov"><Hi icon={PlayIcon} size={28} /></span>
+                    </button>
+                    <button class="c-a" type="button" onclick={() => go({ id: 'album', albumId: a.id })}>
+                      <div class="title">{a.name}</div>
+                      <div class="sub">{a.subtitle || ''}</div>
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            {#if related.playlists.length}
+              <div class="shelf-title" style="font-size:16px;margin:16px 8px 8px">{tr('Playlists')}</div>
+              <div class="row">
+                {#each related.playlists as p (p.id)}
+                  <div class="card" role="group" oncontextmenu={(e) => ctxColl(e, { kind: 'playlist', id: p.id, title: p.name, cover: p.cover })}>
+                    <button class="art" type="button" title={tr('Play')} onclick={() => playPlaylistId(p.id, p.cover, p.covers)}>
+                      <PlaylistCover id={p.id} name={p.name} cover={p.cover} covers={p.covers} size={132} alt="" />
+                      <span class="play-ov"><Hi icon={PlayIcon} size={28} /></span>
+                    </button>
+                    <button class="c-a" type="button" onclick={() => go({ id: 'playlist', playlistId: p.id })}>
+                      <div class="title">{p.name}</div>
+                      <div class="sub">{p.subtitle || ''}</div>
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           {/if}
         {/if}
       </div>
@@ -3769,14 +4103,17 @@
   {#if expanded}
     <div
       class="np"
-      class:has-lyrics={npLyricsOn || (npLyricsMode && lyricsReady)}
+      class:entering={npEntering}
+      class:has-lyrics={npLyricsOn}
       class:has-queue={npQueueOn}
+      transition:npReveal
+      onoutroend={onNpOutroEnd}
       onwheel={nudgeVolume}
     >
       <button
         class="ibtn lg np-close"
         type="button"
-        onclick={() => (expanded = false)}
+        onclick={closeExpanded}
         title={tr('Close')}
         onpointerenter={() => { npHoverChrome = true; armNpHide(); }}
         onpointerleave={() => { npHoverChrome = false; armNpHide(); }}
@@ -3813,6 +4150,9 @@
                       <button class="linkish" type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
                     {/each}
                   </div>
+                  {#if npLyricsMode && lyricsReady && !npLyricsOn}
+                    <div class="np-ly-miss">{tr('No synced lyrics for this track')}</div>
+                  {/if}
                 </div>
               </div>
               {#if npLyricsOn && lyrics}
@@ -3839,10 +4179,6 @@
                     >{#if i === activeLyric && gapNow < 0 && settings.lyrics_karaoke}{@render karaoke()}{:else}{ln.text || ' '}{/if}</button>
                   {/each}
                 </div>
-              {:else if npLyricsMode && lyricsReady && !npLyricsOn}
-                <div class="np-lyrics np-lyrics-empty" aria-label={tr('Lyrics')}>
-                  <div class="ly-note">{tr('No synced lyrics for this track')}</div>
-                </div>
               {/if}
             </div>
           </div>
@@ -3853,6 +4189,7 @@
           class="np-queue"
           class:dim={!npShow}
           aria-label={tr('Up next')}
+          transition:sideReveal={{ duration: 420, x: 32 }}
           onwheel={(e) => e.stopPropagation()}
           onpointerenter={() => { npHoverChrome = true; armNpHide(); }}
           onpointerleave={() => { npHoverChrome = false; armNpHide(); }}
@@ -3875,75 +4212,17 @@
           </div>
         </aside>
       {/if}
-    </div>
-  {/if}
 
-  <footer
-    class="player"
-    onpointerenter={() => { if (expanded) { npHoverChrome = true; armNpHide(); } }}
-    onpointerleave={() => { if (expanded) { npHoverChrome = false; armNpHide(); } }}
-  >
-    <div class="player-in">
-      <div class="now" role="presentation" onwheel={nudgeVolume} oncontextmenu={(e) => { if (player.track) contextTrack(e, player.track); }}>
-        {#if player.track}
-          <button class="cov" type="button" onclick={() => (expanded = !expanded)} title={tr('Now playing')}>
-            <Cover src={nowCover} videoId={player.track?.id} size={64} alt="" />
-            {#if volHud != null}
-              <div class="vol-hud" aria-live="polite">{volHud}%</div>
-            {/if}
-          </button>
-          <div class="meta">
-            <div class="title">{player.track.title}</div>
-            <div class="artist">
-              {#each player.track.artists as a, k}
-                {#if k > 0}<span>, </span>{/if}
-                <button type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
-              {/each}
-            </div>
-          </div>
-          <div class="likes">
-            <IconBtn
-              icon={FavouriteIcon}
-              altIcon={FavouriteFilledIcon}
-              showAlt={player.liked}
-              size={22}
-              on={player.liked}
-              onclick={toggleLike}
-              title={tr('Like')}
-            />
-            <IconBtn icon={ThumbsDownIcon} size={22} on={player.disliked} danger onclick={toggleDislike} title={tr('Dislike')} />
-          </div>
-        {/if}
-      </div>
-      <div class="ctrls">
-        <div class="row-c">
-          <IconBtn icon={ShuffleIcon} size={22} on={player.shuffle} onclick={toggleShuffle} title={tr('Shuffle')} btnSize="lg" />
-          <IconBtn icon={PreviousIcon} size={26} btnSize="lg" onclick={() => api.prev()} title={tr('Previous')} />
-          <IconBtn
-            icon={PlayIcon}
-            altIcon={PauseIcon}
-            showAlt={player.playing && !player.buffering}
-            size={28}
-            btnSize="xl"
-            spinning={player.buffering || (player.loading && !player.playing)}
-            onclick={() => api.toggle()}
-            title={player.buffering ? 'Buffering' : player.playing ? tr('Pause') : tr('Play')}
-            disabled={!player.track && !player.loading}
-          />
-          <IconBtn icon={NextIcon} size={26} btnSize="lg" onclick={() => api.next()} title={tr('Next')} />
-          <IconBtn
-            icon={RepeatIcon}
-            altIcon={RepeatOne01Icon}
-            showAlt={player.repeat === 'one'}
-            size={22}
-            on={player.repeat !== 'off'}
-            btnSize="lg"
-            onclick={cycleRepeatUi}
-            title={tr('Repeat')}
-          />
-        </div>
-        <div class="seek">
-          <span class="t">{fmtTime(scrub ?? player.position)}</span>
+      <!-- Dedicated fullscreen transport — shared footer stays out of this mode. -->
+      <div
+        class="np-dock"
+        class:dim={!npShow}
+        onpointerenter={() => { npHoverChrome = true; armNpHide(); }}
+        onpointerleave={() => { npHoverChrome = false; armNpHide(); }}
+        onwheel={nudgeVolume}
+      >
+        <div class="np-seek">
+          <span class="np-t">{fmtTime(player.position)}</span>
           <Slider
             value={player.position}
             max={player.duration || 0}
@@ -3952,54 +4231,269 @@
             disabled={!player.track || !(player.duration > 0)}
             showTip
             format={fmtTime}
-            onpreview={previewSeek}
             onchange={commitSeek}
           />
-          <span class="t end">{fmtTime(player.duration)}</span>
+          <span class="np-t">{fmtTime(player.duration || 0)}</span>
           {#if (settings.speed ?? 1) !== 1 || (settings.reverb ?? 0) > 0}
-            <button class="speed-chip" title="Back to normal speed" onclick={() => applyFxPreset('normal')}>{fxPreset === 'slowed' ? 'slowed' : fxPreset === 'nightcore' ? 'nightcore' : fmtSpeed(settings.speed ?? 1)}</button>
+            <button class="speed-chip np-speed" title="Back to normal speed" onclick={() => applyFxPreset('normal')}>{fxPreset === 'slowed' ? 'slowed' : fxPreset === 'nightcore' ? 'nightcore' : fmtSpeed(settings.speed ?? 1)}</button>
           {/if}
         </div>
-      </div>
-      <div class="right-c">
-        {#if player.error}<span class="err">{friendlyError(player.error, "Can't play this track")}</span>{/if}
-        {#if player.loading && !player.playing}<div class="spin"></div>{/if}
-        <IconBtn
-          icon={MicVocalIcon}
-          size={22}
-          on={lyricsOn}
-          disabled={!player.track || (lyricsReady && !lyricsOk)}
-          onclick={() => openPanel('lyrics')}
-          title={lyricsReady && !lyricsOk ? tr('No lyrics') : tr('Lyrics')}
-          btnSize="lg"
-        />
-        <IconBtn icon={Queue02Icon} size={22} on={queueOn} onclick={() => openPanel('queue')} title={tr('Queue')} btnSize="lg" />
-        <IconBtn icon={Radio02Icon} size={22} onclick={() => startRadio()} title={tr('Radio')} btnSize="lg" />
-        {#if !/Android|iPhone|iPad/i.test(navigator.userAgent)}
-          <IconBtn icon={MiniPlayerIcon} size={22} onclick={() => openMini()} title={tr('Mini player')} btnSize="lg" />
-        {/if}
-        <SleepTimer
-          trackId={player.track?.id ?? null}
-          position={player.position}
-          duration={player.duration}
-          onStop={() => { api.pause().catch(() => {}); toast(tr('Sleep timer: paused'), 'info', 2600); }}
-        />
-        <div class="vol">
-          <Hi icon={player.volume < 0.01 ? VolumeMute01Icon : VolumeHighIcon} size={20} />
-          <Slider
-            value={player.volume}
-            max={1}
-            step={0.01}
-            live
-            wheel
-            showTip
-            format={(v) => `${Math.round(v * 100)}%`}
-            oninput={(v) => setVolumePrecise(v)}
-          />
+        <div class="np-ctrls">
+          <div class="np-side">
+            <IconBtn
+              icon={FavouriteIcon}
+              altIcon={FavouriteFilledIcon}
+              showAlt={player.liked}
+              size={22}
+              on={player.liked}
+              onclick={toggleLike}
+              title={tr('Like')}
+              btnSize="lg"
+            />
+            <IconBtn icon={ThumbsDownIcon} size={22} on={player.disliked} danger onclick={toggleDislike} title={tr('Dislike')} btnSize="lg" />
+            <IconBtn
+              icon={Radio02Icon}
+              size={22}
+              disabled={!player.track}
+              onclick={() => void startRadio()}
+              title={tr('Radio')}
+              btnSize="lg"
+            />
+          </div>
+          <div class="np-transport">
+            <IconBtn icon={ShuffleIcon} size={22} on={player.shuffle} onclick={toggleShuffle} title={tr('Shuffle')} btnSize="lg" />
+            <IconBtn icon={PreviousIcon} size={28} btnSize="lg" onclick={() => api.prev()} title={tr('Previous')} />
+            <IconBtn
+              icon={PlayIcon}
+              altIcon={PauseIcon}
+              showAlt={player.playing && !player.buffering}
+              size={30}
+              btnSize="xl"
+              spinning={player.buffering || (player.loading && !player.playing)}
+              onclick={() => api.toggle()}
+              title={player.buffering ? 'Buffering' : player.playing ? tr('Pause') : tr('Play')}
+              disabled={!player.track && !player.loading}
+            />
+            <IconBtn icon={NextIcon} size={28} btnSize="lg" onclick={() => api.next()} title={tr('Next')} />
+            <IconBtn
+              icon={RepeatIcon}
+              altIcon={RepeatOne01Icon}
+              showAlt={player.repeat === 'one'}
+              size={22}
+              on={player.repeat !== 'off'}
+              btnSize="lg"
+              onclick={cycleRepeatUi}
+              title={tr('Repeat')}
+            />
+          </div>
+          <div class="np-side end">
+            {#if player.error}<span class="err">{friendlyError(player.error, "Can't play this track")}</span>{/if}
+            <IconBtn
+              icon={MicVocalIcon}
+              size={22}
+              on={lyricsOn}
+              disabled={lyricsReady && !lyricsOk}
+              onclick={() => void openPanel('lyrics')}
+              title={tr('Lyrics')}
+              btnSize="lg"
+            />
+            <IconBtn
+              icon={Queue02Icon}
+              size={22}
+              on={queueOn}
+              onclick={() => void openPanel('queue')}
+              title={tr('Queue')}
+              btnSize="lg"
+            />
+            <SleepTimer
+              trackId={player.track?.id ?? null}
+              position={player.position}
+              duration={player.duration}
+              onStop={() => { api.pause().catch(() => {}); toast(tr('Sleep timer: paused'), 'info', 2600); }}
+            />
+            {#if !isPhone}
+              <span class="rc-phone"><RemoteQuick placement="up" bind:this={remoteQuick} /></span>
+            {/if}
+            <div class="np-vol" onwheel={nudgeVolume}>
+              <IconBtn
+                icon={VolumeHighIcon}
+                altIcon={VolumeMute01Icon}
+                showAlt={player.volume < 0.01}
+                size={20}
+                btnSize="lg"
+                onclick={toggleMute}
+                title={player.volume < 0.01 ? tr('Unmute') : tr('Mute')}
+              />
+              <Slider
+                value={player.volume}
+                max={1}
+                step={0.01}
+                live
+                wheel
+                showTip
+                scrubTip={false}
+                format={(v) => `${Math.round(v * 100)}%`}
+                oninput={(v) => setVolumePrecise(v)}
+              />
+            </div>
+            {#if !isPhone}
+              <IconBtn
+                icon={MiniPlayerIcon}
+                size={22}
+                btnSize="lg"
+                onclick={() => void openMini()}
+                title={tr('Mini player')}
+              />
+            {/if}
+          </div>
         </div>
       </div>
     </div>
-  </footer>
+  {/if}
+
+  {#if !npLayer}
+    <footer class="player">
+      <div class="seek">
+        <Slider
+          value={player.position}
+          max={player.duration || 0}
+          buffered={player.buffered}
+          {wave}
+          disabled={!player.track || !(player.duration > 0)}
+          showTip
+          format={fmtTime}
+          onchange={commitSeek}
+        />
+        {#if (settings.speed ?? 1) !== 1 || (settings.reverb ?? 0) > 0}
+          <button class="speed-chip" title="Back to normal speed" onclick={() => applyFxPreset('normal')}>{fxPreset === 'slowed' ? 'slowed' : fxPreset === 'nightcore' ? 'nightcore' : fmtSpeed(settings.speed ?? 1)}</button>
+        {/if}
+      </div>
+      <div class="player-in">
+        <div class="now" role="presentation" onwheel={nudgeVolume} oncontextmenu={(e) => { if (player.track) contextTrack(e, player.track); }}>
+          {#if player.track}
+            <button class="cov" type="button" onclick={toggleExpanded} title={tr('Now playing')}>
+              <Cover src={nowCover} videoId={player.track?.id} size={64} alt="" />
+              {#if volHud != null}
+                <div class="vol-hud" aria-live="polite">{volHud}%</div>
+              {/if}
+            </button>
+            <div class="meta">
+              <div class="title-clip" class:scrolling={titleOverflow} bind:this={titleClipEl}>
+                <div class="title" bind:this={titleEl}>{player.track.title}</div>
+              </div>
+              <div class="artist">
+                {#each player.track.artists as a, k}
+                  {#if k > 0}<span>, </span>{/if}
+                  <button type="button" onclick={() => goArtist(player.track!.artist_ids[k], a)}>{a}</button>
+                {/each}
+              </div>
+            </div>
+            <div class="likes">
+              <IconBtn
+                icon={FavouriteIcon}
+                altIcon={FavouriteFilledIcon}
+                showAlt={player.liked}
+                size={22}
+                on={player.liked}
+                onclick={toggleLike}
+                title={tr('Like')}
+              />
+              <IconBtn icon={ThumbsDownIcon} size={22} on={player.disliked} danger onclick={toggleDislike} title={tr('Dislike')} />
+              <IconBtn
+                icon={Radio02Icon}
+                size={22}
+                disabled={!player.track}
+                onclick={() => void startRadio()}
+                title={tr('Radio')}
+              />
+            </div>
+          {/if}
+        </div>
+        <div class="ctrls">
+          <div class="row-c">
+            <IconBtn icon={ShuffleIcon} size={22} on={player.shuffle} onclick={toggleShuffle} title={tr('Shuffle')} btnSize="lg" />
+            <IconBtn icon={PreviousIcon} size={26} btnSize="lg" onclick={() => api.prev()} title={tr('Previous')} />
+            <IconBtn
+              icon={PlayIcon}
+              altIcon={PauseIcon}
+              showAlt={player.playing && !player.buffering}
+              size={28}
+              btnSize="xl"
+              spinning={player.buffering || (player.loading && !player.playing)}
+              onclick={() => api.toggle()}
+              title={player.buffering ? 'Buffering' : player.playing ? tr('Pause') : tr('Play')}
+              disabled={!player.track && !player.loading}
+            />
+            <IconBtn icon={NextIcon} size={26} btnSize="lg" onclick={() => api.next()} title={tr('Next')} />
+            <IconBtn
+              icon={RepeatIcon}
+              altIcon={RepeatOne01Icon}
+              showAlt={player.repeat === 'one'}
+              size={22}
+              on={player.repeat !== 'off'}
+              btnSize="lg"
+              onclick={cycleRepeatUi}
+              title={tr('Repeat')}
+            />
+          </div>
+        </div>
+        <div class="right-c">
+          {#if player.error}<span class="err">{friendlyError(player.error, "Can't play this track")}</span>{/if}
+          {#if player.loading && !player.playing}<div class="spin"></div>{/if}
+          <IconBtn
+            class="rc-mid"
+            icon={Queue02Icon}
+            size={22}
+            on={queueOn}
+            onclick={() => void openPanel('queue')}
+            title={tr('Queue')}
+            btnSize="lg"
+          />
+          <SleepTimer
+            trackId={player.track?.id ?? null}
+            position={player.position}
+            duration={player.duration}
+            onStop={() => { api.pause().catch(() => {}); toast(tr('Sleep timer: paused'), 'info', 2600); }}
+          />
+          {#if !isPhone}
+            <span class="rc-phone"><RemoteQuick placement="up" bind:this={remoteQuick} /></span>
+          {/if}
+          <div class="vol" onwheel={nudgeVolume}>
+            <IconBtn
+              icon={VolumeHighIcon}
+              altIcon={VolumeMute01Icon}
+              showAlt={player.volume < 0.01}
+              size={20}
+              btnSize="lg"
+              onclick={toggleMute}
+              title={player.volume < 0.01 ? tr('Unmute') : tr('Mute')}
+            />
+            <Slider
+              value={player.volume}
+              max={1}
+              step={0.01}
+              live
+              wheel
+              showTip
+              scrubTip={false}
+              format={(v) => `${Math.round(v * 100)}%`}
+              oninput={(v) => setVolumePrecise(v)}
+            />
+          </div>
+          {#if !isPhone}
+            <IconBtn
+              class="rc-mini"
+              icon={MiniPlayerIcon}
+              size={22}
+              btnSize="lg"
+              onclick={() => void openMini()}
+              title={tr('Mini player')}
+            />
+          {/if}
+        </div>
+      </div>
+    </footer>
+  {/if}
 </div>
 
 <Toast />
@@ -4016,4 +4510,28 @@
 
 {#if ctx}
   <ContextMenu x={ctx.x} y={ctx.y} entries={buildMenu(ctx)} onClose={() => (ctx = null)} />
+{/if}
+{#if libAddMenu}
+  <ContextMenu
+    x={libAddMenu.x}
+    y={libAddMenu.y}
+    entries={[
+      { label: tr('New playlist'), icon: PlayListAddIcon, onclick: () => (newPl = {}) },
+      { label: tr('Import playlist'), icon: Link01Icon, onclick: () => (importOpen = true) },
+    ]}
+    onClose={() => (libAddMenu = null)}
+  />
+{/if}
+{#if queueMenu}
+  <ContextMenu
+    x={queueMenu.x}
+    y={queueMenu.y}
+    entries={[
+      { label: tr('Save as playlist'), icon: PlayListAddIcon, onclick: () => void saveQueueAsPlaylist() },
+      ...(player.queue.length - player.index > 1
+        ? [{ label: tr('Clear'), icon: Delete02Icon, danger: true, onclick: () => void api.queueClear() }]
+        : []),
+    ]}
+    onClose={() => (queueMenu = null)}
+  />
 {/if}

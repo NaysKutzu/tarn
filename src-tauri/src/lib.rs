@@ -267,7 +267,12 @@ impl App {
 
     /// Replace the liked-id set from a full Liked Music snapshot.
     /// Insert-only refresh left unliked ids sticky for the whole session.
+    /// An empty replace is ignored so a failed/partial library fetch cannot
+    /// wipe every heart mid-play (that made likes flash then disappear).
     pub fn remember_liked_tracks(&self, tracks: Vec<Track>) {
+        if tracks.is_empty() {
+            return;
+        }
         let mut g = self.liked_ids.lock();
         g.clear();
         for t in &tracks {
@@ -277,6 +282,11 @@ impl App {
         }
         drop(g);
         *self.liked_tracks.lock() = tracks;
+    }
+
+    pub fn clear_liked(&self) {
+        self.liked_ids.lock().clear();
+        self.liked_tracks.lock().clear();
     }
 
     pub fn liked_music_snapshot(&self) -> Option<Collection> {
@@ -504,7 +514,7 @@ async fn get_home(
             .map_err(|e| e.to_string());
     }
 
-    // Don't race session restore — that was painting a logged-out 3-shelf Home
+    // Don't race session restore - that was painting a logged-out 3-shelf Home
     // over the personalized cache (Listen again / New releases / …).
     wait_session_ready(&app).await;
     for _ in 0..30 {
@@ -631,7 +641,7 @@ fn get_home_cached(app: State<'_, Arc<App>>) -> Option<Home> {
         match (name.as_deref(), file.account.as_deref()) {
             // Same account.
             (Some(n), Some(a)) if n == a => Some(file.home),
-            // Different named account — never flash the wrong feed.
+            // Different named account - never flash the wrong feed.
             (Some(_), Some(_)) => None,
             // Account name not restored yet, or cache written before name landed:
             // still paint the last signed-in snapshot so Home isn't blank.
@@ -939,11 +949,11 @@ pub(crate) async fn start_playback_at(
         && snap.track.is_some();
     // Heart follows the audible/UI track. During crossfade/cut the outgoing
     // title stays on screen, so stash the next rating and apply it on adopt.
+    // For Fresh/Armed, apply *after* prepare so we don't briefly keep the
+    // previous track's heart (prepare leaves liked untouched).
     let known_liked = app.is_liked_id(&id);
     if defer_ui {
         app.player.set_pending_rating(known_liked, false);
-    } else {
-        app.apply_known_rating(&id);
     }
     let index = if defer_ui {
         app.player.begin_manual_blend(queue.clone(), index)
@@ -953,6 +963,7 @@ pub(crate) async fn start_playback_at(
         }
         app.player
             .prepare(track.clone(), queue.clone(), index, start, true);
+        app.apply_known_rating(&id);
         index
     };
     let gen = app.player.play_gen();
@@ -1225,13 +1236,28 @@ pub(crate) fn analyze_prefetched(ytm: &std::sync::Arc<Ytm>, player: &Player, id:
 #[cfg(desktop)]
 #[tauri::command]
 async fn remote_start(app: State<'_, Arc<App>>, handle: AppHandle) -> Result<remote::RemoteInfo, String> {
-    Ok(remote::start(app.inner().clone(), handle).await)
+    let info = remote::start(app.inner().clone(), handle).await;
+    if info.running {
+        let mut s = app.settings.lock().clone();
+        if !s.phone_remote {
+            s.phone_remote = true;
+            save_settings(app.store.data_dir(), &s);
+            *app.settings.lock() = s;
+        }
+    }
+    Ok(info)
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn remote_stop() {
+fn remote_stop(app: State<'_, Arc<App>>) {
     remote::stop();
+    let mut s = app.settings.lock().clone();
+    if s.phone_remote {
+        s.phone_remote = false;
+        save_settings(app.store.data_dir(), &s);
+        *app.settings.lock() = s;
+    }
 }
 
 #[cfg(desktop)]
@@ -1908,6 +1934,8 @@ async fn sign_out(app: State<'_, Arc<App>>) -> Result<(), String> {
     let _ = app.store.clear();
     let _ = app.ytm.set_cookie_header(None).await;
     *app.auth.lock() = AuthStatus::default();
+    app.clear_liked();
+    app.player.set_rating(false, false);
     Ok(())
 }
 
@@ -1921,6 +1949,9 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     let mut settings = settings;
     // Keep the one-shot flag so a later load does not flip the user off again.
     settings.notifications_migrated = true;
+    // Phone remote on/off is owned by remote_start / remote_stop so a stale
+    // frontend settings blob cannot wipe the remembered preference.
+    settings.phone_remote = app.settings.lock().phone_remote;
     app.ytm.apply_settings(&settings);
     *app.notify.lock() = settings.notifications;
     *app.discord.lock() = settings.discord_presence;
@@ -2602,6 +2633,14 @@ pub fn run() {
             }
             #[cfg(desktop)]
             tray::apply(&handle, app.settings.lock().tray_icon);
+            #[cfg(desktop)]
+            if app.settings.lock().phone_remote {
+                let app2 = app.clone();
+                let h = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = remote::start(app2, h).await;
+                });
+            }
             let hwnd = main_hwnd(tauri_app);
             mpris::start(app.clone(), handle.clone(), hwnd);
             #[cfg(windows)]

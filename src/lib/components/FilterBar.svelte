@@ -42,15 +42,31 @@
   .fb {
     display: flex; align-items: center; gap: 8px;
     height: 38px; padding: 0 10px 0 12px;
-    border-radius: 999px;
+    border-radius: 10px;
     background: var(--bg-elev);
-    border: 1px solid transparent;
+    border: 1px solid var(--line);
     color: var(--text-2);
     max-width: 380px;
     transition: border-color 0.15s, background 0.15s;
   }
   .fb:focus-within { border-color: rgba(var(--accent-rgb), 0.55); background: var(--bg-hover); color: var(--text); }
-  .fb.compact { height: 32px; max-width: none; margin: 0 8px 6px; }
+  .fb.compact {
+    height: 28px;
+    max-width: none;
+    margin: 0 4px 6px;
+    padding: 0 8px 0 9px;
+    border-radius: 7px;
+    background: var(--bg-hover);
+    border-color: transparent;
+    gap: 6px;
+  }
+  .fb.compact:hover { background: var(--bg-active); }
+  .fb.compact:focus-within {
+    background: var(--bg-elev);
+    border-color: transparent;
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.35);
+  }
+  .fb.compact input { font-size: 12.5px; }
   .fb-ic { display: grid; place-items: center; flex: 0 0 auto; }
   input {
     flex: 1; min-width: 0; background: none; border: 0; outline: 0;

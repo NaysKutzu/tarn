@@ -21,6 +21,7 @@
         "theme": "Dark",
         "label": "main",
         "decorations": false,
+        "transparent": true,
         "shadow": true,
         "visible": false
       }

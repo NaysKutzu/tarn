@@ -53,7 +53,7 @@ jobs:
         run: node .github/resolve-release-build.mjs
 
   # Draft release first so each build job can attach assets as soon as they finish.
-  # Stays draft until publish uploads latest.json and undrafts — updater clients
+  # Stays draft until publish uploads latest.json and undrafts. Updater clients
   # must not see /releases/latest until the merged manifest is present.
   create-draft:
     needs: [version]

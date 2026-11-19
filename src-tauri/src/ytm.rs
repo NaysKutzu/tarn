@@ -410,7 +410,7 @@ impl Ytm {
         let retry = signed && (!had_cookie || !crate::home_feed_ok(&home));
         if retry {
             crate::diag::log(format!(
-                "home: weak feed ({} shelves, cookie_on_browse={had_cookie}) — retrying",
+                "home: weak feed ({} shelves, cookie_on_browse={had_cookie}) - retrying",
                 home.shelves.len()
             ));
             let again = match self.it().home_progressive(params, &mut on_partial).await {
@@ -1284,7 +1284,23 @@ impl Ytm {
     }
 
     pub async fn library_save(&self, id: &str, save: bool) -> Result<()> {
-        self.it().library_save(id, save).await
+        // like/like|removelike needs a playlistId (OLAK5…) or channelId.
+        // Album cards / context menus often pass the browse id (MPREb…),
+        // which YouTube rejects with 404 NOT_FOUND. Resolve first.
+        let target = if id.starts_with("MPREb") {
+            let a = self
+                .rp
+                .query()
+                .music_album(id)
+                .await
+                .map_err(|e| anyhow!("library_save album resolve {id}: {e}"))?;
+            a.playlist_id.filter(|p| !p.is_empty()).ok_or_else(|| {
+                anyhow!("album {id}: no playlist id to save/remove from library")
+            })?
+        } else {
+            id.strip_prefix("VL").unwrap_or(id).to_string()
+        };
+        self.it().library_save(&target, save).await
     }
 
     /// Liked Music as the official app shows it. `FEmusic_liked_videos` alone
@@ -2704,13 +2720,21 @@ async fn download_into(
                 }
             }
             Err(e) if is_freshness_error(&e) => {
+                // Count consecutive 403/410s with no byte progress. Do NOT
+                // reset on a "successful" re-resolve - googlevideo can hand
+                // back a fresh URL that still 403s at the same offset, and
+                // resetting made this an infinite log flood.
                 stale_tries += 1;
                 same_client_hits += 1;
                 eprintln!(
                     "audio chunk {}-{}: {e}; re-resolving from byte {offset} ({stale_tries})",
                     offset, end
                 );
+                if stale_tries > 8 {
+                    return Err(e);
+                }
                 body.touch();
+                tokio::time::sleep(Duration::from_millis(300 * stale_tries as u64)).await;
                 match reresolve_from(
                     rp,
                     video_id,
@@ -2726,15 +2750,10 @@ async fn download_into(
                         stream = next;
                         ua = stream_ua(&stream);
                         client = download_client(&stream)?;
-                        stale_tries = 0;
                         net_tries = 0;
                     }
                     Err(e2) => {
-                        if stale_tries > 8 {
-                            return Err(e);
-                        }
                         eprintln!("audio: re-resolve failed: {e2}; retrying");
-                        tokio::time::sleep(Duration::from_millis(300 * stale_tries as u64)).await;
                     }
                 }
             }
@@ -3416,7 +3435,7 @@ async fn ytdlp_stream(
             let mut msg = last_err.unwrap_or_else(|| "failed".into());
             if js.is_none() && (age_or_login_err(&msg) || format_unavailable_err(&msg)) {
                 msg = format!(
-                    "{msg} (install deno or node and restart — yt-dlp needs a JS runtime for age-restricted / ciphered streams)"
+                    "{msg} (install deno or node and restart - yt-dlp needs a JS runtime for age-restricted / ciphered streams)"
                 );
             }
             return Err(anyhow!("yt-dlp: {msg}"));

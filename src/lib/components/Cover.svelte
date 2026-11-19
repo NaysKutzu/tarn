@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { sizedCover, srcsetFor, bannerSrcset, ytThumb, localCover } from '../cover';
   import { off } from '../offline.svelte';
 
@@ -36,6 +37,8 @@
   );
 
   let broken = $state(false);
+  let ready = $state(false);
+  let imgEl = $state<HTMLImageElement | null>(null);
   let useOrig = $state(false);
   let fallback = $state<string | null>(null);
   // Downloaded art on disk: first choice when offline, last resort online.
@@ -45,6 +48,7 @@
   $effect(() => {
     void src;
     broken = false;
+    ready = false;
     useOrig = false;
     fallback = null;
     localTried = false;
@@ -57,7 +61,19 @@
   let shownSet = $derived(eager || useLocal || fallback || useOrig ? '' : srcset);
   let empty = $derived(!src || src.includes('playlist-empty-state'));
 
+  // Keep shimmer until the bitmap is actually painted (cached images often skip onload).
+  $effect(() => {
+    void shown;
+    ready = false;
+    const el = imgEl;
+    if (!el) return;
+    void tick().then(() => {
+      if (imgEl === el && el.complete && el.naturalWidth > 0) ready = true;
+    });
+  });
+
   function onErr() {
+    ready = false;
     // The on-disk copy was the last thing to try (or missing while offline).
     if (useLocal) {
       useLocal = false;
@@ -99,8 +115,10 @@
 
 {#if shown && !broken && !empty}
   <img
-    class={cls}
+    bind:this={imgEl}
+    class="{cls}{ready ? '' : ' shimmer'}"
     class:round
+    class:wait={!ready}
     {alt}
     width={w}
     height={h}
@@ -111,6 +129,7 @@
     draggable="false"
     loading={eager ? 'eager' : 'lazy'}
     decoding="async"
+    onload={() => { ready = true; }}
     onerror={onErr}
   />
 {:else}
@@ -124,11 +143,17 @@
 {/if}
 
 <style>
+  img {
+    object-fit: cover;
+    object-position: center;
+  }
+  /* Shimmer shows through until the bitmap paints. */
+  img.wait {
+    color: transparent;
+  }
   img.round,
   .ph.round {
     border-radius: 50%;
-    object-fit: cover;
-    object-position: center;
   }
   .ph.ask {
     display: grid;

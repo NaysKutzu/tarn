@@ -1,6 +1,7 @@
 # dependencies and build output
 node_modules/
 dist/
+dist-remote/
 dist-out/
 src-tauri/target/
 src-tauri/gen/*/build/

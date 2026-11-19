@@ -1,22 +1,24 @@
 <script lang="ts">
   import { t as tr } from '../i18n.svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { onMount } from 'svelte';
+  import { onMount, type Snippet } from 'svelte';
   import Hi from './Hi.svelte';
-  import { ArrowLeft01Icon, ArrowRight01Icon, Search01Icon } from '../icons';
+  import { ArrowLeft01Icon, ArrowRight01Icon } from '../icons';
 
   let {
     canBack = false,
     canFwd = false,
     onBack,
     onFwd,
-    onSearch,
+    search,
+    actions,
   }: {
     canBack?: boolean;
     canFwd?: boolean;
     onBack?: () => void;
     onFwd?: () => void;
-    onSearch?: () => void;
+    search?: Snippet;
+    actions?: Snippet;
   } = $props();
 
   const isMac =
@@ -79,18 +81,16 @@
       <Hi icon={ArrowRight01Icon} size={16} />
     </button>
   </div>
-  <button
-    class="tb-search"
-    type="button"
-    title={tr('Search')}
-    aria-label={tr('Search')}
-    onclick={() => onSearch?.()}
-  >
-    <Hi icon={Search01Icon} size={14} />
-    <span class="tb-search-label">{tr('Search')}</span>
-    <kbd class="tb-search-key">/</kbd>
-  </button>
-  <div class="tb-drag"></div>
+  <div class="tb-center">
+    {#if search}
+      {@render search()}
+    {/if}
+  </div>
+  {#if actions}
+    <div class="tb-actions">
+      {@render actions()}
+    </div>
+  {/if}
   {#if !isMac}
     <div class="tb-btns">
       <button class="tb-btn min" type="button" title={tr('Minimize')} onclick={minimize} aria-label={tr('Minimize')}>
