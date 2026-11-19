@@ -3168,3 +3168,100 @@ html.extreme img { animation: egg-bounce 1.2s ease-in-out infinite; }
   50%      { transform: translateY(-3px) rotate(1.5deg); }
 }
 html.extreme ::selection { background: var(--accent); color: #000; }
+
+/* ---------- themes ---------- */
+/* Dark is the default (:root above). OLED: true black surfaces. */
+:root[data-theme='oled'] {
+  --bg: #000;
+  --bg-side: #000;
+  --bg-elev: #0e0e0e;
+  --bg-player: #000;
+  --line: rgba(255, 255, 255, 0.08);
+}
+:root[data-theme='oled'] .np { --bg: #000; }
+
+/* Light: warm paper surfaces; the fullscreen player stays dark (it sits on
+   the blurred cover) by restoring the dark tokens inside it. */
+:root[data-theme='light'] {
+  --bg: #f7f5f2;
+  --bg-side: #efece7;
+  --bg-elev: #ffffff;
+  --bg-player: #f1eee9;
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-active: rgba(0, 0, 0, 0.08);
+  --line: rgba(0, 0, 0, 0.08);
+  --line-2: rgba(0, 0, 0, 0.14);
+  --text: #171512;
+  --text-2: #46423c;
+  --text-3: #6f6a62;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.16);
+}
+:root[data-theme='light'],
+:root[data-theme='light'] body,
+:root[data-theme='light'] #app { color-scheme: light; }
+:root[data-theme='light'] .np,
+:root[data-theme='light'] .app.np-open {
+  --bg: #0c0b0a;
+  --bg-side: #11110f;
+  --bg-player: #141312;
+  --bg-elev: #181715;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.08);
+  --line: rgba(255, 255, 255, 0.07);
+  --line-2: rgba(255, 255, 255, 0.12);
+  --text: #f5f3f0;
+  --text-2: #c9c6c0;
+  --text-3: #9a9791;
+  color: var(--text);
+  color-scheme: dark;
+}
+:root[data-theme='light'] * { scrollbar-color: rgba(0, 0, 0, 0.22) transparent; }
+:root[data-theme='light'] ::-webkit-scrollbar-thumb { background-color: rgba(0, 0, 0, 0.2); }
+:root[data-theme='light'] ::-webkit-scrollbar-thumb:hover { background-color: rgba(0, 0, 0, 0.36); }
+:root[data-theme='light'] .ibtn.xl,
+:root[data-theme='light'] .btn { color: #f7f5f2; }
+:root[data-theme='light'] .ibtn.xl:hover,
+:root[data-theme='light'] .btn:hover { background: #000; color: #fff; }
+:root[data-theme='light'] .btn.ghost { color: var(--text); }
+:root[data-theme='light'] .btn.ghost:hover { background: var(--bg-active); color: var(--text); }
+:root[data-theme='light'] .sbar-track { background: rgba(0, 0, 0, 0.14); }
+:root[data-theme='light'] .sbar-buf { background: rgba(0, 0, 0, 0.24); }
+:root[data-theme='light'] .sbar-fill { background: var(--text); }
+:root[data-theme='light'] .np-open .sbar-track { background: rgba(255, 255, 255, 0.18); }
+:root[data-theme='light'] .np-open .sbar-buf { background: rgba(255, 255, 255, 0.38); }
+:root[data-theme='light'] .np-open .sbar-fill { background: #fff; }
+:root[data-theme='light'] .np-open .ibtn.xl,
+:root[data-theme='light'] .np-open .btn { color: #141312; }
+:root[data-theme='light'] .np-open .ibtn.xl:hover { background: #fff; color: #141312; }
+:root[data-theme='light'] .tog-knob { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); }
+:root[data-theme='light'] .sug-body { scrollbar-color: rgba(0, 0, 0, 0.22) transparent; }
+.accent-pick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: 330px; }
+.acc-sw {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px var(--line-2) inset;
+  cursor: pointer;
+  overflow: hidden;
+}
+.acc-sw.on { border-color: var(--text); }
+.acc-sw.auto { background: conic-gradient(#e0a45a, #e45c9a, #5b8def, #4cbf7a, #e0a45a); }
+.acc-sw.custom { background: var(--bg-active); }
+.acc-sw.custom::after { content: '+'; position: absolute; inset: 0; display: grid; place-items: center; font-size: 14px; line-height: 1; color: var(--text-2); }
+.acc-sw.custom.on::after { content: ''; }
+.acc-sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+:root[data-theme='light'] .chip.on,
+:root[data-theme='light'] .eq-preset.on { color: var(--bg); }
+:root[data-theme='light'] .top-card:hover { background: var(--bg-active); }
+:root[data-theme='light'] .tog { background: rgba(0, 0, 0, 0.2); }
+:root[data-theme='light'] .tog.on { background: var(--accent); }
+:root[data-theme='light'] .dd-btn,
+:root[data-theme='light'] .set-row select,
+:root[data-theme='light'] .set-row input[type=text],
+:root[data-theme='light'] .cache-custom input[type=number] { background: var(--bg); }
+:root[data-theme='light'] .dd-menu,
+:root[data-theme='light'] .ctx { background: #fff; }
+:root[data-theme='light'] .chk-box { background: var(--bg-active); }
+:root[data-theme='light'] .shimmer { background: linear-gradient(90deg, #ebe8e3 20%, #f6f4f0 45%, #ebe8e3 70%); background-size: 1200px 100%; }

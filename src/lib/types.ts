@@ -197,6 +197,10 @@ export interface Settings {
   speed_keep_pitch?: boolean;
   /** Reverb wet amount 0..1 (0 = off). */
   reverb?: number;
+  /** Colour theme. */
+  theme?: 'dark' | 'light' | 'oled' | 'system';
+  /** Fixed accent "#rrggbb"; null = from the cover art. */
+  accent_color?: string | null;
   cache_max_mb: number;
   /** Only downloaded / cached songs play; nothing touches the network. */
   offline_mode: boolean;

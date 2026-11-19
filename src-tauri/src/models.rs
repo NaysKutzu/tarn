@@ -273,6 +273,12 @@ pub struct Settings {
     /// Desktop track-change notifications. Off by default.
     #[serde(default)]
     pub notifications: bool,
+    /// "dark" | "light" | "oled" | "system".
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Fixed accent colour "#rrggbb" (None = taken from the cover art).
+    #[serde(default)]
+    pub accent_color: Option<String>,
     /// Show what you're listening to on Discord. On by default.
     #[serde(default = "default_true")]
     pub discord_presence: bool,
@@ -415,6 +421,8 @@ impl Default for Settings {
             region: "US".into(),
             sponsorblock: false,
             notifications: false,
+            theme: default_theme(),
+            accent_color: None,
             discord_presence: true,
             notifications_migrated: true,
             autoplay: true,
@@ -516,6 +524,8 @@ fn default_speed() -> f64 {
     1.0
 fn default_visualizer() -> String {
     "off".into()
+fn default_theme() -> String {
+    "dark".into()
 }
 
 fn default_eq_bands() -> [f32; 5] {

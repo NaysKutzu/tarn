@@ -3,6 +3,7 @@ export { Search01Icon } from '@hugeicons/core-free-icons';
 export { Compass01Icon } from '@hugeicons/core-free-icons';
 export { LibraryIcon } from '@hugeicons/core-free-icons';
 export { Settings02Icon } from '@hugeicons/core-free-icons';
+export { PaintBoardIcon } from '@hugeicons/core-free-icons';
 export { ChartColumnIcon } from '@hugeicons/core-free-icons';
 export { AudioWave01Icon } from '@hugeicons/core-free-icons';
 export { PlayIcon } from '@hugeicons/core-free-icons';
