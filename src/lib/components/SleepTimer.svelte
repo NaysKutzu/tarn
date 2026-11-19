@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import IconBtn from './IconBtn.svelte';
   import ContextMenu from './ContextMenu.svelte';
   import { MoonSleepIcon } from '../icons';
@@ -64,13 +65,13 @@
       onclick: () => (mode = { kind: 'time', at: Date.now() + m * 60_000, mins: m }),
     }));
     list.push({
-      label: 'End of this track',
+      label: tr('End of this track'),
       disabled: !trackId,
       onclick: () => { if (trackId) mode = { kind: 'track', id: trackId }; },
     });
     if (mode) {
       list.push({ sep: true });
-      list.push({ label: 'Turn off sleep timer', danger: true, onclick: () => (mode = null) });
+      list.push({ label: tr('Turn off sleep timer'), danger: true, onclick: () => (mode = null) });
     }
     return list;
   }

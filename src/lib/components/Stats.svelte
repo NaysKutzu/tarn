@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import type { Track } from '../types';
   import Cover from './Cover.svelte';
   import { api } from '../api';
@@ -64,18 +65,18 @@
 
 <div class="stats">
   <div class="st-head">
-    <h1 class="page-title">Your stats</h1>
-    <div class="st-ranges" role="tablist" aria-label="Period">
+    <h1 class="page-title">{tr('Your stats')}</h1>
+    <div class="st-ranges" role="tablist" aria-label={tr('Period')}>
       {#each Object.entries(RANGE_LABELS) as [id, label]}
-        <button type="button" role="tab" aria-selected={range === id} class:on={range === id} onclick={() => (range = id as StatsRange)}>{label}</button>
+        <button type="button" role="tab" aria-selected={range === id} class:on={range === id} onclick={() => (range = id as StatsRange)}>{tr(label)}</button>
       {/each}
     </div>
   </div>
 
   {#if !enabled}
     <div class="st-empty">
-      <p>Listening stats are off, so nothing new is recorded.</p>
-      <button class="btn" type="button" onclick={onEnable}>Turn on</button>
+      <p>{tr('Listening stats are off, so nothing new is recorded.')}</p>
+      <button class="btn" type="button" onclick={onEnable}>{tr('Turn on')}</button>
     </div>
   {/if}
 
@@ -83,7 +84,7 @@
     <p class="st-empty">Couldn't read your history: {error}</p>
   {:else if s && s.plays === 0}
     <div class="st-empty">
-      <p>No listens in this period yet. Songs count after 30 seconds (or half of a short song).</p>
+      <p>{tr('No listens in this period yet. Songs count after 30 seconds (or half of a short song).')}</p>
     </div>
   {:else if s}
     <section class="st-hero">
@@ -92,8 +93,8 @@
         <span class="l">minutes listened</span>
       </div>
       <div class="st-chips">
-        <div><b>{s.plays.toLocaleString()}</b><span>plays</span></div>
-        <div><b>{s.tracks.toLocaleString()}</b><span>songs</span></div>
+        <div><b>{s.plays.toLocaleString()}</b><span>{tr('plays')}</span></div>
+        <div><b>{s.tracks.toLocaleString()}</b><span>{tr('songs')}</span></div>
         <div><b>{s.artists.toLocaleString()}</b><span>artists</span></div>
         <div><b>{s.longestStreak}</b><span>day streak{s.currentStreak > 1 ? ` · ${s.currentStreak} now` : ''}</span></div>
       </div>
@@ -105,16 +106,16 @@
       <section class="st-top-artist">
         <Cover src={a.item.cover} size={96} round alt="" />
         <div>
-          <span class="t-meta">Top artist</span>
+          <span class="t-meta">{tr('Top artist')}</span>
           <button class="st-link big" type="button" disabled={!a.item.id} onclick={() => a.item.id && onArtist(a.item.id)}>{a.item.name}</button>
-          <span class="t-meta">{a.plays} plays · {fmtListen(a.secs)}</span>
+          <span class="t-meta">{tr('{n} plays', { n: a.plays })} · {fmtListen(a.secs)}</span>
         </div>
       </section>
     {/if}
 
     <div class="st-cols">
       <section>
-        <h2>Top songs</h2>
+        <h2>{tr('Top songs')}</h2>
         <ol class="st-list">
           {#each s.topTracks as t, i (t.item.id)}
             <li>
@@ -132,7 +133,7 @@
         </ol>
       </section>
       <section>
-        <h2>Top artists</h2>
+        <h2>{tr('Top artists')}</h2>
         <ol class="st-list">
           {#each s.topArtists as a, i (a.item.name)}
             <li>
@@ -150,13 +151,13 @@
 
     {#if s.topAlbums.length}
       <section>
-        <h2>Top albums</h2>
+        <h2>{tr('Top albums')}</h2>
         <div class="st-albums">
           {#each s.topAlbums as a (a.item.name + a.item.artist)}
             <button type="button" class="st-album" disabled={!a.item.id} onclick={() => a.item.id && onAlbum(a.item.id)}>
               <Cover src={a.item.cover} size={120} alt="" />
               <span class="clamp one">{a.item.name}</span>
-              <span class="t-meta clamp one">{a.item.artist} · {a.plays} plays</span>
+              <span class="t-meta clamp one">{a.item.artist} · {tr('{n} plays', { n: a.plays })}</span>
             </button>
           {/each}
         </div>
@@ -165,8 +166,8 @@
 
     <div class="st-cols">
       <section>
-        <h2>When you listen</h2>
-        <div class="st-bars hours" aria-label="Listening by hour">
+        <h2>{tr('When you listen')}</h2>
+        <div class="st-bars hours" aria-label={tr('Listening by hour')}>
           {#each s.byHour as v, h}
             <div class="bar" title="{h}:00 · {fmtListen(v)}"><i style="height:{(v / hourMax) * 100}%"></i></div>
           {/each}
@@ -174,8 +175,8 @@
         <div class="st-axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23</span></div>
       </section>
       <section>
-        <h2>By weekday</h2>
-        <div class="st-bars days" aria-label="Listening by weekday">
+        <h2>{tr('By weekday')}</h2>
+        <div class="st-bars days" aria-label={tr('Listening by weekday')}>
           {#each s.byDay as v, d}
             <div class="bar" title="{DAYS[d]} · {fmtListen(v)}"><i style="height:{(v / dayMax) * 100}%"></i><span>{DAYS[d]}</span></div>
           {/each}
@@ -188,8 +189,8 @@
   {/if}
 
   <p class="t-meta st-foot">
-    Stored only on this device.
-    <button class="st-link" type="button" onclick={clearAll}>{confirmClear ? 'Click again to delete all history' : 'Clear history'}</button>
+    {tr('Stored only on this device.')}
+    <button class="st-link" type="button" onclick={clearAll}>{confirmClear ? tr('Click again to delete all history') : tr('Clear history')}</button>
   </p>
 </div>
 

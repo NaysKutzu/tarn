@@ -2,6 +2,8 @@
 // (so they follow the keyboard layout); global hotkeys use
 // `KeyboardEvent.code` because the OS registers physical keys.
 
+import { t } from './i18n.svelte';
+
 export type ShortcutAction =
   | 'play_pause' | 'next' | 'prev' | 'seek_forward' | 'seek_back'
   | 'volume_up' | 'volume_down' | 'like' | 'search' | 'show_window';
@@ -93,7 +95,7 @@ const NICE: Record<string, string> = {
 
 /** Human label for a combo ("Ctrl+Alt+KeyP" → "Ctrl + Alt + P"). */
 export function prettyCombo(combo: string, mac = false): string {
-  if (!combo) return 'Not set';
+  if (!combo) return t('Not set');
   return combo
     .split('+')
     .map((p) => {

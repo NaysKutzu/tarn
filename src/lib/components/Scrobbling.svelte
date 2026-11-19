@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import { loadConfig, saveConfig, lastfmLogin, listenbrainzCheck } from '../scrobble';
 
   let { onChange }: { onChange?: () => void } = $props();
@@ -66,42 +67,42 @@
 </script>
 
 <div class="set-row" style="flex-direction:column;align-items:stretch;gap:10px">
-  <span class="lb">Scrobbling
+  <span class="lb">{tr('Scrobbling')}
     <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">
-      Send what you play to Last.fm and/or ListenBrainz (after half the song, or 4 minutes).
+      {tr('Send what you play to Last.fm and/or ListenBrainz (after half the song, or 4 minutes).')}
     </span>
   </span>
 
   <div class="scr">
-    <strong>Last.fm</strong>
+    <strong>{tr('Last.fm')}</strong>
     {#if cfg.lastfm.session}
-      <div class="line">Connected as {cfg.lastfm.user}
-        <button class="btn ghost" type="button" onclick={disconnectLastfm}>Disconnect</button>
+      <div class="line">{tr('Connected as {user}', { user: cfg.lastfm.user ?? '' })}
+        <button class="btn ghost" type="button" onclick={disconnectLastfm}>{tr('Disconnect')}</button>
       </div>
     {:else}
-      <input type="text" placeholder="API key (last.fm/api/account/create)" bind:value={cfg.lastfm.apiKey} />
-      <input type="text" placeholder="Shared secret" bind:value={cfg.lastfm.secret} />
-      <input type="text" placeholder="Username" bind:value={lfmUser} autocomplete="off" />
-      <input type="password" placeholder="Password (used once, not stored)" bind:value={lfmPass} autocomplete="off" />
+      <input type="text" placeholder={tr('API key (last.fm/api/account/create)')} bind:value={cfg.lastfm.apiKey} />
+      <input type="text" placeholder={tr('Shared secret')} bind:value={cfg.lastfm.secret} />
+      <input type="text" placeholder={tr('Username')} bind:value={lfmUser} autocomplete="off" />
+      <input type="password" placeholder={tr('Password (used once, not stored)')} bind:value={lfmPass} autocomplete="off" />
       <div class="line">
         <button class="btn ghost" type="button" disabled={busy === 'lfm'} onclick={connectLastfm}>
-          {busy === 'lfm' ? 'Connecting…' : 'Connect'}
+          {busy === 'lfm' ? tr('Connecting…') : tr('Connect')}
         </button>
       </div>
     {/if}
   </div>
 
   <div class="scr">
-    <strong>ListenBrainz</strong>
+    <strong>{tr('ListenBrainz')}</strong>
     {#if cfg.listenbrainz.token}
-      <div class="line">Token saved
-        <button class="btn ghost" type="button" onclick={disconnectLb}>Disconnect</button>
+      <div class="line">{tr('Token saved')}
+        <button class="btn ghost" type="button" onclick={disconnectLb}>{tr('Disconnect')}</button>
       </div>
     {:else}
-      <input type="text" placeholder="User token (listenbrainz.org/settings)" bind:value={cfg.listenbrainz.token} autocomplete="off" />
+      <input type="text" placeholder={tr('User token (listenbrainz.org/settings)')} bind:value={cfg.listenbrainz.token} autocomplete="off" />
       <div class="line">
         <button class="btn ghost" type="button" disabled={busy === 'lb' || !cfg.listenbrainz.token.trim()} onclick={connectLb}>
-          {busy === 'lb' ? 'Checking…' : 'Connect'}
+          {busy === 'lb' ? tr('Checking…') : tr('Connect')}
         </button>
       </div>
     {/if}

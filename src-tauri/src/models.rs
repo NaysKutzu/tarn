@@ -270,6 +270,10 @@ pub struct Settings {
     /// Skip off-topic intros / outros of music videos via SponsorBlock.
     #[serde(default)]
     pub sponsorblock: bool,
+    /// Language of Tarn's own menus and buttons ("system" | "en" | "ro"). Separate
+    /// from `language`, which is what YouTube Music answers in.
+    #[serde(default = "default_ui_language")]
+    pub ui_language: String,
     /// Desktop track-change notifications. Off by default.
     #[serde(default)]
     pub notifications: bool,
@@ -425,6 +429,7 @@ impl Default for Settings {
         Self {
             quality: "high".into(),
             language: "en".into(),
+            ui_language: default_ui_language(),
             region: "US".into(),
             sponsorblock: false,
             notifications: false,
@@ -535,6 +540,8 @@ fn default_visualizer() -> String {
     "off".into()
 fn default_theme() -> String {
     "dark".into()
+fn default_ui_language() -> String {
+    "system".into()
 }
 
 fn default_eq_bands() -> [f32; 5] {

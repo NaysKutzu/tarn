@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import { api } from '../api';
   import { parseImport } from '../playlistIo';
 
@@ -77,15 +78,15 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="imp-scrim" onmousedown={(e) => { if (e.target === e.currentTarget && phase !== 'running') onClose(); }}>
-  <div class="imp" role="dialog" aria-modal="true" aria-label="Import playlist">
-    <h2>Import playlist</h2>
+  <div class="imp" role="dialog" aria-modal="true" aria-label={tr('Import playlist')}>
+    <h2>{tr('Import playlist')}</h2>
 
     {#if phase === 'form'}
       <p class="hint">
-        Paste a list (one song per line, <code>Artist - Title</code>) or a CSV, or pick a file.
+        {tr('Paste a list (one song per line,')} <code>{tr('Artist - Title')}</code>) or a CSV, or pick a file.
         CSV exports from Tarn or Exportify (Spotify) work as they are. Songs are matched by searching YouTube Music.
       </p>
-      <input class="in" type="text" placeholder="Playlist name" bind:value={name} />
+      <input class="in" type="text" placeholder={tr('Playlist name')} bind:value={name} />
       <textarea class="in ta" rows="9" placeholder={'Imran Khan - Imaginary\nTussin - Uber'} bind:value={text}></textarea>
       <div class="row">
         <label class="file">
@@ -95,24 +96,24 @@
       </div>
       {#if error}<div class="err">{error}</div>{/if}
       <div class="acts">
-        <button class="btn ghost" type="button" onclick={onClose}>Cancel</button>
+        <button class="btn ghost" type="button" onclick={onClose}>{tr('Cancel')}</button>
         <button class="btn" type="button" disabled={!name.trim() || !rows.length} onclick={start}>
           Import {rows.length || ''} songs
         </button>
       </div>
     {:else if phase === 'running'}
-      <p class="hint">Adding songs… {done} / {rows.length}</p>
+      <p class="hint">{tr('Adding songs… {a} / {b}', { a: done, b: rows.length })}</p>
       <div class="bar"><div class="fill" style="width:{rows.length ? (done / rows.length) * 100 : 0}%"></div></div>
-      <div class="acts"><button class="btn ghost" type="button" onclick={stop}>Stop</button></div>
+      <div class="acts"><button class="btn ghost" type="button" onclick={stop}>{tr('Stop')}</button></div>
     {:else}
-      <p class="hint">Added {added} of {rows.length} songs to “{name.trim()}”.</p>
+      <p class="hint">{tr('Added {a} of {b} songs to “{name}”.', { a: added, b: rows.length, name: name.trim() })}</p>
       {#if missing.length}
         <details>
-          <summary>{missing.length} not found</summary>
+          <summary>{tr('{n} not found', { n: missing.length })}</summary>
           <ul class="miss">{#each missing.slice(0, 200) as m}<li>{m}</li>{/each}</ul>
         </details>
       {/if}
-      <div class="acts"><button class="btn" type="button" onclick={onClose}>Done</button></div>
+      <div class="acts"><button class="btn" type="button" onclick={onClose}>{tr('Done')}</button></div>
     {/if}
   </div>
 </div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr } from '../i18n.svelte';
   import Hi from './Hi.svelte';
   import { Search01Icon, Cancel01Icon } from '../icons';
 
@@ -31,7 +32,7 @@
   />
   {#if value}
     {#if count}<span class="fb-n">{count}</span>{/if}
-    <button class="fb-x" type="button" title="Clear" onclick={() => { value = ''; document.getElementById(id)?.focus(); }}>
+    <button class="fb-x" type="button" title={tr('Clear')} onclick={() => { value = ''; document.getElementById(id)?.focus(); }}>
       <Hi icon={Cancel01Icon} size={14} />
     </button>
   {/if}

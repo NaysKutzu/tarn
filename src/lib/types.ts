@@ -180,6 +180,8 @@ export interface AuthStatus {
 export interface Settings {
   quality: string;
   language: string;
+  /** Language of Tarn's own UI ('system' | 'en' | 'ro'). */
+  ui_language?: string;
   region: string;
   notifications: boolean;
   /** Show the current track on Discord Rich Presence. */
