@@ -16,6 +16,16 @@ No domain? Leave `DOMAIN` out and it serves plain HTTP on port 80, fine for a LA
 
 Update: `git pull && docker compose up -d --build`. Stop: `docker compose down`.
 
+## Docker Compose variants
+
+```sh
+docker compose up -d --build                                          # server only, 127.0.0.1:47821
+TUNNEL_TOKEN=... docker compose --profile tunnel up -d --build        # + Cloudflare Tunnel (target http://jam:47821)
+DOMAIN=jam.example.com docker compose --profile caddy up -d --build   # + Caddy with automatic HTTPS
+```
+
+`restart: unless-stopped` keeps it running across crashes and reboots.
+
 ## Direct on a port (no Docker)
 
 On a fresh Linux VPS with Rust installed:
