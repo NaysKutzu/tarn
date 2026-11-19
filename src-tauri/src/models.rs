@@ -267,6 +267,9 @@ pub struct Settings {
     pub quality: String,
     pub language: String,
     pub region: String,
+    /// Skip off-topic intros / outros of music videos via SponsorBlock.
+    #[serde(default)]
+    pub sponsorblock: bool,
     /// Desktop track-change notifications. Off by default.
     #[serde(default)]
     pub notifications: bool,
@@ -394,6 +397,7 @@ impl Default for Settings {
             quality: "high".into(),
             language: "en".into(),
             region: "US".into(),
+            sponsorblock: false,
             notifications: false,
             discord_presence: true,
             notifications_migrated: true,

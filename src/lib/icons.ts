@@ -105,3 +105,4 @@ export const MiniPlayerIcon = [
     },
   ],
 ] as const;
+export { Forward01Icon } from '@hugeicons/core-free-icons';

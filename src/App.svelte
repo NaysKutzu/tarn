@@ -50,7 +50,7 @@
     Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon,
     Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon,
     LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon,
-    Download04Icon, ChartColumnIcon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
+    Download04Icon, ChartColumnIcon, Forward01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon,
     PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon,
     AudioWave01Icon,
   } from './lib/icons';
@@ -2838,6 +2838,12 @@
               <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Continue with similar music when the queue ends</span>
             </span>
             <Toggle bind:checked={settings.autoplay} label="Autoplay" onchange={() => api.setSettings(settings)} />
+          </div>
+          <div class="set-row">
+            <span class="lb"><Hi icon={Forward01Icon} size={20} /> Skip non-music sections
+              <span class="t-meta" style="display:block;font-weight:450;margin-top:2px">Jump over skits, talking and credits in music videos using community data from SponsorBlock (sends a short hash of the video id)</span>
+            </span>
+            <Toggle checked={settings.sponsorblock ?? false} label="Skip non-music sections" onchange={(v) => { settings.sponsorblock = v; api.setSettings(settings); }} />
           </div>
           <div class="set-row">
             <span class="lb"><Hi icon={PlayIcon} size={20} /> Resume on start

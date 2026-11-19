@@ -185,6 +185,8 @@ export interface Settings {
   /** Show the current track on Discord Rich Presence. */
   discord_presence: boolean;
   autoplay: boolean;
+  /** Skip off-topic intros / outros in music videos (SponsorBlock). */
+  sponsorblock?: boolean;
   /** Resume and play the last session when the app starts. */
   resume_on_start: boolean;
   /** Waveform overview in the seek bar (analyses each track). */
