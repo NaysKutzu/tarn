@@ -446,6 +446,8 @@
       linear-gradient(180deg, rgba(12, 11, 10, 0.35), rgba(12, 11, 10, 0.78) 48%, var(--bg) 100%);
   }
   .shell {
+    width: 100%;
+    overflow-x: clip;
     position: relative;
     z-index: 1;
     max-width: 480px;
@@ -590,10 +592,16 @@
   }
   .pane {
     flex: 1;
+    min-width: 0;
     max-height: min(42vh, 420px);
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
     -webkit-overflow-scrolling: touch;
   }
+  /* Flex children default to min-width:auto, so one long nowrap title widened the page. */
+  .shell > *, .now > *, .panel > * { min-width: 0; }
   .empty {
     display: flex;
     flex-direction: column;
@@ -660,7 +668,8 @@
     min-width: 0;
     height: 100%;
     outline: none;
-    font-size: 15px;
+    /* 16px stops iOS zooming the page when the field is focused. */
+    font-size: 16px;
     color: var(--text);
   }
   .search input::placeholder { color: var(--text-3); }

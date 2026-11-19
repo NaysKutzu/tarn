@@ -2498,7 +2498,7 @@
     }
     if (npPrevId && id !== npPrevId) {
       morphDir = idx < npPrevIndex ? 'prev' : 'next';
-      npSlide = xfading ? null : morphDir;
+      npSlide = xfading || settings.crossfade ? null : morphDir;
     }
     npPrevId = id;
     npPrevIndex = idx;
@@ -4204,7 +4204,7 @@
                       <Cover src={morphFromCover} videoId={morphFrom.id} size={560} eager alt="" />
                     </div>
                   {/if}
-                  <div class="xf-layer in" style={morphing ? `opacity:${morphP}` : undefined}>
+                  <div class="xf-layer in" class:xf-start={morphP < 0.03} style={morphing ? `opacity:${morphP}` : undefined}>
                     <Cover src={nowCover} videoId={player.track?.id} size={560} eager alt="" />
                   </div>
                   {#if volHud != null}
@@ -4218,7 +4218,7 @@
                       <div class="ar">{morphFrom.artists.join(', ')}</div>
                     </div>
                   {/if}
-                  <div class="np-meta xf-in" style={morphing ? `opacity:${morphP}` : undefined}>
+                  <div class="np-meta xf-in" class:xf-start={morphP < 0.03} style={morphing ? `opacity:${morphP}` : undefined}>
                     <h1>{player.track.title}</h1>
                     <div class="ar">
                       {#each player.track.artists as a, k}
@@ -4459,7 +4459,7 @@
                   <Cover src={morphFromCover} videoId={morphFrom.id} size={64} alt="" />
                 </span>
               {/if}
-              <span class="xf-layer in" style={morphing ? `opacity:${morphP}` : undefined}>
+              <span class="xf-layer in" class:xf-start={morphP < 0.03} style={morphing ? `opacity:${morphP}` : undefined}>
                 <Cover src={nowCover} videoId={player.track?.id} size={64} alt="" />
               </span>
               {#if volHud != null}
@@ -4473,7 +4473,7 @@
                   <div class="artist">{morphFrom.artists.join(', ')}</div>
                 </div>
               {/if}
-              <div class="meta-layer in" style={morphing ? `opacity:${morphP}` : undefined}>
+              <div class="meta-layer in" class:xf-start={morphP < 0.03} style={morphing ? `opacity:${morphP}` : undefined}>
                 <div class="title-clip" class:scrolling={titleOverflow} bind:this={titleClipEl}>
                   <div class="title" bind:this={titleEl}>{player.track.title}</div>
                 </div>

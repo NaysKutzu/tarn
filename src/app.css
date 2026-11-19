@@ -1586,6 +1586,8 @@ html[data-glass='1'] .sug {
   transform-origin: center;
   transition: transform 80ms ease;
   will-change: auto;
+  /* Above .sbar-fill (z-index 1) so the line never runs over the knob. */
+  z-index: 2;
 }
 .sbar:hover .sbar-thumb,
 .sbar.hovering .sbar-thumb,
@@ -1645,6 +1647,7 @@ html[data-glass='1'] .sug {
   object-fit: cover;
 }
 .now .cov .xf-layer {
+  transition: opacity 0.22s linear;
   display: block;
   position: absolute;
   inset: 0;
@@ -1674,6 +1677,7 @@ html[data-glass='1'] .sug {
   min-height: 36px;
 }
 .now .meta-layer {
+  transition: opacity 0.22s linear;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -2284,16 +2288,25 @@ html[data-float='1'] .main.with-panel {
   inset: 0;
   border-radius: inherit;
 }
+/* Layers always fill the square: a 16:9 thumb without album art used to
+   size a relative layer to its own height and leave the bottom half empty. */
+.np-art .xf-layer {
+  transition: opacity 0.22s linear;
+}
 .np-art .xf-layer.in {
-  position: relative;
   opacity: 1;
+}
+.np-art .xf-layer.xf-start,
+.np-meta-stack .np-meta.xf-start,
+.now .cov .xf-layer.xf-start,
+.now .meta-layer.xf-start {
+  transition: none;
 }
 .np-art.xfading .xf-layer.out {
   z-index: 1;
   pointer-events: none;
 }
 .np-art.xfading .xf-layer.in {
-  position: absolute;
   z-index: 2;
 }
 .np-art .xf-layer :is(img, .ph, .cover) {
@@ -2312,6 +2325,12 @@ html[data-float='1'] .main.with-panel {
 }
 .np-meta-stack.xfading {
   min-height: 4.6em;
+}
+.np-meta-stack.xfading .np-meta {
+  transition: opacity 0.22s linear;
+}
+.np-meta-stack.xfading .np-meta.xf-start {
+  transition: none;
 }
 .np-meta-stack.xfading .np-meta.xf-out {
   position: absolute;
@@ -2561,31 +2580,49 @@ html[data-float='1'] .main.with-panel {
 .app.np-idle .np.has-queue .np-in {
   padding-right: min(340px, 36vw);
 }
-/* Queue without lyrics: park the stage left so it doesn't float in a void. */
+/* Queue without lyrics: centre the cover in the space left of the queue card
+   (the card's width is already reserved as right padding). */
 .np.has-queue:not(.has-lyrics) .np-in {
-  justify-content: flex-start;
-  padding-left: clamp(36px, 5.5vw, 72px);
+  justify-content: center;
+  padding-left: clamp(36px, 5vw, 72px);
   gap: clamp(24px, 3.2vw, 44px);
 }
 .np.has-queue:not(.has-lyrics) .np-art {
-  width: min(400px, 46vmin);
-  height: min(400px, 46vmin);
-  flex-basis: min(400px, 46vmin);
+  width: min(460px, 52vmin);
+  height: min(460px, 52vmin);
+  flex-basis: min(460px, 52vmin);
 }
 .np.has-queue:not(.has-lyrics) .np-meta {
-  max-width: min(400px, 34vw);
+  max-width: min(460px, 40vw);
 }
 .app.np-idle .np.has-queue:not(.has-lyrics) .np-art {
   width: min(480px, 54vmin);
   height: min(480px, 54vmin);
   flex-basis: min(480px, 54vmin);
 }
+/* Lyrics + queue together: both columns use the room the queue card leaves,
+   so the cover and the lyric lines grow instead of shrinking. */
+.np.has-lyrics.has-queue .np-in {
+  gap: clamp(24px, 3vw, 52px);
+  padding-left: clamp(24px, 3vw, 48px);
+}
 .np.has-lyrics.has-queue .np-lyrics {
-  flex-basis: min(480px, 40vw);
-  max-width: min(480px, 40vw);
+  flex-basis: min(620px, 44vw);
+  max-width: min(620px, 44vw);
 }
 .np.has-lyrics.has-queue .np-main {
-  max-width: min(220px, 24vw);
+  max-width: min(320px, 26vw);
+}
+.np.has-lyrics.has-queue .np-art {
+  width: min(300px, 32vmin);
+  height: min(300px, 32vmin);
+  flex-basis: min(300px, 32vmin);
+}
+.np.has-lyrics.has-queue .np-meta h1 {
+  font-size: clamp(22px, 2.4vw, 30px);
+}
+.np.has-lyrics.has-queue .np-lyrics .ly {
+  font-size: calc(clamp(28px, 3.3vw, 42px) * var(--ly-scale, 1));
 }
 
 @media (max-width: 820px) {
