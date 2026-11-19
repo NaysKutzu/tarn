@@ -2,6 +2,7 @@
   import { t as tr, setLocale, localeOptions } from './lib/i18n.svelte';
   import Stats from './lib/components/Stats.svelte';
   import SmartPlaylists from './lib/components/SmartPlaylists.svelte';
+  import PhoneRemote from './lib/components/PhoneRemote.svelte';
   import Shortcuts from './lib/components/Shortcuts.svelte';
   import { appCombo, actionFor, appShortcuts } from './lib/shortcuts';
   import { onMount } from 'svelte';
@@ -3429,6 +3430,9 @@
             </span>
             <Toggle bind:checked={settings.listening_stats} label={tr('Listening stats')} onchange={() => api.setSettings(settings)} />
           </div>
+          {#if !isPhone}
+            <PhoneRemote />
+          {/if}
             </div>
           </section>
           <section class="set-sec" id="set-system">
