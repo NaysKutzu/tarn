@@ -241,6 +241,8 @@ export interface Settings {
   normalize_target: number;
   /** Reorder upcoming tracks by tempo (only when shuffle is off). */
   auto_dj: boolean;
+  /** Auto-DJ also orders by musical key (Camelot wheel). */
+  harmonic_mix?: boolean;
   lyrics_karaoke: boolean;
   /** Fall back to LRCLIB when YouTube Music has no synced lyrics (default on). */
   lyrics_lrclib?: boolean;

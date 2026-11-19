@@ -8,6 +8,10 @@
 //! then ordered greedily by nearest tempo, folding half/double time. A
 //! window is ordered once per set of tracks, so moving songs by hand
 //! within it is respected.
+//!
+//! With harmonic mixing on, each pick also weighs the Camelot-wheel
+//! distance between keys, so blends land in compatible keys (same key,
+//! a fifth apart, or relative major/minor) when the tempos allow it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,11 +31,26 @@ pub fn tempo_dist(a: f64, b: f64) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
-/// One track's tempo at its start and end (None = unknown).
+/// One track's tempo at its start and end (None = unknown) and its key.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Tempo {
     pub head: Option<f64>,
     pub tail: Option<f64>,
+    pub key: Option<crate::key::Key>,
+}
+
+/// Extra cost (in log-tempo units, 0.05 ≈ 5 % tempo) for a key clash.
+pub fn key_cost(a: Option<crate::key::Key>, b: Option<crate::key::Key>) -> f64 {
+    match (a, b) {
+        (Some(a), Some(b)) => match a.distance(&b) {
+            0 => 0.0,
+            1 => 0.005,
+            2 => 0.04,
+            _ => 0.08,
+        },
+        // Unknown key: neutral, slightly behind a known good match.
+        _ => 0.02,
+    }
 }
 
 impl Tempo {
@@ -45,7 +64,16 @@ impl Tempo {
 
 /// Greedy nearest-tempo order of `items` after a track ending at
 /// `prev` BPM. Tracks with no tempo keep their order at the end.
+#[cfg(test)]
 pub fn order(prev: Option<f64>, items: &[Tempo]) -> Vec<usize> {
+    order_mixed(&Tempo { head: prev, tail: prev, key: None }, items, false)
+}
+
+/// Like `order`, starting after the track `prev`; with `harmonic` the
+/// key distance is added to the tempo distance.
+pub fn order_mixed(prev: &Tempo, items: &[Tempo], harmonic: bool) -> Vec<usize> {
+    let prev_key = prev.key;
+    let prev = prev.end();
     let mut left: Vec<usize> = (0..items.len())
         .filter(|&i| items[i].start().is_some())
         .collect();
@@ -54,6 +82,7 @@ pub fn order(prev: Option<f64>, items: &[Tempo]) -> Vec<usize> {
         .collect();
     let mut out = Vec::with_capacity(items.len());
     let mut cur = prev;
+    let mut cur_key = prev_key;
     while !left.is_empty() {
         let pick = match cur {
             // Ties keep the original order (lowest index first).
@@ -61,7 +90,10 @@ pub fn order(prev: Option<f64>, items: &[Tempo]) -> Vec<usize> {
                 let mut best = 0;
                 let mut best_d = f64::INFINITY;
                 for (k, &i) in left.iter().enumerate() {
-                    let d = tempo_dist(c, items[i].start().unwrap_or(c));
+                    let mut d = tempo_dist(c, items[i].start().unwrap_or(c));
+                    if harmonic {
+                        d += key_cost(cur_key, items[i].key);
+                    }
                     if d < best_d - 1e-9 {
                         best_d = d;
                         best = k;
@@ -73,6 +105,7 @@ pub fn order(prev: Option<f64>, items: &[Tempo]) -> Vec<usize> {
         };
         let i = left.remove(pick);
         cur = items[i].end();
+        cur_key = items[i].key;
         out.push(i);
     }
     out.extend(unknown);
@@ -138,12 +171,14 @@ pub fn start(app: Arc<crate::App>) {
                     .map(|a| Tempo {
                         head: a.head.map(|g| g.bpm),
                         tail: a.tail.map(|g| g.bpm),
+                        key: a.key,
                     })
                     .unwrap_or_default()
             };
-            let prev = tempo(&queue[index + 1].id).end();
+            let harmonic = app.settings.lock().harmonic_mix;
+            let prev = tempo(&queue[index + 1].id);
             let items: Vec<Tempo> = ids.iter().map(|id| tempo(id)).collect();
-            let ord = order(prev, &items);
+            let ord = order_mixed(&prev, &items, harmonic);
             last_fp = Some(fp);
             if ord.iter().enumerate().all(|(k, &i)| k == i) {
                 continue;
@@ -151,11 +186,17 @@ pub fn start(app: Arc<crate::App>) {
             let new_ids: Vec<String> = ord.iter().map(|&i| ids[i].clone()).collect();
             if app.player.reorder_window(start, &ids, &new_ids) {
                 crate::diag::log(format!(
-                    "auto-dj: reordered {} upcoming tracks by tempo ({})",
+                    "auto-dj: reordered {} upcoming tracks by tempo{} ({})",
                     ids.len(),
+                    if harmonic { " and key" } else { "" },
                     ord.iter()
-                        .filter_map(|&i| items[i].start())
-                        .map(|b| format!("{b:.0}"))
+                        .filter_map(|&i| {
+                            let b = items[i].start()?;
+                            Some(match items[i].key {
+                                Some(k) if harmonic => format!("{b:.0} {}", k.camelot_str()),
+                                _ => format!("{b:.0}"),
+                            })
+                        })
                         .collect::<Vec<_>>()
                         .join(" → ")
                 ));
@@ -171,8 +212,34 @@ pub fn start(app: Arc<crate::App>) {
 mod tests {
     use super::*;
 
+    use crate::key::Key;
+
     fn t(b: f64) -> Tempo {
-        Tempo { head: Some(b), tail: Some(b) }
+        Tempo { head: Some(b), tail: Some(b), key: None }
+    }
+
+    fn tk(b: f64, tonic: u8, minor: bool) -> Tempo {
+        Tempo {
+            key: Some(Key { tonic, minor, confidence: 1.0 }),
+            ..t(b)
+        }
+    }
+
+    #[test]
+    fn harmonic_prefers_compatible_key_at_similar_tempo() {
+        // After C major at 124: 125 in F# major clashes, 127 in G major fits.
+        let prev = tk(124.0, 0, false);
+        let items = [tk(125.0, 6, false), tk(127.0, 7, false)];
+        assert_eq!(order_mixed(&prev, &items, false), vec![0, 1]);
+        assert_eq!(order_mixed(&prev, &items, true), vec![1, 0]);
+    }
+
+    #[test]
+    fn harmonic_does_not_override_big_tempo_jumps() {
+        // A matching key 30 % away in tempo still loses to a near tempo.
+        let prev = tk(124.0, 0, false);
+        let items = [tk(165.0, 0, false), tk(125.0, 6, false)];
+        assert_eq!(order_mixed(&prev, &items, true), vec![1, 0]);
     }
 
     #[test]
@@ -197,7 +264,7 @@ mod tests {
     #[test]
     fn uses_tail_tempo_for_the_next_pick() {
         let items = [
-            Tempo { head: Some(100.0), tail: Some(140.0) },
+            Tempo { head: Some(100.0), tail: Some(140.0), key: None },
             t(101.0),
             t(139.0),
         ];

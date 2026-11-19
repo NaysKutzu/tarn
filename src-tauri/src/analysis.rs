@@ -65,6 +65,9 @@ pub struct TrackAnalysis {
     /// scaled to the loudest bin.
     #[serde(default)]
     pub wave: Vec<u8>,
+    /// Musical key (None = atonal / not enough material).
+    #[serde(default)]
+    pub key: Option<crate::key::Key>,
 }
 
 impl TrackAnalysis {
@@ -193,11 +196,14 @@ impl Analyzer {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 crate::diag::log(format!(
-                    "analysis: {id} {:.1} LUFS peak {:.2} head {:?} tail {:?} ({} ms)",
+                    "analysis: {id} {:.1} LUFS peak {:.2} head {:?} tail {:?} key {} ({} ms)",
                     a.lufs,
                     a.peak,
                     a.head.map(|g| (g.bpm * 10.0).round() / 10.0),
                     a.tail.map(|g| (g.bpm * 10.0).round() / 10.0),
+                    a.key
+                        .map(|k| format!("{} ({})", k.camelot_str(), k.name()))
+                        .unwrap_or_else(|| "-".into()),
                     started.elapsed().as_millis()
                 ));
                 self.insert(id, a.clone());
@@ -336,8 +342,10 @@ pub fn measure_body(body: Arc<GrowingBody>) -> Option<TrackAnalysis> {
     let block = (sr / WAVE_RATE).max(1) as u64;
     let mut blocks: Vec<u16> = Vec::new();
     let mut block_sq = 0f64;
+    let mut keys = crate::key::KeyDetector::new(sr);
     while let FrameRes::Ok = crate::mix::pull_raw(&mut src, &mut f) {
         meter.push_frame(&f);
+        keys.push_frame(&f);
         let peak = f.iter().map(|&v| (v as i32).abs()).max().unwrap_or(0);
         block_sq += (peak as f64) * (peak as f64);
         if (frames + 1).is_multiple_of(block) {
@@ -379,6 +387,7 @@ pub fn measure_body(body: Arc<GrowingBody>) -> Option<TrackAnalysis> {
         tail: grid(&tail),
         at: 0,
         wave: overview(&blocks, WAVE_BINS),
+        key: keys.finish(),
     })
 }
 
@@ -471,6 +480,7 @@ mod tests {
             tail: None,
             at: 0,
             wave: Vec::new(),
+            key: None,
         };
         // Wants +6 dB, but the peak (−6 dBFS) only allows +5 dB.
         let g = a.gain_for(-14.0);
@@ -508,6 +518,7 @@ mod tests {
             tail: None,
             at: 1,
             wave: vec![0, 128, 255],
+            key: None,
         };
         {
             let an = Analyzer::open(&dir);

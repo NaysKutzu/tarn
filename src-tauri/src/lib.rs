@@ -14,6 +14,7 @@ mod transition;
 mod stats;
 mod analysis;
 mod lrclib;
+mod key;
 mod autodj;
 mod sponsorblock;
 #[cfg(desktop)]
