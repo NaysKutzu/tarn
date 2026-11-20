@@ -1,15 +1,13 @@
 #!/bin/sh
-# Installs tarn-jam-server as a hardened systemd service, optionally with
-# automatic HTTPS through Caddy.
+# Installs tarn-jam-server as a hardened systemd service on 127.0.0.1:47821.
+# Point your tunnel / reverse proxy at it.
 #
-#   sudo ./install.sh                      # service on :47821 (HTTP)
-#   sudo ./install.sh jam.example.com      # + HTTPS for that domain via Caddy
+#   sudo ./install.sh
 #
 # Optional: TARN_JAM_PASSWORD=... to require a password for hosting (leave it
 # unset for an open public server).
 set -eu
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo)"; exit 1; }
-DOMAIN="${1:-}"
 cd "$(dirname "$0")"
 
 command -v cargo >/dev/null 2>&1 || { echo "Rust is needed to build: https://rustup.rs (or: apt/dnf install cargo)"; exit 1; }
@@ -21,8 +19,8 @@ mkdir -p /etc/tarn-jam
 ENVF=/etc/tarn-jam/env
 if [ ! -f "$ENVF" ]; then
   {
-    echo "TARN_JAM_BIND=$([ -n "$DOMAIN" ] && echo 127.0.0.1:47821 || echo 0.0.0.0:47821)"
-    echo "TARN_JAM_TRUST_PROXY=$([ -n "$DOMAIN" ] && echo 1 || echo 0)"
+    echo "TARN_JAM_BIND=127.0.0.1:47821"
+    echo "TARN_JAM_TRUST_PROXY=1"
     [ -n "${TARN_JAM_PASSWORD:-}" ] && echo "TARN_JAM_PASSWORD=$TARN_JAM_PASSWORD"
     echo "# TARN_JAM_MAX_ROOMS=1000"
     echo "# TARN_JAM_MAX_ROOMS_PER_IP=3"
@@ -65,17 +63,4 @@ systemctl daemon-reload
 systemctl enable --now tarn-jam
 systemctl restart tarn-jam
 
-if [ -n "$DOMAIN" ]; then
-  if command -v caddy >/dev/null 2>&1; then
-    CF=/etc/caddy/Caddyfile
-    touch "$CF"
-    grep -q "^$DOMAIN" "$CF" || printf '\n%s {\n\tencode zstd gzip\n\treverse_proxy 127.0.0.1:47821\n}\n' "$DOMAIN" >> "$CF"
-    systemctl reload caddy || systemctl restart caddy
-    echo "Done: https://$DOMAIN/healthz"
-  else
-    echo "Install Caddy (https://caddyserver.com/docs/install), then re-run this script."
-    echo "Or, quick test without a config file:  caddy reverse-proxy --from $DOMAIN --to 127.0.0.1:47821"
-  fi
-else
-  echo "Done: listening on :47821 (HTTP). Put HTTPS in front before using it over the internet."
-fi
+echo "Done: listening on $(grep ^TARN_JAM_BIND= $ENVF | cut -d= -f2). Put your tunnel/HTTPS proxy in front before using it over the internet."

@@ -2,41 +2,27 @@
 
 A tiny self-hosted relay for **Listen Along** over the internet. The host's Tarn app pushes its playback state (track, position, play/pause, up next) to this server once a second, and guests follow it. No audio goes through the server, no ports to open at home, nothing is written to disk.
 
-## One command
-
-On any Linux box with Docker and a domain pointing at it (ports 80 and 443 open):
+## One command (Docker)
 
 ```sh
-git clone --depth 1 https://github.com/rexsystems/tarn && cd tarn/server && DOMAIN=jam.example.com TARN_JAM_PASSWORD='pick-a-long-password' docker compose up -d --build
+git clone --depth 1 https://github.com/rexsystems/tarn && cd tarn/server && docker compose up -d --build
 ```
 
-That builds the server, puts [Caddy](https://caddyserver.com) in front of it and gets a Let's Encrypt certificate for `DOMAIN` automatically. Check it with `curl https://jam.example.com/healthz` (answers `ok`).
+The server listens on `127.0.0.1:47821`. Point your own tunnel or reverse proxy (Cloudflare Tunnel, Caddy, nginx...) at `http://127.0.0.1:47821` for HTTPS. Check with `curl http://127.0.0.1:47821/healthz` (answers `ok`). Set `TARN_JAM_PASSWORD=...` in front of the command to require a password for hosting.
 
-No domain? Leave `DOMAIN` out and it serves plain HTTP on port 80, fine for a LAN or for putting your own reverse proxy in front. Tarn refuses plain `http://` for servers outside your network.
-
-Update: `git pull && docker compose up -d --build`. Stop: `docker compose down`.
-
-## Docker Compose variants
-
-```sh
-docker compose up -d --build                                          # server only, 127.0.0.1:47821
-TUNNEL_TOKEN=... docker compose --profile tunnel up -d --build        # + Cloudflare Tunnel (target http://jam:47821)
-DOMAIN=jam.example.com docker compose --profile caddy up -d --build   # + Caddy with automatic HTTPS
-```
-
-`restart: unless-stopped` keeps it running across crashes and reboots.
+`restart: unless-stopped` keeps it running across crashes and reboots. Update: `git pull && docker compose up -d --build`. Stop: `docker compose down`.
 
 ## Direct on a port (no Docker)
 
 On a fresh Linux VPS with Rust installed:
 
 ```sh
-git clone --depth 1 https://github.com/rexsystems/tarn && cd tarn/server && sudo ./install.sh jam.example.com
+git clone --depth 1 https://github.com/rexsystems/tarn && cd tarn/server && sudo ./install.sh
 ```
 
-It builds the binary, installs a locked-down systemd service (`tarn-jam`, own user, no privileges, no filesystem access) and, if [Caddy](https://caddyserver.com/docs/install) is installed, adds the HTTPS reverse proxy for the domain. Without a domain it just listens on `:47821`. Config lives in `/etc/tarn-jam/env`; logs via `journalctl -u tarn-jam -f`. Update by pulling and running the script again.
+It builds the binary and installs a locked-down systemd service (`tarn-jam`, own user, no privileges, no filesystem access). Set `TARN_JAM_BIND=127.0.0.1:47821` and `TARN_JAM_TRUST_PROXY=1` in `/etc/tarn-jam/env` when it sits behind a tunnel. Logs: `journalctl -u tarn-jam -f`. Update by pulling and running the script again.
 
-Quick manual run, no service: `cargo build --release && ./target/release/tarn-jam-server` (port 47821), and for HTTPS in one line: `caddy reverse-proxy --from jam.example.com --to 127.0.0.1:47821`.
+Quick manual run, no service: `cargo build --release && ./target/release/tarn-jam-server` (port 47821).
 
 ## Running a public server for everyone
 
@@ -57,13 +43,12 @@ cargo build --release          # needs Rust 1.82+
 TARN_JAM_PASSWORD=... ./target/release/tarn-jam-server
 ```
 
-It listens on plain HTTP (`0.0.0.0:47821`), so put a TLS proxy (Caddy, nginx, Traefik) in front and set `TARN_JAM_TRUST_PROXY=1`.
+It listens on plain HTTP (`0.0.0.0:47821`), so put a TLS proxy or tunnel in front and set `TARN_JAM_TRUST_PROXY=1`.
 
 ## Configuration
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DOMAIN` | *(none, HTTP on :80)* | Domain for automatic HTTPS (compose only). |
 | `TARN_JAM_PASSWORD` | *(none)* | Required to **host**. Guests only need the join code. Set it on any public server. |
 | `TARN_JAM_MAX_ROOMS` | `1000` | Maximum simultaneous rooms. |
 | `TARN_JAM_MAX_ROOMS_PER_IP` | `3` | Open rooms one IP may host at once. |
@@ -76,8 +61,8 @@ It listens on plain HTTP (`0.0.0.0:47821`), so put a TLS proxy (Caddy, nginx, Tr
 - The server password gates room creation; wrong guesses are delayed.
 - Per-IP rate limits (20 req/s, 10 new rooms/min, 3 open rooms), caps on rooms, guests per room, queued additions, and body size (64 KB).
 - Rooms vanish 10 seconds after the host stops pushing. State lives in memory only.
-- The container runs as non-root on a read-only filesystem with all capabilities dropped; only Caddy is exposed.
-- Always use HTTPS on the internet (the compose file does it for you): the password and tokens are sent as headers.
+- The container runs non-root on a read-only filesystem with all capabilities dropped and is only published on localhost.
+- Always use HTTPS on the internet (your tunnel or proxy): the password and tokens are sent as headers.
 
 ## API
 

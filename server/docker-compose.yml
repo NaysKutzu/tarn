@@ -1,9 +1,5 @@
-# Default (just the server, on 127.0.0.1:47821):
-#   docker compose up -d --build
-# With a Cloudflare Tunnel:
-#   TUNNEL_TOKEN=... docker compose --profile tunnel up -d --build
-# With Caddy + automatic HTTPS instead:
-#   DOMAIN=jam.example.com docker compose --profile caddy up -d --build
+# docker compose up -d --build
+# Serves on 127.0.0.1:47821, point your tunnel / reverse proxy at it.
 services:
   jam:
     build: .
@@ -19,37 +15,3 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-
-  # Cloudflare Tunnel. In the dashboard, point jam.694206767.xyz at http://jam:47821
-  cloudflared:
-    profiles: [tunnel]
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
-    depends_on: [jam]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-
-  caddy:
-    profiles: [caddy]
-    image: caddy:2-alpine
-    restart: unless-stopped
-    depends_on: [jam]
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN:-:80}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    cap_drop: [ALL]
-    cap_add: [NET_BIND_SERVICE]
-    security_opt: [no-new-privileges:true]
-
-volumes:
-  caddy_data:
-  caddy_config:

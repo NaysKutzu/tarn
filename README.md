@@ -79,19 +79,13 @@ Grab the latest build from the [releases page](https://github.com/rexsystems/tar
 
 ## Self-hosted Listen Along server
 
-Listen Along works on the same Wi-Fi out of the box. To listen together over the internet, run the small relay in [`server/`](server/) on any Linux box with a domain. One command, direct on a port as a hardened systemd service, with automatic HTTPS through Caddy:
+Listen Along works on the same Wi-Fi out of the box. To listen together over the internet, run the small relay in [`server/`](server/). One command with Docker, listening on `127.0.0.1:47821` (point your tunnel or reverse proxy at it for HTTPS):
 
 ```sh
-git clone --depth 1 https://github.com/rexsystems/tarn && cd tarn/server && sudo ./install.sh jam.example.com
+git clone --depth 1 https://github.com/rexsystems/tarn && cd tarn/server && docker compose up -d --build
 ```
 
-Prefer Docker?
-
-```sh
-git clone --depth 1 https://github.com/rexsystems/tarn && cd tarn/server && DOMAIN=jam.example.com TARN_JAM_PASSWORD='pick-a-long-password' docker compose up -d --build
-```
-
-Then in Tarn open **Settings → Listen together**, enter `https://jam.example.com` and the password, press **Host** and share the join code. Details, configuration and the security model are in [server/README.md](server/README.md).
+Then in Tarn open **Settings → Listen together**, pick the server (or use the built-in public one), press **Host** and share the join code. Details, configuration and the security model are in [server/README.md](server/README.md).
 
 ## Build from source
 
