@@ -4532,8 +4532,8 @@
               onStop={() => { api.pause().catch(() => {}); toast(tr('Sleep timer: paused'), 'info', 2600); }}
             />
             {#if !isPhone}
-              <span class="rc-phone"><RemoteQuick placement="up" bind:this={remoteQuick} /></span>
-              <span class="rc-phone"><JamQuick placement="up" {settings} onsave={() => api.setSettings(settings)} /></span>
+              <span class="rc-phone np-remote"><RemoteQuick placement="up" bind:this={remoteQuick} /></span>
+              <span class="rc-phone np-jam"><JamQuick placement="up" {settings} onsave={() => api.setSettings(settings)} /></span>
             {/if}
             <div class="np-vol" onwheel={nudgeVolume}>
               <IconBtn
