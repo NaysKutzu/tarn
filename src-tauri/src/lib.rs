@@ -1343,6 +1343,19 @@ fn jam_status() -> jam::JamInfo {
     jam::info()
 }
 
+/// A pending invite from a tarn://join link, if any.
+#[tauri::command]
+fn jam_take_invite() -> Option<String> {
+    #[cfg(desktop)]
+    {
+        jam::take_invite()
+    }
+    #[cfg(not(desktop))]
+    {
+        None
+    }
+}
+
 /// Guest: add a song to the host's queue.
 #[cfg(desktop)]
 #[tauri::command]
@@ -2607,6 +2620,7 @@ pub fn run() {
                     }
                 }
             }))
+            .plugin(tauri_plugin_deep_link::init())
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init());
     }
@@ -2635,6 +2649,24 @@ pub fn run() {
         .setup(move |tauri_app| {
             let handle = tauri_app.handle().clone();
             let app = app_for_setup.clone();
+            #[cfg(desktop)]
+            {
+                use tauri::Emitter;
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // tarn://join?code=... from the jam server's invite page.
+                #[cfg(any(target_os = "linux", windows))]
+                let _ = tauri_app.deep_link().register_all();
+                let h = handle.clone();
+                tauri_app.deep_link().on_open_url(move |ev| {
+                    for u in ev.urls() {
+                        if let Some(code) = jam::code_from_deep_link(u.as_str()) {
+                            jam::set_invite(code);
+                            tray::show_window(&h);
+                            let _ = h.emit("jam-invite", ());
+                        }
+                    }
+                });
+            }
             if let Some(win) = tauri_app.get_webview_window("main") {
                 if let Some(sess) = persist::load(app.store.data_dir()) {
                     if let Some(g) = sess.window.as_ref() {
@@ -2801,6 +2833,7 @@ pub fn run() {
             jam_leave,
             jam_status,
             jam_add,
+            jam_take_invite,
             clear_analysis,
             cache_stats,
             get_listens,

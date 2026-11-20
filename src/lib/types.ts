@@ -269,6 +269,8 @@ export interface Settings {
   floating_ui?: boolean;
   /** Desktop: keep the phone remote on across launches. */
   phone_remote?: boolean;
+  /** Show a join button on Discord presence while hosting a Listen along. */
+  jam_discord_button?: boolean;
 }
 
 export interface PlayerState {

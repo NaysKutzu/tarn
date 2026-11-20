@@ -305,6 +305,27 @@ async fn close(
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// Invite landing page opened from a shared link. The join token lives in the
+/// URL fragment, which browsers never send to the server.
+async fn invite(State(s): State<Shared>, peer: ConnectInfo<SocketAddr>, h: HeaderMap) -> Response {
+    gate!(s, peer, h);
+    (
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            ("cache-control", "public, max-age=300"),
+            ("referrer-policy", "no-referrer"),
+            ("x-content-type-options", "nosniff"),
+            ("x-frame-options", "DENY"),
+            (
+                "content-security-policy",
+                "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            ),
+        ],
+        include_str!("invite.html"),
+    )
+        .into_response()
+}
+
 async fn health() -> &'static str {
     "ok"
 }
@@ -335,6 +356,7 @@ async fn main() {
     });
     let app = Router::new()
         .route("/healthz", get(health))
+        .route("/r/:id", get(invite))
         .route("/v1/rooms", post(create))
         .route("/v1/rooms/:id", delete(close))
         .route("/v1/rooms/:id/state", put(push).get(read_state))

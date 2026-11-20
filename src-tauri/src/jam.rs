@@ -112,6 +112,37 @@ pub fn info() -> JamInfo {
     }
 }
 
+/// The shareable https link of the session being hosted on a jam server (None
+/// for LAN sessions: a private address is no use to people on Discord).
+pub fn public_link() -> Option<String> {
+    match &*SESSION.lock() {
+        Some(Session::Host { code, .. }) if code.starts_with("https://") => Some(code.clone()),
+        _ => None,
+    }
+}
+
+/// An invite opened from a `tarn://join` link, waiting for the UI to ask the
+/// user before joining (we never join automatically).
+static INVITE: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn set_invite(code: String) {
+    *INVITE.lock() = Some(code);
+}
+
+pub fn take_invite() -> Option<String> {
+    INVITE.lock().take()
+}
+
+/// Pull the join code out of a `tarn://join?code=<urlencoded code>` link.
+pub fn code_from_deep_link(link: &str) -> Option<String> {
+    let u = url::Url::parse(link).ok()?;
+    if u.scheme() != "tarn" || u.host_str() != Some("join") {
+        return None;
+    }
+    let code = u.query_pairs().find(|(k, _)| k == "code")?.1.into_owned();
+    parse_code(&code).map(|_| code)
+}
+
 pub fn stop() {
     *GUEST_TARGET.lock() = None;
     match SESSION.lock().take() {
@@ -655,6 +686,17 @@ mod tests {
         assert!(parse_code(&format!("8.8.8.8:47811#{tok}")).is_none(), "public hosts are refused");
         assert!(parse_code("192.168.1.5:47811#short").is_none());
         assert!(parse_code("192.168.1.5:47811").is_none());
+    }
+
+    #[test]
+    fn deep_links() {
+        let tok = "0123456789abcdef0123456789abcdef";
+        let code = format!("https://jam.example.com/r/abc123#{tok}");
+        let enc: String = url::form_urlencoded::byte_serialize(code.as_bytes()).collect();
+        assert_eq!(code_from_deep_link(&format!("tarn://join?code={enc}")), Some(code));
+        assert!(code_from_deep_link("tarn://join?code=nope").is_none());
+        assert!(code_from_deep_link(&format!("https://x/?code={enc}")).is_none());
+        assert!(code_from_deep_link("tarn://other?code=1").is_none());
     }
 
     #[test]

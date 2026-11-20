@@ -431,6 +431,10 @@ pub struct Settings {
     /// Desktop: keep the phone remote LAN server on across launches.
     #[serde(default)]
     pub phone_remote: bool,
+    /// While hosting a Listen along session on a jam server, show a "Listen
+    /// along" button on the Discord presence so friends can join in one click.
+    #[serde(default)]
+    pub jam_discord_button: bool,
 }
 
 impl Default for Settings {
@@ -492,6 +496,7 @@ impl Default for Settings {
             transparency: 0,
             floating_ui: false,
             phone_remote: false,
+            jam_discord_button: false,
         }
     }
 }

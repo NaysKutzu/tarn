@@ -106,12 +106,15 @@ fn run(app: Arc<crate::App>) -> Result<(), String> {
             .filter(|u| u.starts_with("http"));
         // Only re-send when something visible changes. Re-sending on every
         // position tick makes Discord reload the cover constantly.
+        // Optional "Listen along" button while hosting on a jam server.
+        let jam_link = if app.settings.lock().jam_discord_button { crate::jam::public_link() } else { None };
         let sig = format!(
-            "{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}",
             track.id,
             snap.playing,
             cover.as_deref().unwrap_or(""),
-            artists
+            artists,
+            jam_link.as_deref().unwrap_or("")
         );
         let now_s = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -152,7 +155,13 @@ fn run(app: Arc<crate::App>) -> Result<(), String> {
                 artists.as_str()
             })
             .assets(assets)
-            .buttons(vec![Button::new("Play on YouTube Music", ytm_url.as_str())]);
+            .buttons({
+                let mut b = vec![Button::new("Play on YouTube Music", ytm_url.as_str())];
+                if let Some(l) = jam_link.as_deref() {
+                    b.push(Button::new("Listen along", l));
+                }
+                b
+            });
 
         if snap.playing && snap.duration > 1.0 {
             if let Some(ts) = timestamps(snap.position, snap.duration) {

@@ -13,3 +13,30 @@ export const jam = $state<{ info: JamInfo }>({
 export async function refreshJam() {
   try { jam.info = await api.jamStatus(); } catch { /* mobile / not available */ }
 }
+
+const load = (k: string) => { try { return localStorage.getItem(k) ?? ''; } catch { return ''; } };
+const save = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
+
+/** Listen along preferences, shared by Settings and the player-bar button. */
+export const jamPrefs = $state({
+  usePublic: load('jam.public') !== '0',
+  server: load('jam.server'),
+  password: load('jam.password'),
+});
+
+export function savePrefs() {
+  save('jam.public', jamPrefs.usePublic ? '1' : '0');
+  save('jam.server', jamPrefs.server.trim());
+  save('jam.password', jamPrefs.password);
+}
+
+/** Which server a new session is hosted on ('' = this network only). */
+export function jamTarget(): string {
+  return jamPrefs.server.trim() || (jamPrefs.usePublic ? PUBLIC_JAM_SERVER : '');
+}
+
+export async function hostJam() {
+  const server = jamTarget();
+  jam.info = await api.jamHost(server, jamPrefs.server.trim() ? jamPrefs.password : '');
+  return jam.info;
+}

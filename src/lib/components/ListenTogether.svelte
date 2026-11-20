@@ -2,20 +2,14 @@
   import { onMount } from 'svelte';
   import { api } from '../api';
   import { t as tr } from '../i18n.svelte';
-  import { jam, refreshJam, PUBLIC_JAM_SERVER } from '../jam.svelte';
+  import { jam, refreshJam, PUBLIC_JAM_SERVER, jamPrefs, jamTarget, savePrefs, hostJam } from '../jam.svelte';
   import { toast } from '../toast';
 
   let code = $state('');
   let busy = $state(false);
-  // Optional self-hosted relay (see server/ in the repo) for sessions over the internet.
-  const load = (k: string) => { try { return localStorage.getItem(k) ?? ''; } catch { return ''; } };
-  const save = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
-  let server = $state(load('jam.server'));
-  let password = $state(load('jam.password'));
-  // Toggle for the community server. Off = hosting stays on this network and nothing leaves it.
-  let usePublic = $state(load('jam.public') !== '0');
-  const target = $derived(server.trim() || (usePublic ? PUBLIC_JAM_SERVER : ''));
-  function togglePublic() { usePublic = !usePublic; save('jam.public', usePublic ? '1' : '0'); }
+  // Preferences are shared with the player-bar button (jamPrefs).
+  const target = $derived(jamTarget());
+  function togglePublic() { jamPrefs.usePublic = !jamPrefs.usePublic; savePrefs(); }
 
   onMount(() => {
     void refreshJam();
@@ -25,8 +19,8 @@
 
   async function host() {
     busy = true;
-    save('jam.server', server.trim()); save('jam.password', password);
-    try { jam.info = await api.jamHost(target, server.trim() ? password : ''); } catch (e) { toast(String(e), 'error', 3000); } finally { busy = false; }
+    savePrefs();
+    try { await hostJam(); } catch (e) { toast(String(e), 'error', 3000); } finally { busy = false; }
   }
   async function join() {
     busy = true;
@@ -76,14 +70,14 @@
     </div>
     {#if PUBLIC_JAM_SERVER}
       <label class="jt-row">
-        <input type="checkbox" checked={usePublic} onchange={togglePublic} />
+        <input type="checkbox" checked={jamPrefs.usePublic} onchange={togglePublic} />
         <span class="t-meta">Use the public server so friends anywhere can join. Off keeps it on this network only; the server sees your IP and what's playing.</span>
       </label>
     {/if}
     <span class="t-meta">Or use your own jam server (optional, overrides the above):</span>
     <div class="jt-row">
-      <input class="jt-in" type="text" placeholder="https://jam.example.com" bind:value={server} />
-      <input class="jt-in" type="password" placeholder="Server password" autocomplete="off" bind:value={password} />
+      <input class="jt-in" type="text" placeholder="https://jam.example.com" bind:value={jamPrefs.server} />
+      <input class="jt-in" type="password" placeholder="Server password" autocomplete="off" bind:value={jamPrefs.password} />
     </div>
     {#if jam.info.error}<span class="t-meta jt-err">{jam.info.error}</span>{/if}
   </div>

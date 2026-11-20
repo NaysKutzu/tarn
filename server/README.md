@@ -28,6 +28,10 @@ Quick manual run, no service: `cargo build --release && ./target/release/tarn-ja
 
 Leave `TARN_JAM_PASSWORD` unset and anyone can host and join, which is what a community server wants. Abuse protection is built in: per-IP rate limit, **3 open rooms per IP** (`TARN_JAM_MAX_ROOMS_PER_IP`), 1000 rooms total, 10 s timeouts, tiny bodies, and secret room links. Then set `PUBLIC_JAM_SERVER` in [src/lib/jam.svelte.ts](../src/lib/jam.svelte.ts) to your URL and ship a release: Tarn shows a **Use the public server** toggle (on by default; off keeps Listen along on the local network only).
 
+## Invite links
+
+Join links look like `https://jam.example.com/r/<room>#<token>`. Opened in a browser they show a small page with **Open in Tarn** (a `tarn://join` deep link that asks before joining), a copy button and a link to download Tarn. The token sits in the URL fragment, which browsers never send to the server.
+
 ## Using it in Tarn
 
 1. **Settings → Listen together**, fill in *Server* (`https://jam.example.com`) and *Server password*, then press **Host**.

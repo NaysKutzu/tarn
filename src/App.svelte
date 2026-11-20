@@ -5,6 +5,7 @@
   import PhoneRemote from './lib/components/PhoneRemote.svelte';
   import RemoteQuick from './lib/components/RemoteQuick.svelte';
   import ListenTogether from './lib/components/ListenTogether.svelte';
+  import JamQuick from './lib/components/JamQuick.svelte';
   import { jam } from './lib/jam.svelte';
   import Shortcuts from './lib/components/Shortcuts.svelte';
   import { appCombo, actionFor, appShortcuts } from './lib/shortcuts';
@@ -4389,6 +4390,7 @@
             />
             {#if !isPhone}
               <span class="rc-phone"><RemoteQuick placement="up" bind:this={remoteQuick} /></span>
+              <span class="rc-phone"><JamQuick placement="up" {settings} onsave={() => api.setSettings(settings)} /></span>
             {/if}
             <div class="np-vol" onwheel={nudgeVolume}>
               <IconBtn
@@ -4554,6 +4556,7 @@
           />
           {#if !isPhone}
             <span class="rc-phone"><RemoteQuick placement="up" bind:this={remoteQuick} /></span>
+              <span class="rc-phone"><JamQuick placement="up" {settings} onsave={() => api.setSettings(settings)} /></span>
           {/if}
           <div class="vol" onwheel={nudgeVolume}>
             <IconBtn

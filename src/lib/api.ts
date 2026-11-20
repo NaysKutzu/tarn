@@ -121,6 +121,7 @@ export const api = {
   jamJoin: (code: string) => invoke<JamInfo>('jam_join', { code }),
   jamLeave: () => invoke<void>('jam_leave'),
   jamStatus: () => invoke<JamInfo>('jam_status'),
+  jamTakeInvite: () => invoke<string | null>('jam_take_invite'),
   jamAdd: (track: Track) => invoke<void>('jam_add', { track }),
   saveSessionNow: () => invoke<void>('save_session_now'),
 };
