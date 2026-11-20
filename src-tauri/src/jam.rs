@@ -49,6 +49,11 @@ pub struct JamInfo {
     /// Round trip to the host in ms (guest).
     pub rtt_ms: Option<u32>,
     pub error: Option<String>,
+    /// Display names of everyone in the session (guests, from the host's view;
+    /// the other listeners, from a guest's view). Names only.
+    pub people: Vec<String>,
+    /// The host's display name (guest).
+    pub host_name: Option<String>,
 }
 
 /// What the host publishes.
@@ -60,13 +65,19 @@ pub struct JamState {
     pub loading: bool,
     /// Up to 20 songs after the current one.
     pub upcoming: Vec<Track>,
+    /// Who is hosting, and who is listening (names only). Older hosts
+    /// simply leave them empty.
+    #[serde(default)]
+    pub host_name: String,
+    #[serde(default)]
+    pub guests: Vec<String>,
 }
 
 enum Session {
     Host {
         code: String,
         stop: tokio::sync::watch::Sender<bool>,
-        guests: Arc<Mutex<HashMap<IpAddr, Instant>>>,
+        guests: Arc<Mutex<HashMap<IpAddr, (String, Instant)>>>,
         relay: Arc<RelayStatus>,
     },
     Guest { stop: tokio::sync::watch::Sender<bool>, status: Arc<Mutex<GuestStatus>> },
@@ -76,11 +87,14 @@ enum Session {
 #[derive(Default)]
 struct RelayStatus {
     guests: std::sync::atomic::AtomicUsize,
+    names: Mutex<Vec<String>>,
     error: Mutex<Option<String>>,
 }
 
 #[derive(Default, Clone)]
 struct GuestStatus {
+    host_name: Option<String>,
+    people: Vec<String>,
     following: Option<String>,
     rtt_ms: Option<u32>,
     error: Option<String>,
@@ -88,6 +102,25 @@ struct GuestStatus {
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 /// Where a guest sends "add to queue" (base url, token).
+/// The display name this app uses in a session.
+static MY_NAME: Mutex<String> = Mutex::new(String::new());
+
+/// Names are shown to other people: no control characters, at most 24 chars.
+pub fn clean_name(raw: &str) -> String {
+    raw.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(24).collect()
+}
+
+fn my_name() -> String {
+    let n = MY_NAME.lock().clone();
+    if n.is_empty() { "Guest".into() } else { n }
+}
+
+/// True while this app is following someone else's session. Guests don't skip,
+/// reorder or auto-advance on their own: the host drives, they follow.
+pub fn is_guest() -> bool {
+    matches!(&*SESSION.lock(), Some(Session::Guest { .. }))
+}
+
 static GUEST_TARGET: Mutex<Option<Target>> = Mutex::new(None);
 
 pub fn info() -> JamInfo {
@@ -95,19 +128,31 @@ pub fn info() -> JamInfo {
         None => JamInfo { mode: "off".into(), ..Default::default() },
         Some(Session::Host { code, guests, relay, .. }) => {
             let mut g = guests.lock();
-            g.retain(|_, t| t.elapsed() < Duration::from_secs(10));
-            let n = g.len() + relay.guests.load(std::sync::atomic::Ordering::Relaxed);
+            g.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(10));
+            let mut people: Vec<String> = g.values().map(|(n, _)| n.clone()).collect();
+            people.extend(relay.names.lock().iter().cloned());
+            people.sort();
+            let n = people.len();
             JamInfo {
                 mode: "hosting".into(),
                 code: Some(code.clone()),
                 guests: n,
+                people,
                 error: relay.error.lock().clone(),
                 ..Default::default()
             }
         }
         Some(Session::Guest { status, .. }) => {
             let s = status.lock().clone();
-            JamInfo { mode: "joined".into(), following: s.following, rtt_ms: s.rtt_ms, error: s.error, ..Default::default() }
+            JamInfo {
+                mode: "joined".into(),
+                following: s.following,
+                rtt_ms: s.rtt_ms,
+                error: s.error,
+                people: s.people,
+                host_name: s.host_name,
+                ..Default::default()
+            }
         }
     }
 }
@@ -157,8 +202,9 @@ pub fn stop() {
 
 /// Start hosting. With `server` set, rooms live on that relay (URL, optional
 /// password); otherwise guests connect straight to this machine on the LAN.
-pub async fn host(app: Arc<crate::App>, server: Option<(String, String)>) -> JamInfo {
+pub async fn host(app: Arc<crate::App>, server: Option<(String, String)>, name: &str) -> JamInfo {
     stop();
+    *MY_NAME.lock() = clean_name(name);
     if let Some((url, password)) = server.filter(|(u, _)| !u.trim().is_empty()) {
         return host_relay(app, &url, &password).await;
     }
@@ -174,7 +220,7 @@ pub async fn host(app: Arc<crate::App>, server: Option<(String, String)>) -> Jam
     let token = new_token();
     let code = format!("{}#{token}", SocketAddr::new(ip, port));
     let (tx, rx) = tokio::sync::watch::channel(false);
-    let guests: Arc<Mutex<HashMap<IpAddr, Instant>>> = Default::default();
+    let guests: Arc<Mutex<HashMap<IpAddr, (String, Instant)>>> = Default::default();
     *SESSION.lock() = Some(Session::Host { code, stop: tx, guests: guests.clone(), relay: Default::default() });
     crate::diag::log(format!("jam: hosting on port {port}"));
     let srv = Arc::new(Host { app, token, guests, conns: Default::default() });
@@ -217,6 +263,8 @@ struct Created {
 struct PushReply {
     #[serde(default)]
     guests: usize,
+    #[serde(default)]
+    names: Vec<String>,
     #[serde(default)]
     adds: Vec<Track>,
 }
@@ -274,6 +322,7 @@ async fn push_loop(
             Ok(r) if r.status().is_success() => {
                 let reply: PushReply = r.json().await.unwrap_or_default();
                 status.guests.store(reply.guests, std::sync::atomic::Ordering::Relaxed);
+                *status.names.lock() = reply.names;
                 *status.error.lock() = None;
                 let adds: Vec<Track> = reply.adds.into_iter().filter(|t| !t.id.is_empty()).collect();
                 if !adds.is_empty() {
@@ -304,7 +353,7 @@ fn err_info(e: String) -> JamInfo {
 struct Host {
     app: Arc<crate::App>,
     token: String,
-    guests: Arc<Mutex<HashMap<IpAddr, Instant>>>,
+    guests: Arc<Mutex<HashMap<IpAddr, (String, Instant)>>>,
     conns: std::sync::atomic::AtomicUsize,
 }
 
@@ -312,7 +361,15 @@ fn host_state(app: &crate::App) -> JamState {
     let s = app.player.snapshot();
     let (queue, index) = app.player.queue_and_index();
     let upcoming = queue.iter().skip(index + 1).take(20).cloned().collect();
-    JamState { track: s.track, playing: s.playing, position: s.position, loading: s.loading, upcoming }
+    JamState {
+        track: s.track,
+        playing: s.playing,
+        position: s.position,
+        loading: s.loading,
+        upcoming,
+        host_name: my_name(),
+        guests: Vec::new(),
+    }
 }
 
 async fn serve(listener: TcpListener, srv: Arc<Host>, mut stop: tokio::sync::watch::Receiver<bool>) {
@@ -343,10 +400,23 @@ async fn handle_conn(srv: &Host, mut sock: TcpStream, peer: IpAddr) {
         respond(&mut sock, "401 Unauthorized", b"bad token").await;
         return;
     }
-    srv.guests.lock().insert(peer, Instant::now());
+    let name = {
+        let n = clean_name(&req.name.clone().unwrap_or_default());
+        if n.is_empty() { "Guest".to_string() } else { n }
+    };
+    let mut state_guests = Vec::new();
+    {
+        let mut g = srv.guests.lock();
+        g.insert(peer, (name, Instant::now()));
+        g.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(10));
+        state_guests.extend(g.values().map(|(n, _)| n.clone()));
+        state_guests.sort();
+    }
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/jam/state") => {
-            let b = serde_json::to_vec(&host_state(&srv.app)).unwrap_or_default();
+            let mut st = host_state(&srv.app);
+            st.guests = state_guests;
+            let b = serde_json::to_vec(&st).unwrap_or_default();
             respond(&mut sock, "200 OK", &b).await;
         }
         ("POST", "/jam/add") => match serde_json::from_slice::<Track>(&req.body) {
@@ -370,6 +440,9 @@ pub struct Target {
     pub state_path: String,
     pub add_path: String,
     pub token: String,
+    /// Random id (so two guests on one network count separately) and name.
+    pub guest_id: String,
+    pub name: String,
 }
 
 fn good_token(t: &str) -> bool {
@@ -395,6 +468,8 @@ pub fn parse_code(code: &str) -> Option<Target> {
                 state_path: format!("/v1/rooms/{room}/state"),
                 add_path: format!("/v1/rooms/{room}/add"),
                 token: token.to_string(),
+                guest_id: String::new(),
+                name: String::new(),
             });
         }
     }
@@ -410,14 +485,19 @@ pub fn parse_code(code: &str) -> Option<Target> {
         state_path: "/jam/state".into(),
         add_path: "/jam/add".into(),
         token: token.to_string(),
+        guest_id: String::new(),
+        name: String::new(),
     })
 }
 
-pub fn join(app: Arc<crate::App>, code: &str) -> JamInfo {
+pub fn join(app: Arc<crate::App>, code: &str, name: &str) -> JamInfo {
     stop();
-    let Some(target) = parse_code(code) else {
+    let Some(mut target) = parse_code(code) else {
         return err_info("That join code doesn't look right".into());
     };
+    *MY_NAME.lock() = clean_name(name);
+    target.name = my_name();
+    target.guest_id = new_token()[..16].to_string();
     let (tx, rx) = tokio::sync::watch::channel(false);
     let status: Arc<Mutex<GuestStatus>> = Default::default();
     *SESSION.lock() = Some(Session::Guest { stop: tx, status: status.clone() });
@@ -434,6 +514,7 @@ pub async fn add_to_host(track: Track) -> Result<(), String> {
     let r = reqwest::Client::new()
         .post(format!("{}{}", t.base, t.add_path))
         .header("X-Tarn-Token", t.token)
+        .header("X-Tarn-Name", encode_name(&t.name))
         .timeout(Duration::from_secs(4))
         .json(&track)
         .send()
@@ -489,6 +570,8 @@ async fn follow(
         let res = http
             .get(format!("{}{}", target.base, target.state_path))
             .header("X-Tarn-Token", &target.token)
+            .header("X-Tarn-Name", encode_name(&target.name))
+            .header("X-Tarn-Guest", &target.guest_id)
             .timeout(Duration::from_secs(3))
             .send()
             .await;
@@ -517,6 +600,8 @@ async fn follow(
             s.error = None;
             s.rtt_ms = Some(rtt.as_millis().min(u32::MAX as u128) as u32);
             s.following = host.track.as_ref().map(|t| t.title.clone());
+            s.host_name = Some(host.host_name.clone()).filter(|n| !n.is_empty());
+            s.people = host.guests.clone();
         }
         // The host's position was read about half a round trip ago.
         let host_pos = host.position + if host.playing { rtt.as_secs_f64() / 2.0 } else { 0.0 };
@@ -550,6 +635,15 @@ async fn follow(
 }
 
 // ---------------------------------------------------------------- shared
+
+/// Names travel percent-encoded in a header so any character survives.
+fn encode_name(n: &str) -> String {
+    url::form_urlencoded::byte_serialize(n.as_bytes()).collect()
+}
+
+fn decode_name(v: &str) -> String {
+    url::form_urlencoded::parse(format!("n={v}").as_bytes()).next().map(|(_, v)| v.into_owned()).unwrap_or_default()
+}
 
 fn new_token() -> String {
     let mut b = [0u8; 24];
@@ -586,6 +680,7 @@ struct Request {
     method: String,
     path: String,
     token: Option<String>,
+    name: Option<String>,
     body: Vec<u8>,
 }
 
@@ -610,12 +705,13 @@ async fn read_request(sock: &mut TcpStream) -> Option<Request> {
     let mut first = lines.next()?.split(' ');
     let method = first.next()?.to_string();
     let path = first.next()?.split('?').next()?.to_string();
-    let (mut len, mut token) = (0usize, None);
+    let (mut len, mut token, mut name) = (0usize, None, None);
     for l in lines {
         let Some((k, v)) = l.split_once(':') else { continue };
         match k.trim().to_ascii_lowercase().as_str() {
             "content-length" => len = v.trim().parse().ok()?,
             "x-tarn-token" => token = Some(v.trim().to_string()),
+            "x-tarn-name" => name = Some(decode_name(v.trim())),
             _ => {}
         }
     }
@@ -631,7 +727,7 @@ async fn read_request(sock: &mut TcpStream) -> Option<Request> {
         body.extend_from_slice(&tmp[..n]);
     }
     body.truncate(len);
-    Some(Request { method, path, token, body })
+    Some(Request { method, path, token, name, body })
 }
 
 async fn respond(sock: &mut TcpStream, status: &str, body: &[u8]) {
@@ -654,7 +750,7 @@ mod tests {
     }
 
     fn host(id: Option<&str>, playing: bool, pos: f64) -> JamState {
-        JamState { track: id.map(track), playing, position: pos, loading: false, upcoming: vec![] }
+        JamState { track: id.map(track), playing, position: pos, loading: false, upcoming: vec![], host_name: String::new(), guests: vec![] }
     }
 
     fn me(id: Option<&str>, playing: bool, pos: f64) -> PlayerState {
@@ -697,6 +793,13 @@ mod tests {
         assert!(code_from_deep_link("tarn://join?code=nope").is_none());
         assert!(code_from_deep_link(&format!("https://x/?code={enc}")).is_none());
         assert!(code_from_deep_link("tarn://other?code=1").is_none());
+    }
+
+    #[test]
+    fn names() {
+        assert_eq!(decode_name(&encode_name("Ștefan & co")), "Ștefan & co");
+        assert_eq!(clean_name("  a\u{0}b\n  "), "ab");
+        assert_eq!(clean_name(&"x".repeat(100)).chars().count(), 24);
     }
 
     #[test]

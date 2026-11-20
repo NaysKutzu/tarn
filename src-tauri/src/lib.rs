@@ -1319,16 +1319,17 @@ async fn jam_host(
     app: State<'_, Arc<App>>,
     server: Option<String>,
     password: Option<String>,
+    name: Option<String>,
 ) -> Result<jam::JamInfo, String> {
     let relay = server.map(|s| (s, password.unwrap_or_default()));
-    Ok(jam::host(app.inner().clone(), relay).await)
+    Ok(jam::host(app.inner().clone(), relay, &name.unwrap_or_default()).await)
 }
 
 /// Listen together: follow a host by its join code.
 #[cfg(desktop)]
 #[tauri::command]
-fn jam_join(app: State<Arc<App>>, code: String) -> jam::JamInfo {
-    jam::join(app.inner().clone(), &code)
+fn jam_join(app: State<Arc<App>>, code: String, name: Option<String>) -> jam::JamInfo {
+    jam::join(app.inner().clone(), &code, &name.unwrap_or_default())
 }
 
 #[cfg(desktop)]
@@ -1381,15 +1382,15 @@ fn remote_status() -> serde_json::Value {
 
 #[cfg(mobile)]
 #[tauri::command]
-fn jam_host(server: Option<String>, password: Option<String>) -> Result<(), String> {
-    let _ = (server, password);
+fn jam_host(server: Option<String>, password: Option<String>, name: Option<String>) -> Result<(), String> {
+    let _ = (server, password, name);
     Err("Listen together runs on the desktop app".into())
 }
 
 #[cfg(mobile)]
 #[tauri::command]
-fn jam_join(code: String) -> Result<(), String> {
-    let _ = code;
+fn jam_join(code: String, name: Option<String>) -> Result<(), String> {
+    let _ = (code, name);
     Err("Listen together runs on the desktop app".into())
 }
 
@@ -1582,6 +1583,9 @@ fn queue_add(app: State<Arc<App>>, tracks: Vec<Track>, next: bool) {
 
 #[tauri::command]
 fn queue_remove(app: State<Arc<App>>, index: usize) {
+    if jam::is_guest() {
+        return;
+    }
     app.player.remove_at(index);
     let (q, i) = app.player.queue_and_index();
     prefetch_ahead(&app, &q, i);
@@ -1589,11 +1593,17 @@ fn queue_remove(app: State<Arc<App>>, index: usize) {
 
 #[tauri::command]
 fn queue_clear_upcoming(app: State<Arc<App>>) {
+    if jam::is_guest() {
+        return;
+    }
     app.player.clear_upcoming();
 }
 
 #[tauri::command]
 fn queue_move(app: State<Arc<App>>, from: usize, to: usize) {
+    if jam::is_guest() {
+        return;
+    }
     app.player.move_item(from, to);
     let (q, i) = app.player.queue_and_index();
     prefetch_ahead(&app, &q, i);
@@ -1606,6 +1616,9 @@ async fn next(app: State<'_, Arc<App>>) -> Result<(), String> {
 
 #[tauri::command]
 async fn prev(app: State<'_, Arc<App>>) -> Result<(), String> {
+    if jam::is_guest() {
+        return Ok(());
+    }
     match app.player.prev_choice() {
         NextChoice::SeekZero => {
             app.player.seek(0.0);
@@ -1624,6 +1637,11 @@ async fn prev(app: State<'_, Arc<App>>) -> Result<(), String> {
 }
 
 pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
+    // In someone else's Listen along the host picks the songs: a guest's own
+    // skip or end-of-track must not fight the follow loop.
+    if jam::is_guest() {
+        return Ok(());
+    }
     {
         let snap = app.player.snapshot();
         diag::log(format!(

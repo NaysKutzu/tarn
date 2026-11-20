@@ -403,5 +403,9 @@
   "This link only works on your Wi-Fi. Turn on the public server to invite people anywhere": "Linkul merge doar pe Wi-Fi-ul tău. Pornește serverul public ca să inviți oameni de oriunde",
   "Use the public server": "Folosește serverul public",
   "You were invited to a listening session. Join it?": "Ai fost invitat la o sesiune de ascultat. Intri?",
-  "{n} people are listening with you": "{n} persoane ascultă cu tine"
+  "{n} people are listening with you": "{n} persoane ascultă cu tine",
+  "You are listening together with {name}": "Asculți împreună cu {name}",
+  "Listening": "Ascultă",
+  "The host picks the songs. You can add songs to their queue from the menu": "Hostul alege melodiile. Poți adăuga melodii în coada lui din meniu",
+  "Your name": "Numele tău"
 }

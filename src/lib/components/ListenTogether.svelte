@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../api';
   import { t as tr } from '../i18n.svelte';
-  import { jam, refreshJam, PUBLIC_JAM_SERVER, jamPrefs, jamTarget, savePrefs, hostJam } from '../jam.svelte';
+  import { jam, refreshJam, PUBLIC_JAM_SERVER, jamPrefs, jamTarget, savePrefs, hostJam, jamName } from '../jam.svelte';
   import { toast } from '../toast';
 
   let code = $state('');
@@ -24,7 +24,7 @@
   }
   async function join() {
     busy = true;
-    try { jam.info = await api.jamJoin(code); } catch (e) { toast(String(e), 'error', 3000); } finally { busy = false; }
+    try { jam.info = await api.jamJoin(code, jamName()); } catch (e) { toast(String(e), 'error', 3000); } finally { busy = false; }
   }
   async function leave() {
     await api.jamLeave().catch(() => {});

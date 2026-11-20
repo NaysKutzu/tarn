@@ -6,7 +6,7 @@
   import RemoteQuick from './lib/components/RemoteQuick.svelte';
   import ListenTogether from './lib/components/ListenTogether.svelte';
   import JamQuick from './lib/components/JamQuick.svelte';
-  import { jam } from './lib/jam.svelte';
+  import { jam, jamPrefs } from './lib/jam.svelte';
   import Shortcuts from './lib/components/Shortcuts.svelte';
   import { appCombo, actionFor, appShortcuts } from './lib/shortcuts';
   import { onMount } from 'svelte';
@@ -105,6 +105,7 @@
   let library = $state<Library | null>(null);
   let history = $state<Track[] | null>(null);
   let auth = $state<AuthStatus>({ signed_in: false, mock: false, account: null, store: null });
+  $effect(() => { jamPrefs.accountName = auth.account?.name ?? ''; });
   let updateCheck = $state(0);
   let appVersion = $state('0.1.0');
   const XF_DEFAULTS = {
@@ -1615,8 +1616,11 @@
     if (action === 'dislike') {
       const ahead: number[] = [];
       player.queue.forEach((t, i) => { if (t.id === id && i > player.index) ahead.push(i); });
-      for (const i of ahead.reverse()) api.queueRemove(i).catch(() => {});
-      if (current) api.next().catch(() => {});
+      // A guest only rates the song: the host decides what plays.
+      if (jam.info.mode !== 'joined') {
+        for (const i of ahead.reverse()) api.queueRemove(i).catch(() => {});
+        if (current) api.next().catch(() => {});
+      }
     }
 
     try {

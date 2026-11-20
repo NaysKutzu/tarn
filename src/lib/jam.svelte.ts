@@ -7,7 +7,7 @@ import { api, type JamInfo } from './api';
 export const PUBLIC_JAM_SERVER: string = 'https://jam.694206767.xyz';
 
 export const jam = $state<{ info: JamInfo }>({
-  info: { mode: 'off', code: null, guests: 0, following: null, rtt_ms: null, error: null },
+  info: { mode: 'off', code: null, guests: 0, people: [], host_name: null, following: null, rtt_ms: null, error: null },
 });
 
 export async function refreshJam() {
@@ -22,12 +22,22 @@ export const jamPrefs = $state({
   usePublic: load('jam.public') !== '0',
   server: load('jam.server'),
   password: load('jam.password'),
+  /** Nickname shown to others; empty = use the account name. */
+  name: load('jam.name'),
+  /** Set by the app from the signed-in account. */
+  accountName: '',
 });
+
+/** What other people see you as. */
+export function jamName(): string {
+  return jamPrefs.name.trim() || jamPrefs.accountName.trim() || 'Guest';
+}
 
 export function savePrefs() {
   save('jam.public', jamPrefs.usePublic ? '1' : '0');
   save('jam.server', jamPrefs.server.trim());
   save('jam.password', jamPrefs.password);
+  save('jam.name', jamPrefs.name.trim());
 }
 
 /** Which server a new session is hosted on ('' = this network only). */
@@ -37,6 +47,6 @@ export function jamTarget(): string {
 
 export async function hostJam() {
   const server = jamTarget();
-  jam.info = await api.jamHost(server, jamPrefs.server.trim() ? jamPrefs.password : '');
+  jam.info = await api.jamHost(server, jamPrefs.server.trim() ? jamPrefs.password : '', jamName());
   return jam.info;
 }

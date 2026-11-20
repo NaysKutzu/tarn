@@ -3,7 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { api } from '../api';
   import { t as tr } from '../i18n.svelte';
-  import { jam, refreshJam, hostJam, jamPrefs, savePrefs, PUBLIC_JAM_SERVER } from '../jam.svelte';
+  import { jam, refreshJam, hostJam, jamPrefs, jamName, savePrefs, PUBLIC_JAM_SERVER } from '../jam.svelte';
   import { toast } from '../toast';
   import type { Settings } from '../types';
   import Hi from './Hi.svelte';
@@ -51,9 +51,15 @@
       const c = await api.jamTakeInvite();
       if (!c) return;
       code = c;
-      invite = true;
       placePop();
-      open = true;
+      // From the invite page's "Open in Tarn": just join, then say so. Only
+      // ask first if that would end a session this user is hosting.
+      if (jam.info.mode === 'hosting') {
+        invite = true;
+        open = true;
+        return;
+      }
+      await join();
     } catch { /* not available */ }
   }
 
@@ -97,7 +103,8 @@
   }
   async function join() {
     busy = true;
-    try { jam.info = await api.jamJoin(code.trim()); if (jam.info.mode === 'joined') { invite = false; code = ''; } }
+    savePrefs();
+    try { jam.info = await api.jamJoin(code.trim(), jamName()); if (jam.info.mode === 'joined') { invite = false; code = ''; } }
     catch (e) { toast(String(e), 'error', 3000); } finally { busy = false; }
   }
   async function leave() {
@@ -112,6 +119,18 @@
       setTimeout(() => (copied = false), 1600);
     } catch { /* ignore */ }
   }
+  // "You are listening together with <host>", once, when the host's name arrives.
+  let announced = '';
+  $effect(() => {
+    const m = jam.info.mode;
+    const h = jam.info.host_name;
+    if (m !== 'joined') { announced = ''; return; }
+    if (h && h !== announced) {
+      announced = h;
+      toast(tr('You are listening together with {name}', { name: h }), 'info', 4200);
+    }
+  });
+
   function togglePublic(v: boolean) { jamPrefs.usePublic = v; savePrefs(); }
   const onWeb = $derived(!!jam.info.code?.startsWith('https://'));
 </script>
@@ -149,7 +168,9 @@
             {#if jam.info.mode === 'hosting'}
               {jam.info.guests === 1 ? tr('1 person is listening with you') : tr('{n} people are listening with you', { n: jam.info.guests })}
             {:else if jam.info.mode === 'joined'}
-              {jam.info.error ?? `${tr('Following the host')}${jam.info.following ? ` · ${jam.info.following}` : ''}${jam.info.rtt_ms != null ? ` · ${jam.info.rtt_ms} ms` : ''}`}
+              {jam.info.error ?? (jam.info.host_name
+                ? tr('You are listening together with {name}', { name: jam.info.host_name })
+                : tr('Following the host'))}
             {:else}
               {tr('Same music, in sync. Friends follow your playback and can add songs to your queue')}
             {/if}
@@ -166,6 +187,11 @@
           <button class="jq-big" type="button" onclick={copy}>{copied ? tr('Copied') : tr('Copy invite link')}</button>
           <button class="jq-sec" type="button" onclick={leave}>{tr('Stop')}</button>
         </div>
+        {#if jam.info.people.length}
+          <div class="jq-people" aria-label={tr('Listening')}>
+            {#each jam.info.people as n}<span class="jq-chip">{n}</span>{/each}
+          </div>
+        {/if}
         {#if onWeb}
           <div class="jq-row">
             <span>
@@ -183,6 +209,14 @@
         {/if}
         {#if jam.info.error}<p class="jq-err">{jam.info.error}</p>{/if}
       {:else if jam.info.mode === 'joined'}
+        {#if jam.info.following}<p class="jq-meta">{tr('Now playing')}: {jam.info.following}{jam.info.rtt_ms != null ? ` · ${jam.info.rtt_ms} ms` : ''}</p>{/if}
+        {#if jam.info.host_name || jam.info.people.length}
+          <div class="jq-people" aria-label={tr('Listening')}>
+            {#if jam.info.host_name}<span class="jq-chip host">{jam.info.host_name}</span>{/if}
+            {#each jam.info.people as n}<span class="jq-chip">{n}</span>{/each}
+          </div>
+        {/if}
+        <p class="jq-meta">{tr('The host picks the songs. You can add songs to their queue from the menu')}</p>
         <div class="jq-actions">
           <button class="jq-sec" type="button" onclick={leave}>{tr('Leave')}</button>
         </div>
@@ -202,6 +236,14 @@
           />
           <button class="jq-sec" type="button" disabled={busy || !code.trim()} onclick={join}>{tr('Join')}</button>
         </div>
+        <input
+          class="jq-in"
+          type="text"
+          maxlength="24"
+          placeholder={`${tr('Your name')}: ${jamPrefs.accountName || 'Guest'}`}
+          bind:value={jamPrefs.name}
+          onchange={savePrefs}
+        />
         {#if PUBLIC_JAM_SERVER}
           <div class="jq-row">
             <span>
@@ -260,6 +302,9 @@
   }
   .jq-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13.5px; font-weight: 550; }
   .jq-row small { display: block; margin-top: 3px; font-size: 11px; line-height: 15px; font-weight: 400; color: var(--text-3); }
+  .jq-people { display: flex; flex-wrap: wrap; gap: 6px; }
+  .jq-chip { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); color: var(--text-2); }
+  .jq-chip.host { border-color: rgba(var(--accent-rgb), 0.5); color: var(--text); }
   .jq-meta { font-size: 12px; line-height: 16px; color: var(--text-2); margin: 0; }
   .jq-err { color: var(--danger); font-size: 12px; margin: 0; }
 </style>

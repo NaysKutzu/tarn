@@ -18,6 +18,10 @@ export interface JamInfo {
   mode: string;
   code: string | null;
   guests: number;
+  /** Names of everyone in the session. */
+  people: string[];
+  /** Who is hosting (when following). */
+  host_name: string | null;
   following: string | null;
   rtt_ms: number | null;
   error: string | null;
@@ -117,8 +121,8 @@ export const api = {
   remoteStop: () => invoke<void>('remote_stop'),
   remoteStatus: () => invoke<RemoteInfo>('remote_status'),
   /** Listen together (desktop only, LAN). */
-  jamHost: (server?: string, password?: string) => invoke<JamInfo>('jam_host', { server: server || null, password: password || null }),
-  jamJoin: (code: string) => invoke<JamInfo>('jam_join', { code }),
+  jamHost: (server?: string, password?: string, name?: string) => invoke<JamInfo>('jam_host', { server: server || null, password: password || null, name: name || null }),
+  jamJoin: (code: string, name?: string) => invoke<JamInfo>('jam_join', { code, name: name || null }),
   jamLeave: () => invoke<void>('jam_leave'),
   jamStatus: () => invoke<JamInfo>('jam_status'),
   jamTakeInvite: () => invoke<string | null>('jam_take_invite'),

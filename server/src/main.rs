@@ -49,7 +49,9 @@ struct Room {
     state: Option<(Value, Instant)>,
     last_push: Instant,
     adds: VecDeque<Value>,
-    guests: HashMap<IpAddr, Instant>,
+    host_name: String,
+    /// guest id -> (display name, last seen)
+    guests: HashMap<String, (String, Instant)>,
 }
 
 struct Config {
@@ -82,6 +84,36 @@ fn token(n: usize) -> String {
 fn eq_ct(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Names are shown to other people: strip control chars, cap the length.
+fn clean_name(raw: &str) -> String {
+    raw.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(24).collect()
+}
+
+/// Header values are percent-encoded UTF-8 (names can have any characters).
+fn pct_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if b[i] == b'+' { b' ' } else { b[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn guest_names(r: &Room) -> Vec<String> {
+    let mut v: Vec<_> = r.guests.values().filter(|(_, t)| t.elapsed() < GUEST_WINDOW).map(|(n, _)| n.clone()).collect();
+    v.sort();
+    v
 }
 
 fn err(code: StatusCode, msg: &'static str) -> Response {
@@ -181,6 +213,7 @@ async fn create(State(s): State<Shared>, peer: ConnectInfo<SocketAddr>, h: Heade
         state: None,
         last_push: Instant::now(),
         adds: VecDeque::new(),
+        host_name: String::new(),
         guests: HashMap::new(),
     };
     let out = Created { room: id.clone(), host_key: room.host_key.clone(), token: room.token.clone() };
@@ -199,6 +232,8 @@ struct Push {
     loading: bool,
     #[serde(default)]
     upcoming: Vec<Value>,
+    #[serde(default)]
+    host_name: String,
 }
 
 fn valid_track(v: &Value) -> bool {
@@ -235,9 +270,10 @@ async fn push(
     });
     r.state = Some((state, Instant::now()));
     r.last_push = Instant::now();
-    r.guests.retain(|_, t| t.elapsed() < GUEST_WINDOW);
+    r.host_name = clean_name(&p.host_name);
+    r.guests.retain(|_, (_, t)| t.elapsed() < GUEST_WINDOW);
     let adds: Vec<Value> = r.adds.drain(..).collect();
-    Json(serde_json::json!({ "guests": r.guests.len(), "adds": adds })).into_response()
+    Json(serde_json::json!({ "guests": r.guests.len(), "names": guest_names(r), "adds": adds })).into_response()
 }
 
 async fn read_state(
@@ -252,16 +288,27 @@ async fn read_state(
     let Some(r) = rooms.get_mut(&id).filter(|r| eq_ct(header(&h, "x-tarn-token"), &r.token)) else {
         return err(StatusCode::NOT_FOUND, "no such room");
     };
-    if r.guests.len() >= MAX_GUESTS && !r.guests.contains_key(&ip) {
+    // Guests identify themselves with a random id (so two people behind one
+    // router count separately) and a display name.
+    let gid: String = header(&h, "x-tarn-guest").chars().filter(char::is_ascii_alphanumeric).take(32).collect();
+    let gid = if gid.is_empty() { ip.to_string() } else { gid };
+    let name = clean_name(&pct_decode(header(&h, "x-tarn-name")));
+    let name = if name.is_empty() { "Guest".to_string() } else { name };
+    r.guests.retain(|_, (_, t)| t.elapsed() < GUEST_WINDOW);
+    if r.guests.len() >= MAX_GUESTS && !r.guests.contains_key(&gid) {
         return err(StatusCode::SERVICE_UNAVAILABLE, "room is full");
     }
-    r.guests.insert(ip, Instant::now());
+    r.guests.insert(gid, (name, Instant::now()));
+    let people = guest_names(r);
+    let host_name = r.host_name.clone();
     let Some((state, at)) = &r.state else {
-        return Json(serde_json::json!({ "track": null, "playing": false, "position": 0.0, "loading": true, "upcoming": [] }))
+        return Json(serde_json::json!({ "track": null, "playing": false, "position": 0.0, "loading": true, "upcoming": [], "host_name": host_name, "guests": people }))
             .into_response();
     };
     // Age the host's position so a late poll still lines up.
     let mut out = state.clone();
+    out["host_name"] = serde_json::json!(host_name);
+    out["guests"] = serde_json::json!(people);
     if out["playing"] == Value::Bool(true) {
         let pos = out["position"].as_f64().unwrap_or(0.0) + at.elapsed().as_secs_f64();
         out["position"] = serde_json::json!(pos);
