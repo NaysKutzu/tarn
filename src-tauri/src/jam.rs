@@ -11,9 +11,10 @@
 //! private, link-local and loopback peers are accepted.
 //!
 //! For sessions over the internet the host can instead push its state to a
-//! self-hosted relay (see `server/` in the repo). The join code then looks like
-//! `https://jam.example.com/r/<room>#<token>` and guests poll the relay, so
-//! nobody needs an open port at home.
+//! self-hosted relay (see `server/` in the repo). Rooms there have a 6-digit
+//! code people can type by hand; the invite link is
+//! `https://jam.example.com/r/<code>` and guests poll the relay, so nobody
+//! needs an open port at home.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -35,13 +36,17 @@ const MAX_CONNS: usize = 32;
 /// Guests further off than this get seeked back in line.
 const DRIFT_S: f64 = 1.5;
 const POLL: Duration = Duration::from_millis(1000);
+/// How long a guest waits for a song it started loading before trying again.
+const LOAD_GRACE: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct JamInfo {
     /// "off" | "hosting" | "joined"
     pub mode: String,
-    /// Join code to share while hosting.
+    /// Join code to share while hosting (an invite link on a jam server).
     pub code: Option<String>,
+    /// The 6-digit room code on a jam server, to read out or type by hand.
+    pub short: Option<String>,
     /// Guests seen in the last 10 s (host).
     pub guests: usize,
     /// Host's current track title (guest).
@@ -76,6 +81,7 @@ pub struct JamState {
 enum Session {
     Host {
         code: String,
+        short: Option<String>,
         stop: tokio::sync::watch::Sender<bool>,
         guests: Arc<Mutex<HashMap<IpAddr, (String, Instant)>>>,
         relay: Arc<RelayStatus>,
@@ -126,7 +132,7 @@ static GUEST_TARGET: Mutex<Option<Target>> = Mutex::new(None);
 pub fn info() -> JamInfo {
     match &*SESSION.lock() {
         None => JamInfo { mode: "off".into(), ..Default::default() },
-        Some(Session::Host { code, guests, relay, .. }) => {
+        Some(Session::Host { code, short, guests, relay, .. }) => {
             let mut g = guests.lock();
             g.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(10));
             let mut people: Vec<String> = g.values().map(|(n, _)| n.clone()).collect();
@@ -136,6 +142,7 @@ pub fn info() -> JamInfo {
             JamInfo {
                 mode: "hosting".into(),
                 code: Some(code.clone()),
+                short: short.clone(),
                 guests: n,
                 people,
                 error: relay.error.lock().clone(),
@@ -221,7 +228,7 @@ pub async fn host(app: Arc<crate::App>, server: Option<(String, String)>, name: 
     let code = format!("{}#{token}", SocketAddr::new(ip, port));
     let (tx, rx) = tokio::sync::watch::channel(false);
     let guests: Arc<Mutex<HashMap<IpAddr, (String, Instant)>>> = Default::default();
-    *SESSION.lock() = Some(Session::Host { code, stop: tx, guests: guests.clone(), relay: Default::default() });
+    *SESSION.lock() = Some(Session::Host { code, short: None, stop: tx, guests: guests.clone(), relay: Default::default() });
     crate::diag::log(format!("jam: hosting on port {port}"));
     let srv = Arc::new(Host { app, token, guests, conns: Default::default() });
     tauri::async_runtime::spawn(serve(listener, srv, rx));
@@ -256,6 +263,8 @@ pub fn normalize_server(input: &str) -> Result<String, String> {
 struct Created {
     room: String,
     host_key: String,
+    /// Older servers: rooms also need this join token.
+    #[serde(default)]
     token: String,
 }
 
@@ -288,10 +297,16 @@ async fn host_relay(app: Arc<crate::App>, server: &str, password: &str) -> JamIn
         Ok(r) => return err_info(format!("The server answered {}", r.status())),
         Err(_) => return err_info("Can't reach the server".into()),
     };
-    let code = format!("{base}/r/{}#{}", created.room, created.token);
+    let short = is_short_code(&created.room).then(|| created.room.clone());
+    // New servers join by code alone; older ones still want the token.
+    let code = if short.is_some() || created.token.is_empty() {
+        format!("{base}/r/{}", created.room)
+    } else {
+        format!("{base}/r/{}#{}", created.room, created.token)
+    };
     let (tx, rx) = tokio::sync::watch::channel(false);
     let relay: Arc<RelayStatus> = Default::default();
-    *SESSION.lock() = Some(Session::Host { code, stop: tx, guests: Default::default(), relay: relay.clone() });
+    *SESSION.lock() = Some(Session::Host { code, short, stop: tx, guests: Default::default(), relay: relay.clone() });
     crate::diag::log("jam: hosting on a relay");
     tauri::async_runtime::spawn(push_loop(app, http, base, created, relay, rx));
     info()
@@ -331,6 +346,8 @@ async fn push_loop(
                 }
             }
             Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => {
+                // The server takes the room back on the next push when it can;
+                // this only sticks if someone else got the code meanwhile.
                 *status.error.lock() = Some("The server dropped this room, stop and host again".into());
             }
             Ok(r) => *status.error.lock() = Some(format!("The server answered {}", r.status())),
@@ -449,16 +466,25 @@ fn good_token(t: &str) -> bool {
     t.len() >= 16 && t.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// A jam server room code: 6 digits.
+pub fn is_short_code(c: &str) -> bool {
+    c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Parse "192.168.1.5:47811#token" (LAN, also accepts a leading http://) or
-/// "https://server/r/<room>#token" (relay).
+/// "https://server/r/<room>[#token]" (relay; older servers need the token).
 pub fn parse_code(code: &str) -> Option<Target> {
     let c = code.trim();
     if let Some(rest) = c.strip_prefix("https://").or_else(|| c.strip_prefix("http://")) {
         if let Some((hostpart, tail)) = rest.split_once("/r/") {
-            let (room, token) = tail.split_once('#')?;
+            let (room, token) = tail.split_once('#').unwrap_or((tail, ""));
             let room = room.trim_end_matches('/');
             let token = token.trim();
-            if room.is_empty() || !room.chars().all(|c| c.is_ascii_alphanumeric()) || !good_token(token) {
+            if room.is_empty() || !room.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return None;
+            }
+            // Without a token, only a code-joined room (6 digits) makes sense.
+            if !(good_token(token) || (token.is_empty() && is_short_code(room))) {
                 return None;
             }
             let scheme = if c.starts_with("https://") { "https" } else { "http" };
@@ -511,9 +537,7 @@ pub async fn add_to_host(track: Track) -> Result<(), String> {
     let Some(t) = GUEST_TARGET.lock().clone() else {
         return Err("Not in a listen-together session".into());
     };
-    let r = reqwest::Client::new()
-        .post(format!("{}{}", t.base, t.add_path))
-        .header("X-Tarn-Token", t.token)
+    let r = with_token(reqwest::Client::new().post(format!("{}{}", t.base, t.add_path)), &t.token)
         .header("X-Tarn-Name", encode_name(&t.name))
         .timeout(Duration::from_secs(4))
         .json(&track)
@@ -561,15 +585,17 @@ async fn follow(
 ) {
     let http = reqwest::Client::new();
     let mut last_upcoming: Vec<String> = Vec::new();
+    // The host's song we last started loading. While a crossfade runs the
+    // player still shows the old song, so without this every poll restarted
+    // the new one and the guest never got onto it.
+    let mut loading: Option<(String, Instant)> = None;
     loop {
         tokio::select! {
             _ = stop.changed() => break,
             _ = tokio::time::sleep(POLL) => {}
         }
         let t0 = Instant::now();
-        let res = http
-            .get(format!("{}{}", target.base, target.state_path))
-            .header("X-Tarn-Token", &target.token)
+        let res = with_token(http.get(format!("{}{}", target.base, target.state_path)), &target.token)
             .header("X-Tarn-Name", encode_name(&target.name))
             .header("X-Tarn-Guest", &target.guest_id)
             .timeout(Duration::from_secs(3))
@@ -580,6 +606,10 @@ async fn follow(
                 if r.status() == reqwest::StatusCode::UNAUTHORIZED || r.status() == reqwest::StatusCode::NOT_FOUND =>
             {
                 status.lock().error = Some("The host ended the session".into());
+                continue;
+            }
+            Ok(r) if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                status.lock().error = Some("The server is busy, retrying".into());
                 continue;
             }
             Ok(r) => match r.json().await {
@@ -606,7 +636,16 @@ async fn follow(
         // The host's position was read about half a round trip ago.
         let host_pos = host.position + if host.playing { rtt.as_secs_f64() / 2.0 } else { 0.0 };
         let mine = app.player.snapshot();
-        let action = plan(&host, host_pos, &mine);
+        let host_id = host.track.as_ref().map(|t| t.id.clone());
+        if mine.track.as_ref().map(|t| &t.id) == host_id.as_ref() {
+            loading = None;
+        }
+        let mut action = plan(&host, host_pos, &mine);
+        if matches!(action, SyncAction::Load { .. })
+            && loading.as_ref().is_some_and(|(id, at)| Some(id) == host_id.as_ref() && at.elapsed() < LOAD_GRACE)
+        {
+            action = SyncAction::None;
+        }
         let upcoming: Vec<String> = host.upcoming.iter().map(|t| t.id.clone()).collect();
         match action {
             SyncAction::None => {}
@@ -618,7 +657,9 @@ async fn follow(
                 let mut queue = vec![t.clone()];
                 queue.extend(host.upcoming.iter().cloned());
                 last_upcoming = upcoming.clone();
+                loading = Some((t.id.clone(), Instant::now()));
                 if let Err(e) = crate::start_playback_at(&app, t, queue, 0, start, paused, true, false).await {
+                    loading = None;
                     status.lock().error = Some(format!("Couldn't play the host's song: {e}"));
                 }
                 continue;
@@ -635,6 +676,11 @@ async fn follow(
 }
 
 // ---------------------------------------------------------------- shared
+
+/// Code-joined relay rooms have no token; LAN hosts and older servers do.
+fn with_token(req: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
+    if token.is_empty() { req } else { req.header("X-Tarn-Token", token) }
+}
 
 /// Names travel percent-encoded in a header so any character survives.
 fn encode_name(n: &str) -> String {
@@ -777,6 +823,11 @@ mod tests {
         assert_eq!((r.base.as_str(), r.state_path.as_str()), ("https://jam.example.com", "/v1/rooms/abc123/state"));
         assert!(parse_code(&format!("http://jam.example.com/r/abc123#{tok}")).is_none(), "plain http to the internet is refused");
         assert!(parse_code(&format!("https://jam.example.com/r/ab/../c#{tok}")).is_none());
+        let s = parse_code("https://jam.example.com/r/482913").unwrap();
+        assert_eq!((s.state_path.as_str(), s.token.as_str()), ("/v1/rooms/482913/state", ""));
+        assert!(parse_code("https://jam.example.com/r/482913/").is_some());
+        assert!(parse_code("https://jam.example.com/r/abc123").is_none(), "old-style rooms still need a token");
+        assert!(parse_code("https://jam.example.com/r/48291").is_none());
         assert!(parse_code(&format!("http://127.0.0.1:8080/r/abc123#{tok}")).is_some());
         assert!(parse_code(&format!("http://10.0.0.2:5000/#{tok}")).is_some());
         assert!(parse_code(&format!("8.8.8.8:47811#{tok}")).is_none(), "public hosts are refused");

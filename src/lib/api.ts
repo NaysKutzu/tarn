@@ -17,6 +17,8 @@ export interface JamInfo {
   /** 'off' | 'hosting' | 'joined' */
   mode: string;
   code: string | null;
+  /** 6-digit room code on a jam server (hosting). */
+  short: string | null;
   guests: number;
   /** Names of everyone in the session. */
   people: string[];

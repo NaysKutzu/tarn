@@ -7,7 +7,7 @@ import { api, type JamInfo } from './api';
 export const PUBLIC_JAM_SERVER: string = 'https://jam.694206767.xyz';
 
 export const jam = $state<{ info: JamInfo }>({
-  info: { mode: 'off', code: null, guests: 0, people: [], host_name: null, following: null, rtt_ms: null, error: null },
+  info: { mode: 'off', code: null, short: null, guests: 0, people: [], host_name: null, following: null, rtt_ms: null, error: null },
 });
 
 export async function refreshJam() {
@@ -43,6 +43,23 @@ export function savePrefs() {
 /** Which server a new session is hosted on ('' = this network only). */
 export function jamTarget(): string {
   return jamPrefs.server.trim() || (jamPrefs.usePublic ? PUBLIC_JAM_SERVER : '');
+}
+
+/** "482 913" style, for reading out loud. */
+export function fmtShort(c: string): string {
+  return c.length === 6 ? `${c.slice(0, 3)} ${c.slice(3)}` : c;
+}
+
+/** What the user typed into Join: a 6-digit code (spaces/dashes allowed) means
+ *  a room on their jam server (or the public one); anything else is a link. */
+export function expandJoinCode(input: string): string {
+  const t = input.trim();
+  const digits = t.replace(/[\s-]/g, '');
+  if (/^\d{6}$/.test(digits)) {
+    const server = (jamPrefs.server.trim() || PUBLIC_JAM_SERVER).replace(/\/+$/, '');
+    if (server) return `${/^https?:\/\//.test(server) ? '' : 'https://'}${server}/r/${digits}`;
+  }
+  return t;
 }
 
 export async function hostJam() {

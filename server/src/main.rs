@@ -5,12 +5,17 @@
 //! the server never touches audio, it only relays a few hundred bytes of JSON.
 //!
 //! Security model
-//! * A room has two random 192-bit secrets: a *host key* (push state, close the
-//!   room, receive guest additions) and a *join token* (read state, add songs).
+//! * A room is a 6-digit code people can read out or type by hand. The code
+//!   alone lets you listen along and add songs; only the host's random
+//!   192-bit *host key* can push state or close the room.
+//! * Guessing codes is throttled: each IP may try only a few distinct wrong
+//!   codes per 10 minutes.
 //! * Optionally `TARN_JAM_PASSWORD` is required to create rooms, so a public
 //!   server can't be used by strangers.
 //! * Per-IP rate limiting, hard caps on rooms/guests/body sizes, rooms die
-//!   10 s after the host stops pushing. Secrets are compared in constant time.
+//!   90 s after the host stops pushing (a host that comes back in time, or
+//!   after a server restart, gets its room back with the same code).
+//!   Secrets are compared in constant time.
 //! * Run it behind a TLS terminator (the bundled docker-compose does this with
 //!   Caddy and automatic HTTPS).
 
@@ -29,8 +34,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Mutex;
 
-const ROOM_TTL: Duration = Duration::from_secs(10);
-const GUEST_WINDOW: Duration = Duration::from_secs(10);
+/// A host that goes quiet (network blip, laptop asleep) keeps its room this long.
+const ROOM_TTL: Duration = Duration::from_secs(90);
+/// A guest still counts as listening this long after their last poll (loading
+/// a song on the guest can pause polling for several seconds).
+const GUEST_WINDOW: Duration = Duration::from_secs(30);
+/// Distinct wrong room codes one IP may try per GUESS_WINDOW.
+const MAX_WRONG_CODES: usize = 20;
+const GUESS_WINDOW: Duration = Duration::from_secs(600);
 const MAX_GUESTS: usize = 50;
 const MAX_PENDING_ADDS: usize = 50;
 const MAX_UPCOMING: usize = 20;
@@ -44,7 +55,6 @@ const CREATE_PER_MIN: usize = 10;
 struct Room {
     owner: IpAddr,
     host_key: String,
-    token: String,
     /// Last state pushed by the host, plus when it arrived.
     state: Option<(Value, Instant)>,
     last_push: Instant,
@@ -71,6 +81,8 @@ struct Inner {
     rooms: Mutex<HashMap<String, Room>>,
     buckets: Mutex<HashMap<IpAddr, Bucket>>,
     creates: Mutex<HashMap<IpAddr, Vec<Instant>>>,
+    /// Wrong room codes tried per IP: (code, when).
+    misses: Mutex<HashMap<IpAddr, Vec<(String, Instant)>>>,
 }
 
 type Shared = Arc<Inner>;
@@ -79,6 +91,47 @@ fn token(n: usize) -> String {
     let mut b = vec![0u8; n];
     rand::rngs::OsRng.fill_bytes(&mut b);
     hex::encode(b)
+}
+
+/// A fresh 6-digit room code not in use.
+fn new_code(rooms: &HashMap<String, Room>) -> String {
+    loop {
+        let mut b = [0u8; 4];
+        rand::rngs::OsRng.fill_bytes(&mut b);
+        let c = format!("{:06}", u32::from_le_bytes(b) % 1_000_000);
+        if !rooms.contains_key(&c) {
+            return c;
+        }
+    }
+}
+
+fn valid_code(c: &str) -> bool {
+    c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn valid_host_key(k: &str) -> bool {
+    k.len() == 48 && k.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Too many different wrong codes from this IP lately? Re-polling the same dead
+/// room (a guest whose host left) only counts once.
+fn guessing(s: &Inner, ip: IpAddr) -> bool {
+    let mut m = s.misses.lock().unwrap();
+    m.get_mut(&ip).is_some_and(|v| {
+        v.retain(|(_, t)| t.elapsed() < GUESS_WINDOW);
+        v.len() >= MAX_WRONG_CODES
+    })
+}
+
+fn note_miss(s: &Inner, ip: IpAddr, code: &str) {
+    let mut m = s.misses.lock().unwrap();
+    if m.len() > 10_000 {
+        m.retain(|_, v| v.iter().any(|(_, t)| t.elapsed() < GUESS_WINDOW));
+    }
+    let v = m.entry(ip).or_default();
+    if !v.iter().any(|(c, _)| c == code) {
+        v.push((code.chars().take(16).collect(), Instant::now()));
+    }
 }
 
 fn eq_ct(a: &str, b: &str) -> bool {
@@ -172,6 +225,8 @@ fn sweep(rooms: &mut HashMap<String, Room>) {
 struct Created {
     room: String,
     host_key: String,
+    /// Unused since rooms are joined by code; kept so older apps that expect
+    /// `https://server/r/<room>#<token>` links still work.
     token: String,
 }
 
@@ -205,18 +260,17 @@ async fn create(State(s): State<Shared>, peer: ConnectInfo<SocketAddr>, h: Heade
     if rooms.values().filter(|r| r.owner == ip).count() >= s.cfg.max_rooms_per_ip {
         return err(StatusCode::TOO_MANY_REQUESTS, "you already have the maximum number of rooms open");
     }
-    let id = token(6);
+    let id = new_code(&rooms);
     let room = Room {
         owner: ip,
         host_key: token(24),
-        token: token(24),
         state: None,
         last_push: Instant::now(),
         adds: VecDeque::new(),
         host_name: String::new(),
         guests: HashMap::new(),
     };
-    let out = Created { room: id.clone(), host_key: room.host_key.clone(), token: room.token.clone() };
+    let out = Created { room: id.clone(), host_key: room.host_key.clone(), token: token(16) };
     rooms.insert(id, room);
     (StatusCode::CREATED, Json(out)).into_response()
 }
@@ -250,7 +304,7 @@ async fn push(
     h: HeaderMap,
     Json(p): Json<Push>,
 ) -> Response {
-    gate!(s, peer, h);
+    let ip = gate!(s, peer, h);
     let ok = p.position.is_finite()
         && (0.0..=86_400.0).contains(&p.position)
         && p.track.as_ref().is_none_or(valid_track)
@@ -259,9 +313,29 @@ async fn push(
     if !ok {
         return err(StatusCode::BAD_REQUEST, "bad state");
     }
+    let key = header(&h, "x-tarn-host");
     let mut rooms = s.rooms.lock().unwrap();
     sweep(&mut rooms);
-    let Some(r) = rooms.get_mut(&id).filter(|r| eq_ct(header(&h, "x-tarn-host"), &r.host_key)) else {
+    // The room expired or the server restarted: give the host its code back
+    // (same key), so the people listening never notice.
+    if !rooms.contains_key(&id) && valid_code(&id) && valid_host_key(key) {
+        let mine = rooms.values().filter(|r| r.owner == ip).count();
+        if rooms.len() < s.cfg.max_rooms && mine < s.cfg.max_rooms_per_ip {
+            rooms.insert(
+                id.clone(),
+                Room {
+                    owner: ip,
+                    host_key: key.to_string(),
+                    state: None,
+                    last_push: Instant::now(),
+                    adds: VecDeque::new(),
+                    host_name: String::new(),
+                    guests: HashMap::new(),
+                },
+            );
+        }
+    }
+    let Some(r) = rooms.get_mut(&id).filter(|r| eq_ct(key, &r.host_key)) else {
         return err(StatusCode::NOT_FOUND, "no such room");
     };
     let state = serde_json::json!({
@@ -283,9 +357,14 @@ async fn read_state(
     h: HeaderMap,
 ) -> Response {
     let ip = gate!(s, peer, h);
+    if guessing(&s, ip) {
+        return err(StatusCode::TOO_MANY_REQUESTS, "too many wrong codes, try again later");
+    }
     let mut rooms = s.rooms.lock().unwrap();
     sweep(&mut rooms);
-    let Some(r) = rooms.get_mut(&id).filter(|r| eq_ct(header(&h, "x-tarn-token"), &r.token)) else {
+    let Some(r) = rooms.get_mut(&id) else {
+        drop(rooms);
+        note_miss(&s, ip, &id);
         return err(StatusCode::NOT_FOUND, "no such room");
     };
     // Guests identify themselves with a random id (so two people behind one
@@ -302,8 +381,7 @@ async fn read_state(
     let people = guest_names(r);
     let host_name = r.host_name.clone();
     let Some((state, at)) = &r.state else {
-        return Json(serde_json::json!({ "track": null, "playing": false, "position": 0.0, "loading": true, "upcoming": [], "host_name": host_name, "guests": people }))
-            .into_response();
+        return no_store(Json(serde_json::json!({ "track": null, "playing": false, "position": 0.0, "loading": true, "upcoming": [], "host_name": host_name, "guests": people })));
     };
     // Age the host's position so a late poll still lines up.
     let mut out = state.clone();
@@ -313,7 +391,12 @@ async fn read_state(
         let pos = out["position"].as_f64().unwrap_or(0.0) + at.elapsed().as_secs_f64();
         out["position"] = serde_json::json!(pos);
     }
-    Json(out).into_response()
+    no_store(Json(out))
+}
+
+/// Live state: never let a proxy or CDN in front of us cache it.
+fn no_store(r: impl IntoResponse) -> Response {
+    ([("cache-control", "no-store")], r).into_response()
 }
 
 async fn add(
@@ -323,12 +406,17 @@ async fn add(
     h: HeaderMap,
     Json(t): Json<Value>,
 ) -> Response {
-    gate!(s, peer, h);
+    let ip = gate!(s, peer, h);
     if !valid_track(&t) {
         return err(StatusCode::BAD_REQUEST, "bad track");
     }
+    if guessing(&s, ip) {
+        return err(StatusCode::TOO_MANY_REQUESTS, "too many wrong codes, try again later");
+    }
     let mut rooms = s.rooms.lock().unwrap();
-    let Some(r) = rooms.get_mut(&id).filter(|r| eq_ct(header(&h, "x-tarn-token"), &r.token)) else {
+    let Some(r) = rooms.get_mut(&id) else {
+        drop(rooms);
+        note_miss(&s, ip, &id);
         return err(StatusCode::NOT_FOUND, "no such room");
     };
     if r.adds.len() >= MAX_PENDING_ADDS {
@@ -352,8 +440,7 @@ async fn close(
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// Invite landing page opened from a shared link. The join token lives in the
-/// URL fragment, which browsers never send to the server.
+/// Invite landing page opened from a shared link (`/r/<code>`).
 async fn invite(State(s): State<Shared>, peer: ConnectInfo<SocketAddr>, h: HeaderMap) -> Response {
     gate!(s, peer, h);
     (
@@ -400,6 +487,7 @@ async fn main() {
         rooms: Default::default(),
         buckets: Default::default(),
         creates: Default::default(),
+        misses: Default::default(),
     });
     let app = Router::new()
         .route("/healthz", get(health))

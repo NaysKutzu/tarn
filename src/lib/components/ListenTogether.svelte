@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../api';
   import { t as tr } from '../i18n.svelte';
-  import { jam, refreshJam, PUBLIC_JAM_SERVER, jamPrefs, jamTarget, savePrefs, hostJam, jamName } from '../jam.svelte';
+  import { jam, refreshJam, PUBLIC_JAM_SERVER, jamPrefs, jamTarget, savePrefs, hostJam, jamName, expandJoinCode, fmtShort } from '../jam.svelte';
   import { toast } from '../toast';
 
   let code = $state('');
@@ -24,7 +24,7 @@
   }
   async function join() {
     busy = true;
-    try { jam.info = await api.jamJoin(code, jamName()); } catch (e) { toast(String(e), 'error', 3000); } finally { busy = false; }
+    try { jam.info = await api.jamJoin(expandJoinCode(code), jamName()); } catch (e) { toast(String(e), 'error', 3000); } finally { busy = false; }
   }
   async function leave() {
     await api.jamLeave().catch(() => {});
@@ -59,13 +59,14 @@
 {#if jam.info.mode === 'hosting' && jam.info.code}
   <div class="jt">
     <span class="t-meta">{target ? 'Share this join code with anyone:' : 'Share this join code with people on the same Wi-Fi:'}</span>
+    {#if jam.info.short}<div class="jt-row"><code class="jt-short">{fmtShort(jam.info.short)}</code></div>{/if}
     <div class="jt-row"><code class="jt-code">{jam.info.code}</code><button class="btn ghost sm" type="button" onclick={copy}>Copy</button></div>
     {#if jam.info.error}<span class="t-meta jt-err">{jam.info.error}</span>{/if}
   </div>
 {:else if jam.info.mode === 'off'}
   <div class="jt">
     <div class="jt-row">
-      <input class="jt-in" type="text" placeholder="Join code, e.g. 192.168.1.5:47811#… or https://jam.example.com/r/…" bind:value={code} onkeydown={(e) => { if (e.key === 'Enter' && code.trim()) join(); }} />
+      <input class="jt-in" type="text" placeholder="Code (e.g. 482 913) or invite link" bind:value={code} onkeydown={(e) => { if (e.key === 'Enter' && code.trim()) join(); }} />
       <button class="btn ghost sm" type="button" disabled={busy || !code.trim()} onclick={join}>Join</button>
     </div>
     {#if PUBLIC_JAM_SERVER}
@@ -90,4 +91,5 @@
   .jt-code { font-size: 12px; word-break: break-all; user-select: all; flex: 1; }
   .jt-in { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: transparent; color: inherit; font: inherit; font-size: 13px; }
   .jt-err { color: var(--danger); }
+  .jt-short { font-size: 22px; font-weight: 700; letter-spacing: 0.12em; user-select: all; }
 </style>

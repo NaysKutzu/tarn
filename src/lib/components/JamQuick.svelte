@@ -3,7 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { api } from '../api';
   import { t as tr } from '../i18n.svelte';
-  import { jam, refreshJam, hostJam, jamPrefs, jamName, savePrefs, PUBLIC_JAM_SERVER } from '../jam.svelte';
+  import { jam, refreshJam, hostJam, jamPrefs, jamName, savePrefs, PUBLIC_JAM_SERVER, expandJoinCode, fmtShort } from '../jam.svelte';
   import { toast } from '../toast';
   import type { Settings } from '../types';
   import Hi from './Hi.svelte';
@@ -104,19 +104,28 @@
   async function join() {
     busy = true;
     savePrefs();
-    try { jam.info = await api.jamJoin(code.trim(), jamName()); if (jam.info.mode === 'joined') { invite = false; code = ''; } }
+    try { jam.info = await api.jamJoin(expandJoinCode(code), jamName()); if (jam.info.mode === 'joined') { invite = false; code = ''; } }
     catch (e) { toast(String(e), 'error', 3000); } finally { busy = false; }
   }
   async function leave() {
     await api.jamLeave().catch(() => {});
     await refreshJam();
   }
+  let copiedCode = $state(false);
   async function copy() {
     if (!jam.info.code) return;
     try {
       await navigator.clipboard.writeText(jam.info.code);
       copied = true;
       setTimeout(() => (copied = false), 1600);
+    } catch { /* ignore */ }
+  }
+  async function copyShort() {
+    if (!jam.info.short) return;
+    try {
+      await navigator.clipboard.writeText(jam.info.short);
+      copiedCode = true;
+      setTimeout(() => (copiedCode = false), 1600);
     } catch { /* ignore */ }
   }
   // "You are listening together with <host>", once, when the host's name arrives.
@@ -182,7 +191,14 @@
       </div>
 
       {#if jam.info.mode === 'hosting' && jam.info.code}
-        <button class="jq-link" type="button" onclick={copy} title={tr('Copy link')}>{jam.info.code}</button>
+        {#if jam.info.short}
+          <button class="jq-code" type="button" onclick={copyShort} title={tr('Copy code')}>
+            <span class="jq-code-l">{copiedCode ? tr('Copied') : tr('Code')}</span>
+            <span class="jq-code-v">{fmtShort(jam.info.short)}</span>
+          </button>
+        {:else}
+          <button class="jq-link" type="button" onclick={copy} title={tr('Copy link')}>{jam.info.code}</button>
+        {/if}
         <div class="jq-actions">
           <button class="jq-big" type="button" onclick={copy}>{copied ? tr('Copied') : tr('Copy invite link')}</button>
           <button class="jq-sec" type="button" onclick={leave}>{tr('Stop')}</button>
@@ -230,7 +246,7 @@
           <input
             class="jq-in"
             type="text"
-            placeholder={tr('Paste an invite link to join')}
+            placeholder={tr('Code or invite link')}
             bind:value={code}
             onkeydown={(e) => { if (e.key === 'Enter' && code.trim()) join(); }}
           />
@@ -295,6 +311,16 @@
     background: var(--bg); border: 1px solid var(--line); color: var(--text-2);
   }
   .jq-link:hover { color: var(--text); border-color: rgba(var(--accent-rgb), 0.4); }
+  .jq-code {
+    display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 12px; border-radius: 12px;
+    background: var(--bg); border: 1px solid var(--line);
+  }
+  .jq-code:hover { border-color: rgba(var(--accent-rgb), 0.4); }
+  .jq-code-l { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; }
+  .jq-code-v {
+    font: 700 30px/1.15 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.12em; font-variant-numeric: tabular-nums; color: var(--text);
+  }
   .jq-join { display: flex; gap: 8px; }
   .jq-in {
     flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line-2);
