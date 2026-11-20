@@ -34,6 +34,7 @@ mod dock;
 #[cfg(desktop)]
 mod remote;
 mod jam;
+mod rpm_update;
 // Phones: system media session / Discord presence are desktop-only for now.
 #[cfg(target_os = "android")]
 mod android_media;
@@ -2794,6 +2795,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            rpm_update::rpm_update_supported,
+            rpm_update::install_rpm_update,
             bg_video,
             bg_video_cache_size,
             bg_video_cache_clear,

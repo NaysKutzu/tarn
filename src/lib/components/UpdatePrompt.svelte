@@ -62,25 +62,44 @@
     progress = 0;
     received = 0;
     total = 0;
+    const onEvent = (ev: { event: string; data?: unknown }) => {
+      if (ev.event === 'Started') {
+        total = Number((ev.data as { contentLength?: number } | undefined)?.contentLength ?? 0);
+        received = 0;
+        progress = 0;
+      } else if (ev.event === 'Progress') {
+        received += Number((ev.data as { chunkLength?: number } | undefined)?.chunkLength ?? 0);
+        progress = total > 0 ? Math.min(1, received / total) : 0;
+      } else if (ev.event === 'Finished') {
+        progress = 1;
+      }
+    };
     try {
-      await update.downloadAndInstall((ev) => {
-        if (ev.event === 'Started') {
-          total = Number((ev.data as { contentLength?: number }).contentLength ?? 0);
-          received = 0;
-          progress = 0;
-        } else if (ev.event === 'Progress') {
-          received += Number((ev.data as { chunkLength?: number }).chunkLength ?? 0);
-          progress = total > 0 ? Math.min(1, received / total) : 0;
-        } else if (ev.event === 'Finished') {
-          progress = 1;
-        }
-      });
+      const { invoke, Channel } = await import('@tauri-apps/api/core');
+      // .rpm installs: the plugin's bare `rpm -U` is rejected on distros that
+      // enforce package signatures (Fedora 45+), so Rust installs the
+      // minisign-verified package itself behind a single pkexec prompt.
+      const rpm = await invoke<boolean>('rpm_update_supported').catch(() => false);
+      if (rpm) {
+        const channel = new Channel<{ event: string; data?: unknown }>();
+        channel.onmessage = onEvent;
+        await invoke('install_rpm_update', { onEvent: channel });
+      } else {
+        await update.downloadAndInstall(onEvent);
+      }
       const { relaunch } = await import('@tauri-apps/plugin-process');
       await relaunch();
     } catch (e) {
       installing = false;
       progress = null;
-      err = "Couldn't install the update. Try again, or download it from the releases page.";
+      const msg = String(e);
+      if (msg === 'cancelled') {
+        err = 'Update cancelled.';
+      } else if (msg === 'not-authorized') {
+        err = "Couldn't get permission to install the update. Check your password and try again.";
+      } else {
+        err = "Couldn't install the update. Try again, or download it from the releases page.";
+      }
       console.error(e);
     }
   }
