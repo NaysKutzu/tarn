@@ -22,7 +22,33 @@ pub struct Devices {
     pub current: Option<String>,
 }
 
+/// Linux: ALSA prints "unable to open slave" / "no matching channel map" to
+/// stderr for every PCM it can't open while cpal probes devices, every few
+/// seconds while the picker or the device watcher runs. Harmless, but it buries
+/// real logs, so swallow ALSA's own error printing (errors still come back to
+/// cpal as return values).
+#[cfg(target_os = "linux")]
+fn quiet_alsa() {
+    use std::os::raw::{c_char, c_int};
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    // The real handler type is variadic; a callee that ignores the trailing
+    // arguments is safe to call that way on the Linux C ABIs we ship.
+    type Handler = unsafe extern "C" fn(*const c_char, c_int, *const c_char, c_int, *const c_char);
+    unsafe extern "C" fn silent(_: *const c_char, _: c_int, _: *const c_char, _: c_int, _: *const c_char) {}
+    // libasound is already linked through cpal (alsa-sys).
+    extern "C" {
+        fn snd_lib_error_set_handler(handler: Option<Handler>) -> c_int;
+    }
+    ONCE.call_once(|| unsafe {
+        snd_lib_error_set_handler(Some(silent));
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn quiet_alsa() {}
+
 pub fn list() -> Devices {
+    quiet_alsa();
     let host = rodio::cpal::default_host();
     let mut devices: Vec<String> = host
         .output_devices()
@@ -39,6 +65,7 @@ pub fn list() -> Devices {
 /// Open `name`, or the system default when None / not found. Returns the
 /// stream, its handle and the device actually opened (None = default).
 pub fn open(name: Option<&str>) -> Option<(OutputStream, OutputStreamHandle, Option<String>)> {
+    quiet_alsa();
     if let Some(want) = name {
         let host = rodio::cpal::default_host();
         let dev = host
