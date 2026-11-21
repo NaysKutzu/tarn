@@ -41,6 +41,10 @@ enum Cmd {
 struct XfHints {
     out: Option<TrackAnalysis>,
     inc: Option<TrackAnalysis>,
+    /// AutoMix DJ mode: the move planned for this pair of songs.
+    dj: Option<crate::automix::DjPlan>,
+    /// Loudness normalization is on (both decks already levelled).
+    normalized: bool,
 }
 
 /// How to start a new decoder relative to whatever is already playing.
@@ -115,6 +119,12 @@ pub struct Player {
     auto_dj: Arc<AtomicBool>,
     /// AutoMix: per-transition timing chosen from the outgoing track.
     automix: Arc<AtomicBool>,
+    /// AutoMix DJ mode (phrase mixes, EQ bass swap, echo out).
+    automix_dj: Arc<AtomicBool>,
+    /// DJ move planned for the blend being started: (out id, in id, plan).
+    dj_plan: Arc<Mutex<Option<(String, String, crate::automix::DjPlan)>>>,
+    /// Last DJ move played, so the set stays varied.
+    last_dj: Arc<Mutex<Option<crate::transition::DjStyle>>>,
     waveform: Arc<AtomicBool>,
     /// Live crossfade progress‰ from the mixer (0 = idle).
     xf_milli: Arc<AtomicU32>,
@@ -246,6 +256,9 @@ impl Player {
             audible: Arc::new(Mutex::new(String::new())),
             auto_dj: Arc::new(AtomicBool::new(false)),
             automix: Arc::new(AtomicBool::new(false)),
+            automix_dj: Arc::new(AtomicBool::new(false)),
+            dj_plan: Arc::new(Mutex::new(None)),
+            last_dj: Arc::new(Mutex::new(None)),
             waveform: Arc::new(AtomicBool::new(false)),
             xf_milli,
             xfade_from,
@@ -581,6 +594,13 @@ impl Player {
                     XfHints {
                         out: self.cached(&out_id),
                         inc: self.cached(&in_id),
+                        dj: self
+                            .dj_plan
+                            .lock()
+                            .take()
+                            .filter(|(o, i, _)| *o == out_id && *i == in_id)
+                            .map(|(_, _, p)| p),
+                        normalized: self.normalize.lock().is_some(),
                     }
                 } else {
                     XfHints::default()
@@ -640,8 +660,18 @@ impl Player {
         self.waveform.store(on, Ordering::Relaxed);
     }
 
-    pub fn set_automix(&self, on: bool) {
+    pub fn set_automix(&self, on: bool, style: crate::automix::Style) {
         self.automix.store(on, Ordering::Relaxed);
+        self.automix_dj
+            .store(style == crate::automix::Style::Dj, Ordering::Relaxed);
+    }
+
+    fn automix_style(&self) -> crate::automix::Style {
+        if self.automix_dj.load(Ordering::Relaxed) {
+            crate::automix::Style::Dj
+        } else {
+            crate::automix::Style::Normal
+        }
     }
 
     pub fn automix_on(&self) -> bool {
@@ -770,10 +800,22 @@ impl Player {
             0.0
         };
         // AutoMix: start where the outgoing track's analysis says (outro,
-        // bar line, music end) with a length to match.
-        let mix = (xf && self.automix.load(Ordering::Relaxed)).then(|| {
-            let id = s.track.as_ref().map(|t| t.id.clone()).unwrap_or_default();
-            crate::automix::mix_point(self.cached(&id).as_ref(), s.duration)
+        // bar line, music end) with a length to match. DJ mode plans a move
+        // from both songs.
+        let automix = xf && self.automix.load(Ordering::Relaxed);
+        let out_id = s.track.as_ref().map(|t| t.id.clone()).unwrap_or_default();
+        let out_a = if automix { self.cached(&out_id) } else { None };
+        let dj = (automix && self.automix_style() == crate::automix::Style::Dj)
+            .then(|| {
+                let max_pct = self.xf_cfg.lock().bpm_max_pct as f64;
+                let inc = self.cached(&track.id);
+                let prev = *self.last_dj.lock();
+                crate::automix::dj_plan(out_a.as_ref()?, inc.as_ref(), s.duration, max_pct, prev)
+            })
+            .flatten();
+        let mix = automix.then(|| match dj {
+            Some(p) => crate::automix::MixPoint { start_s: p.start_s, secs: p.secs },
+            None => crate::automix::mix_point(out_a.as_ref(), s.duration),
         });
         let lead = match mix {
             Some(m) => (s.duration - m.start_s).max(0.0) + extra,
@@ -790,6 +832,8 @@ impl Player {
             return None;
         }
         self.blending.store(true, Ordering::Relaxed);
+        *self.dj_plan.lock() = dj.map(|p| (out_id, track.id.clone(), p));
+        *self.last_dj.lock() = dj.map(|p| p.style);
         let style = if let Some(m) = mix {
             // Starting late (seek near the end, analysis arrived late):
             // fit the blend into what is left.
@@ -1848,6 +1892,10 @@ fn prepare_transition(
     if cfg.smart {
         skip = lead_silence.min(8 * sr as u64);
     }
+    // DJ mode: outgoing beat period (source frames) and whether the tempos
+    // could be matched decide between an EQ mix and an echo out.
+    let mut out_period: Option<f64> = None;
+    let mut matched = false;
     if cfg.bpm_match {
         // Outgoing: the live tap when it heard enough, else the cached
         // grid of the track's ending (e.g. a skip right after it started).
@@ -1862,10 +1910,12 @@ fn prepare_transition(
             Some((g.bpm * rate, g.period_s() * out_sr, g.phase_s * out_sr))
         };
         let outb = live.or_else(cached);
+        out_period = outb.map(|b| b.1);
         match (outb, in_beat) {
             (Some((o_bpm, o_period, o_phase)), Some((i_bpm, i_phase))) => {
                 if let Some((rate, eff)) = match_rate(o_bpm, i_bpm, cfg.bpm_max_pct as f64) {
                     plan.in_rate = rate;
+                    matched = true;
                     eprintln!(
                         "bpm: out {:.1} / in {:.1} (as {:.1}) → incoming at {:.2}%{}",
                         o_bpm,
@@ -1892,6 +1942,78 @@ fn prepare_transition(
             }
             _ => eprintln!("bpm: tempo unclear, crossfading without matching"),
         }
+    }
+    if cfg.shape.dj == crate::transition::DjStyle::Auto {
+        use crate::transition::DjStyle;
+        let (_, _, out_sr) = tap.outgoing_clock();
+        let out_sr = out_sr.max(1) as f64;
+        let planned = hints.dj;
+        let mut style = match planned {
+            Some(p) => p.style,
+            // A skip, or no plan: decide from what was heard.
+            None if matched => DjStyle::EqSwap,
+            None if out_period.is_some() => DjStyle::EchoOut,
+            None => DjStyle::Off,
+        };
+        // The beatmatch the plan counted on did not happen live.
+        if style == DjStyle::EqSwap && !matched {
+            style = if out_period.is_some() || planned.is_some() {
+                DjStyle::EchoOut
+            } else {
+                DjStyle::Off
+            };
+        }
+        if style.active() {
+            // Come in straight on the drop (or past a quiet intro) when that
+            // part is downloaded.
+            let at = planned
+                .and_then(|p| if p.style == style { p.in_start_s } else { p.entry_s })
+                .filter(|t| *t > start);
+            let dur = hints.inc.as_ref().map(|a| a.duration_s as f64).unwrap_or(0.0);
+            let ready = |t: f64| audio.is_complete() || audio.buffered_secs(dur) >= t + 20.0;
+            match at.filter(|t| ready(*t)) {
+                Some(t) => skip = ((t - start) * sr_f).round() as u64,
+                None if style == DjStyle::Drop => style = DjStyle::EchoOut,
+                None => {}
+            }
+        }
+        // Gain-match the new song to the old one like a DJ's trim knob
+        // (unless normalization already levels them); it glides back to its
+        // own level after the mix.
+        if !hints.normalized {
+            if let (Some(o), Some(i)) = (hints.out.as_ref(), hints.inc.as_ref()) {
+                let db = (o.lufs - i.lufs).clamp(-8.0, 4.0);
+                if db.is_finite() && db.abs() >= 1.0 {
+                    plan.level_trim = 10f32.powf(db / 20.0);
+                }
+            }
+        }
+        plan.shape.dj = style;
+        if style.active() {
+            let beat_frames = out_period
+                .or_else(|| planned.map(|p| p.beat_s * out_sr))
+                .filter(|p| *p > 0.0);
+            if let Some(p) = planned {
+                plan.shape.secs = plan.shape.secs.min(p.secs);
+                plan.start_at = Some(p.start_s * out_sr);
+            } else if style == DjStyle::EchoOut {
+                // Unplanned echo out (a skip): a bar or two of build.
+                let beat_s = beat_frames.map(|f| f / out_sr).unwrap_or(0.5);
+                let build = (4.0 * beat_s).clamp(1.5, 3.0) as f32;
+                plan.shape.secs = plan.shape.secs.min(build / DjStyle::ECHO_CUT);
+            }
+            if style.cut().is_some() {
+                // Echo on the dotted eighth of the old song's beat.
+                let f = beat_frames.unwrap_or(0.5 * out_sr);
+                plan.echo_frames = (0.75 * f).round().clamp(1.0, 2.0 * out_sr) as u32;
+            }
+        }
+        eprintln!(
+            "automix dj: {:?}, {:.1}s{}",
+            style,
+            plan.shape.secs,
+            if style == DjStyle::Drop { format!(", in at {:.1}s", (start * sr_f + skip as f64) / sr_f) } else { String::new() }
+        );
     }
     if skip > 0 {
         let skip_secs = skip as f64 / sr_f;
@@ -2159,5 +2281,119 @@ mod reorder_tests {
         // Never touches the current track.
         let w0: Vec<String> = ["t0", "t1"].iter().map(|s| s.to_string()).collect();
         assert!(!p.reorder_window(0, &w0, &w0));
+    }
+}
+
+#[cfg(test)]
+mod dj_render {
+    //! Offline render of AutoMix DJ transitions between real cached songs,
+    //! for listening and level checks:
+    //! `TARN_DATA=~/.local/share/tarn TARN_OUT=/tmp/x cargo test --lib
+    //! dj_render -- --ignored --nocapture`
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
+
+    fn wav(path: &std::path::Path, sr: u32, ch: u16, s: &[i16]) {
+        let mut b = Vec::with_capacity(44 + s.len() * 2);
+        let data = (s.len() * 2) as u32;
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + data).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&ch.to_le_bytes());
+        b.extend_from_slice(&sr.to_le_bytes());
+        b.extend_from_slice(&(sr * ch as u32 * 2).to_le_bytes());
+        b.extend_from_slice(&(ch * 2).to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&data.to_le_bytes());
+        for v in s {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    fn body(dir: &std::path::Path, id: &str) -> Arc<crate::decode::GrowingBody> {
+        let bytes = std::fs::read(dir.join("audio-cache").join(format!("{id}.m4a"))).unwrap();
+        crate::decode::GrowingBody::from_complete(bytes)
+    }
+
+    #[test]
+    #[ignore]
+    fn render_dj_transitions() {
+        use crate::automix::{config, dj_plan, Style};
+        use crate::transition::DjStyle;
+        let dir = std::path::PathBuf::from(std::env::var("TARN_DATA").expect("TARN_DATA"));
+        let out_dir = std::path::PathBuf::from(std::env::var("TARN_OUT").expect("TARN_OUT"));
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let db: HashMap<String, TrackAnalysis> =
+            serde_json::from_slice(&std::fs::read(dir.join("analysis.json")).unwrap()).unwrap();
+        let mut ids: Vec<&String> = db.keys().collect();
+        ids.sort();
+        let want = std::env::var("TARN_PER_STYLE").ok().and_then(|v| v.parse().ok()).unwrap_or(2usize);
+        let mut done: HashMap<DjStyle, usize> = HashMap::new();
+        for (i, o) in ids.iter().enumerate() {
+            let inc_id = ids[(i + 1) % ids.len()];
+            let (oa, ia) = (db[*o].clone(), db[inc_id].clone());
+            let dur = oa.duration_s as f64;
+            let Some(plan) = dj_plan(&oa, Some(&ia), dur, 10.0, None) else { continue };
+            let n = done.entry(plan.style).or_default();
+            if *n >= want {
+                continue;
+            }
+            *n += 1;
+            let mut cfg = config(&XfConfig::simple(6.0), Style::Dj);
+            cfg.shape.secs = plan.secs;
+            let mixer = crate::mix::Mixer::new(
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU32::new(44100)),
+                Arc::new(AtomicU32::new(2)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicU8::new(0)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicU32::new(0)),
+                Arc::new(AtomicU32::new(0)),
+            );
+            let t0 = (plan.start_s - 10.0).max(0.0);
+            mixer.play(crate::decode::open(body(&dir, o), t0).unwrap(), 0.01);
+            mixer.set_origin(t0);
+            let tap = mixer.tap();
+            tap.set_analysis(true);
+            let mut src = mixer.source();
+            let (_, _, sr) = tap.outgoing_clock();
+            let ch = 2usize;
+            let mut pcm: Vec<i16> = Vec::new();
+            while tap.outgoing_clock().0 < (plan.start_s - 1.2) * sr as f64 {
+                pcm.push(src.next().unwrap());
+            }
+            let hints = XfHints { out: Some(oa.clone()), inc: Some(ia.clone()), dj: Some(plan), normalized: false };
+            let (isrc, xplan) = prepare_transition(body(&dir, inc_id), 0.0, &cfg, &tap, &hints).unwrap();
+            let style = xplan.shape.dj;
+            mixer.crossfade_plan(isrc, xplan);
+            let total = ((plan.secs as f64 + 16.0) * sr as f64) as usize * ch;
+            for _ in 0..total {
+                pcm.push(src.next().unwrap());
+            }
+            // Loudness timeline (0.5 s RMS, dBFS) and clipping.
+            let win = sr as usize / 2 * ch;
+            let line: Vec<String> = pcm
+                .chunks(win)
+                .map(|c| {
+                    let r = (c.iter().map(|&v| (v as f64).powi(2)).sum::<f64>() / c.len() as f64).sqrt();
+                    format!("{:.0}", 20.0 * (r / 32768.0).max(1e-6).log10())
+                })
+                .collect();
+            let clipped = pcm.iter().filter(|v| v.unsigned_abs() >= 32760).count();
+            let name = format!("{:?}-{}-{}.wav", style, &o[..4], &inc_id[..4]);
+            println!(
+                "{name}: planned {:?} start {:.2}s secs {:.1} in_at {:?} lufs {:.1}/{:.1}; clipped {clipped}\n  dB/0.5s (from {:.1}s): {}",
+                plan.style, plan.start_s, plan.secs, plan.in_start_s, oa.lufs, ia.lufs, t0, line.join(" ")
+            );
+            wav(&out_dir.join(name), sr, ch as u16, &pcm);
+        }
     }
 }

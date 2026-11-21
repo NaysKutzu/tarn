@@ -276,6 +276,8 @@ export interface Settings {
   bg_video_dim?: number;
   /** DJ-style transitions (timing per song, tempo/beat matching, bass swap). */
   automix?: boolean;
+  /** AutoMix style: smooth blends, or club-style phrase mixes with an EQ bass swap. */
+  automix_mode?: 'normal' | 'dj';
   /** Desktop frosted-glass strength 0..=100 (0 = off). */
   transparency?: number;
   /** Inset chrome panels with gaps and rounded corners. */

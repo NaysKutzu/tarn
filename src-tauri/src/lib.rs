@@ -161,7 +161,7 @@ impl App {
         };
         let player = Player::start();
         player.set_autoplay(settings.autoplay);
-        player.set_automix(settings.automix);
+        player.set_automix(settings.automix, settings.automix_style());
         player.set_crossfade(
             settings.xf_on(),
             settings.xf_secs(),
@@ -2080,7 +2080,7 @@ fn set_settings(app: State<Arc<App>>, handle: AppHandle, settings: Settings) {
     *app.notify.lock() = settings.notifications;
     *app.discord.lock() = settings.discord_presence;
     app.player.set_autoplay(settings.autoplay);
-    app.player.set_automix(settings.automix);
+    app.player.set_automix(settings.automix, settings.automix_style());
     app.player.set_crossfade(
         settings.xf_on(),
         settings.xf_secs(),

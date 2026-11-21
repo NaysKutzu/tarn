@@ -86,6 +86,157 @@ impl FilterSweep {
     }
 }
 
+/// How AutoMix's DJ mode performs a transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum DjStyle {
+    /// Plain curves and filter sweep (manual crossfade, AutoMix Normal).
+    #[default]
+    Off,
+    /// DJ mode requested; the transition code picks one of the styles below
+    /// once it knows whether the tempos match (the mixer treats it as Off).
+    Auto,
+    /// Beatmatched EQ mix: the incoming track comes up with its bass cut,
+    /// both play together, the bass lines swap on the middle bar, then the
+    /// outgoing track is faded and darkened out.
+    EqSwap,
+    /// Tempos too far apart to beatmatch: the outgoing track is thinned out
+    /// into a beat-synced echo, cut, and the next song comes in under the
+    /// echo tail.
+    EchoOut,
+    /// Build and drop: the outgoing track rises (high-pass sweep, noise
+    /// riser, echo), is cut on the bar, and the next song slams in with
+    /// full bass, usually straight on its hook.
+    Drop,
+}
+
+impl DjStyle {
+    /// Where the outgoing track is cut, as a fraction of the window.
+    pub const ECHO_CUT: f32 = 0.25;
+    pub const DROP_CUT: f32 = 0.4;
+
+    pub fn active(self) -> bool {
+        matches!(self, DjStyle::EqSwap | DjStyle::EchoOut | DjStyle::Drop)
+    }
+
+    /// Fraction of the window before the incoming track starts playing
+    /// (it is held, not pre-rolled, so it starts exactly where planned).
+    pub fn cut(self) -> Option<f32> {
+        match self {
+            DjStyle::EchoOut => Some(Self::ECHO_CUT),
+            DjStyle::Drop => Some(Self::DROP_CUT),
+            _ => None,
+        }
+    }
+}
+
+/// Levels of one DJ transition at window progress `t` (0..=1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DjLevels {
+    /// Fader gains of the outgoing (dry) and incoming decks.
+    pub out_gain: f32,
+    pub in_gain: f32,
+    /// Outgoing low cut (high-pass corner, Hz; ~20 = open).
+    pub out_hp: f32,
+    /// Outgoing high cut (low-pass corner, Hz; ~18 k = open).
+    pub out_lp: f32,
+    /// Incoming low cut (high-pass corner, Hz; ~20 = open).
+    pub in_hp: f32,
+    /// How much of the outgoing deck feeds the echo, and the echo's level.
+    pub echo_send: f32,
+    pub echo_gain: f32,
+    /// Noise riser level 0..=1 and its high-pass corner (Hz).
+    pub riser: f32,
+    pub riser_hz: f32,
+}
+
+pub const DJ_OPEN_HP: f32 = 20.0;
+pub const DJ_OPEN_LP: f32 = 18_000.0;
+/// Bass kill corner: a 12 dB/oct high-pass here takes ~25 dB off the kick.
+const DJ_KILL_HZ: f32 = 240.0;
+
+/// Smooth 0→1 ramp of `t` over `[a, b]`.
+fn ramp(t: f32, a: f32, b: f32) -> f32 {
+    let x = ((t - a) / (b - a).max(1e-6)).clamp(0.0, 1.0);
+    0.5 - 0.5 * (std::f32::consts::PI * x).cos()
+}
+
+pub fn dj_levels(style: DjStyle, t: f32) -> DjLevels {
+    let t = t.clamp(0.0, 1.0);
+    let open = DjLevels {
+        out_gain: 1.0 - t,
+        in_gain: t,
+        out_hp: DJ_OPEN_HP,
+        out_lp: DJ_OPEN_LP,
+        in_hp: DJ_OPEN_HP,
+        echo_send: 0.0,
+        echo_gain: 0.0,
+        riser: 0.0,
+        riser_hz: 400.0,
+    };
+    match style {
+        DjStyle::Drop => {
+            let cut = DjStyle::DROP_CUT;
+            let build = (t / cut).clamp(0.0, 1.0);
+            let before = 1.0 - ramp(t, cut - 0.006, cut);
+            DjLevels {
+                // Old song rides the build to the very end, then gone.
+                out_gain: before,
+                // New song slams in on the cut, full bass.
+                in_gain: ramp(t, cut, cut + 0.004),
+                out_hp: sweep_hz(DJ_OPEN_HP, 1400.0, build * build),
+                out_lp: DJ_OPEN_LP,
+                in_hp: DJ_OPEN_HP,
+                echo_send: ramp(t, cut * 0.35, cut) * before,
+                echo_gain: 0.8 * (1.0 - ramp(t, 0.55, 1.0)),
+                riser: build * build * build * before,
+                riser_hz: sweep_hz(300.0, 7000.0, build),
+            }
+        }
+        DjStyle::EchoOut => {
+            let cut = DjStyle::ECHO_CUT;
+            let before = 1.0 - ramp(t, cut - 0.02, cut);
+            DjLevels {
+                out_gain: before,
+                in_gain: ramp(t, cut, cut + 0.01),
+                out_hp: sweep_hz(DJ_OPEN_HP, 600.0, ramp(t, 0.0, cut)),
+                out_lp: DJ_OPEN_LP,
+                in_hp: sweep_hz(300.0, DJ_OPEN_HP, ramp(t, cut, cut + 0.1)),
+                echo_send: ramp(t, 0.0, cut) * before,
+                echo_gain: 0.9 * (1.0 - ramp(t, 0.5, 1.0)),
+                ..open
+            }
+        }
+        DjStyle::EqSwap => {
+            // Short blend: the new song's fader comes up with its bass
+            // killed, the bass lines swap on the middle bar (the window is a
+            // whole, even number of bars), then the old song fades out.
+            let s = ramp(t, 0.495, 0.52);
+            DjLevels {
+                out_gain: 1.0 - ramp(t, 0.55, 1.0),
+                in_gain: ramp(t, 0.0, 0.45),
+                out_hp: sweep_hz(DJ_OPEN_HP, DJ_KILL_HZ, s),
+                out_lp: sweep_hz(DJ_OPEN_LP, 1200.0, ramp(t, 0.7, 1.0)),
+                in_hp: sweep_hz(DJ_KILL_HZ, DJ_OPEN_HP, s),
+                ..open
+            }
+        }
+        DjStyle::Off | DjStyle::Auto => open,
+    }
+}
+
+/// Soft knee above ~0.8 full scale so two full-level decks never hard-clip.
+pub fn soft_clip(x: f32) -> f32 {
+    const FS: f32 = i16::MAX as f32;
+    const KNEE: f32 = 0.8 * FS;
+    let a = x.abs();
+    if a <= KNEE {
+        x
+    } else {
+        let room = FS - KNEE;
+        (KNEE + room * ((a - KNEE) / room).tanh()).copysign(x)
+    }
+}
+
 /// Everything the mixer needs to shape one crossfade.
 #[derive(Clone, Debug, PartialEq)]
 pub struct XfShape {
@@ -99,6 +250,8 @@ pub struct XfShape {
     /// the rise sits at the *start* of the window.
     pub in_len: f32,
     pub filter: FilterSweep,
+    /// AutoMix DJ mode: EQ bass swap / echo out instead of plain curves.
+    pub dj: DjStyle,
 }
 
 impl XfShape {
@@ -111,6 +264,7 @@ impl XfShape {
             out_len: 1.0,
             in_len: 1.0,
             filter: FilterSweep::Off,
+            dj: DjStyle::Off,
         }
     }
 
@@ -945,6 +1099,47 @@ mod tests {
                 prev = g;
             }
         }
+    }
+
+    #[test]
+    fn eq_swap_trades_the_bass_on_the_middle_bar() {
+        let before = dj_levels(DjStyle::EqSwap, 0.47);
+        let after = dj_levels(DjStyle::EqSwap, 0.53);
+        assert!(before.out_hp < 25.0 && before.in_hp > 200.0);
+        assert!(before.out_gain > 0.99 && before.in_gain > 0.99);
+        assert!(after.out_hp > 200.0 && after.in_hp < 25.0);
+        let end = dj_levels(DjStyle::EqSwap, 1.0);
+        assert!(end.out_gain < 1e-4 && end.in_gain > 0.999);
+        let start = dj_levels(DjStyle::EqSwap, 0.0);
+        assert!(start.out_gain > 0.999 && start.in_gain < 1e-4);
+    }
+
+    #[test]
+    fn echo_out_cuts_the_dry_track_and_lets_the_echo_ring() {
+        let l = dj_levels(DjStyle::EchoOut, 0.4);
+        assert!(l.out_gain < 1e-4, "dry still up: {}", l.out_gain);
+        assert!(l.echo_gain > 0.5 && l.echo_send < 1e-4);
+        assert!(l.in_gain > 0.999);
+        assert!(dj_levels(DjStyle::EchoOut, 1.0).echo_gain < 1e-4);
+    }
+
+    #[test]
+    fn drop_builds_then_slams_in_on_the_cut() {
+        let c = DjStyle::DROP_CUT;
+        let build = dj_levels(DjStyle::Drop, c - 0.02);
+        assert!(build.out_gain > 0.99 && build.in_gain < 1e-4);
+        assert!(build.riser > 0.6 && build.out_hp > 800.0);
+        let drop = dj_levels(DjStyle::Drop, c + 0.01);
+        assert!(drop.out_gain < 1e-4 && drop.in_gain > 0.999);
+        assert!(drop.riser < 1e-4 && drop.in_hp <= DJ_OPEN_HP);
+        assert!(drop.echo_gain > 0.5);
+    }
+
+    #[test]
+    fn soft_clip_is_transparent_below_the_knee_and_bounded() {
+        assert_eq!(soft_clip(1000.0), 1000.0);
+        assert!(soft_clip(80_000.0) <= i16::MAX as f32);
+        assert!(soft_clip(-80_000.0) >= -(i16::MAX as f32));
     }
 
     #[test]

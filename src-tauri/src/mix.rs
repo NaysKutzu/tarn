@@ -17,7 +17,7 @@ use rodio::Source;
 
 use crate::decode::{AudioSource, Pull};
 use crate::transition::{
-    frames_to_next_beat, sweep_hz, Beat, Biquad, EnvBuilder, FrameRes, Vari, XfShape, SILENCE,
+    dj_levels, frames_to_next_beat, soft_clip, sweep_hz, Beat, Biquad, EnvBuilder, FrameRes, Vari, XfShape, SILENCE,
 };
 
 /// Seconds of the outgoing track kept for live tempo analysis.
@@ -45,7 +45,18 @@ pub struct XfPlan {
     /// Track time (seconds) the incoming decoder was opened at, before
     /// `skipped_frames`.
     pub origin_s: f64,
+    /// Outgoing source frame (same clock as `out_grid`) the overlap should
+    /// start on, e.g. AutoMix DJ mode's bar line. Wins over `out_grid`
+    /// when it is only a few seconds ahead.
+    pub start_at: Option<f64>,
+    /// DJ echo out: echo delay in output frames (0 = no echo).
+    pub echo_frames: u32,
+    /// Extra gain on the incoming deck during the mix (DJ gain matching);
+    /// it glides back to 1 over `TRIM_RETURN_SECS` once the mix is done.
+    pub level_trim: f32,
 }
+
+const TRIM_RETURN_SECS: f32 = 20.0;
 
 impl XfPlan {
     pub fn simple(secs: f32) -> Self {
@@ -58,9 +69,15 @@ impl XfPlan {
             smart: false,
             keylock: false,
             origin_s: 0.0,
+            start_at: None,
+            echo_frames: 0,
+            level_trim: 1.0,
         }
     }
 }
+
+/// Echo feedback for the DJ echo out (each repeat ~5 dB quieter).
+const ECHO_FEEDBACK: f32 = 0.55;
 use crate::eq::Eq;
 
 /// Fade used for play / pause / resume / seek / skip (~150-300 ms).
@@ -162,6 +179,16 @@ struct Inner {
     return_secs: f32,
     lp_out: Vec<Biquad>,
     hp_in: Vec<Biquad>,
+    /// DJ transitions: outgoing low cut, and the echo delay line per channel.
+    hp_out: Vec<Biquad>,
+    echo: Vec<Vec<f32>>,
+    echo_i: usize,
+    /// Output frames the incoming deck stays parked at the start of a DJ
+    /// cut (drop / echo out), so it starts exactly on the cut.
+    inc_hold: u32,
+    /// Noise riser: its sweeping high-pass and noise state.
+    riser_f: Biquad,
+    rng: u32,
     /// Live envelope of the current track for tempo analysis (None = off).
     tap: Option<EnvBuilder>,
     quiet_run: u32,
@@ -172,6 +199,8 @@ struct Inner {
     cur_gain_tgt: f32,
     cur_gain_step: f32,
     inc_gain: f32,
+    /// Incoming gain to glide to once it is promoted (DJ gain matching).
+    inc_gain_after: f32,
     /// Gain for the next deck that gets loaded.
     next_gain: f32,
     /// Source frames since track start for the current / incoming deck.
@@ -240,6 +269,12 @@ impl Mixer {
                 return_secs: 8.0,
                 lp_out: Vec::new(),
                 hp_in: Vec::new(),
+                hp_out: Vec::new(),
+                echo: Vec::new(),
+                echo_i: 0,
+                inc_hold: 0,
+                riser_f: Biquad::default(),
+                rng: 0x9e37_79b9,
                 tap: None,
                 quiet_run: 0,
                 clock_acc: 0.0,
@@ -247,6 +282,7 @@ impl Mixer {
                 cur_gain_tgt: 1.0,
                 cur_gain_step: 0.0,
                 inc_gain: 1.0,
+                inc_gain_after: 1.0,
                 next_gain: 1.0,
                 cur_pos: 0.0,
                 inc_pos: 0.0,
@@ -406,7 +442,7 @@ impl Mixer {
             g.cur_pos = plan.origin_s * g.sr as f64 + plan.skipped_frames as f64;
             return;
         }
-        let mut secs = plan.shape.secs.clamp(0.05, 20.0);
+        let mut secs = plan.shape.secs.clamp(0.05, crate::automix::MAX_BLEND_SECS);
         // Smart start: the outgoing track already went quiet - don't make
         // the listener sit through a long fade-in from silence.
         if plan.smart && g.quiet_run as f32 > 0.5 * g.sr as f32 {
@@ -414,6 +450,9 @@ impl Mixer {
         }
         g.incoming = Some(src);
         g.inc_gain = std::mem::replace(&mut g.next_gain, 1.0);
+        let trim = if plan.level_trim.is_finite() { plan.level_trim.clamp(0.3, 2.0) } else { 1.0 };
+        g.inc_gain_after = g.inc_gain;
+        g.inc_gain *= trim;
         g.inc_pos = plan.origin_s * g.sr as f64 + plan.skipped_frames as f64;
         g.xf_len = (secs * g.sr as f32).round().max(1.0) as u32;
         g.xf_pos = 0;
@@ -426,6 +465,11 @@ impl Mixer {
         }
         g.shape = plan.shape.clone();
         g.shape.secs = secs;
+        g.inc_hold = match plan.shape.dj.cut() {
+            Some(c) => (c * g.xf_len as f32).round() as u32,
+            None => 0,
+        };
+        g.riser_f = Biquad::default();
         g.return_secs = plan.return_secs;
         g.inc_vari = if plan.keylock {
             Vari::keylocked(plan.in_rate, sr)
@@ -434,8 +478,22 @@ impl Mixer {
         };
         g.lp_out = vec![Biquad::default(); ch as usize];
         g.hp_in = vec![Biquad::default(); ch as usize];
+        g.hp_out = vec![Biquad::default(); ch as usize];
+        g.echo = if plan.echo_frames > 0 && plan.shape.dj.active() {
+            vec![vec![0.0; plan.echo_frames as usize]; ch as usize]
+        } else {
+            Vec::new()
+        };
+        g.echo_i = 0;
         g.xf_wait = 0;
-        if let Some((period, phase)) = plan.out_grid {
+        let rate = g.cur_vari.rate.max(0.5);
+        let exact = plan.start_at.map(|f| (f - g.cur_pos) / rate).filter(|w| {
+            // Only a few seconds ahead; otherwise fall back to the next beat.
+            *w >= 0.0 && *w <= 4.0 * g.sr as f64
+        });
+        if let Some(w) = exact {
+            g.xf_wait = w.round() as u32;
+        } else if let Some((period, phase)) = plan.out_grid {
             let wait = frames_to_next_beat(g.cur_pos, phase, period);
             let rate = g.cur_vari.rate.max(0.5);
             // Never hold the overlap back by more than a beat (or 1 s).
@@ -660,8 +718,14 @@ impl Inner {
         self.current = self.incoming.take();
         self.cur_vari = std::mem::take(&mut self.inc_vari);
         self.cur_gain = std::mem::replace(&mut self.inc_gain, 1.0);
+        let after = std::mem::replace(&mut self.inc_gain_after, 1.0);
         self.cur_gain_tgt = self.cur_gain;
         self.cur_gain_step = 0.0;
+        if (after - self.cur_gain).abs() > 1e-3 {
+            self.cur_gain_tgt = after;
+            let frames = TRIM_RETURN_SECS * self.sr.max(1) as f32;
+            self.cur_gain_step = ((after - self.cur_gain).abs() / frames).max(1e-7);
+        }
         self.cur_pos = self.inc_pos;
         self.inc_pos = 0.0;
         if self.cur_vari.active() {
@@ -669,6 +733,7 @@ impl Inner {
             self.cur_vari.ramp_to(1.0, secs, sr);
         }
         self.xf_wait = 0;
+        self.inc_hold = 0;
         self.quiet_run = 0;
         self.clock_acc = 0.0;
         if let Some(t) = self.tap.as_mut() {
@@ -795,6 +860,7 @@ impl MixerSource {
         let mut b_buf = false;
         // Beat alignment: the outgoing track plays alone until its next beat.
         let waiting = g.xf_len > 0 && g.xf_wait > 0 && g.incoming.is_some();
+        let mut held = false;
         if !frozen {
             if let Some(src) = g.current.as_mut() {
                 a_alive = true;
@@ -837,7 +903,11 @@ impl MixerSource {
             }
             // Only consume the incoming decoder during a crossfade. For
             // gapless, it stays queued and starts the instant current ends.
-            if g.xf_len > 0 && (!waiting || !a_alive) {
+            if g.xf_len > 0 && (!waiting || !a_alive) && g.inc_hold > 0 && a_alive {
+                // DJ cut: the new song waits, silent, for its moment.
+                g.inc_hold -= 1;
+                held = true;
+            } else if g.xf_len > 0 && (!waiting || !a_alive) {
                 if let Some(src) = g.incoming.as_mut() {
                     b_alive = true;
                     match g.inc_vari.pull(&mut b, |f| pull_raw(src, f)) {
@@ -878,7 +948,62 @@ impl MixerSource {
             // loudness constant.
             let (go, gi) = g.shape.gains(t);
             let filter = g.shape.filter;
-            if filter.lowpass_out() || filter.highpass_in() {
+            let dj = g.shape.dj;
+            let dj_on = dj.active()
+                && g.hp_out.len() >= ch
+                && g.hp_in.len() >= ch
+                && g.lp_out.len() >= ch;
+            if dj_on {
+                // DJ transition: three filters, an echo, faders.
+                let l = dj_levels(dj, t);
+                if g.xf_pos.is_multiple_of(32) {
+                    let sr = g.sr as f32;
+                    for f in g.hp_out.iter_mut() {
+                        f.set_highpass(l.out_hp, sr);
+                    }
+                    for f in g.lp_out.iter_mut() {
+                        f.set_lowpass(l.out_lp, sr);
+                    }
+                    for f in g.hp_in.iter_mut() {
+                        f.set_highpass(l.in_hp, sr);
+                    }
+                }
+                // Both decks near full level mid-mix: a little headroom.
+                let trim = 1.0 - 0.15 * l.out_gain.min(l.in_gain);
+                let echo_on = g.echo.len() >= ch;
+                let ei = g.echo_i;
+                // Noise riser (mono), high-passed on a rising sweep.
+                let noise = if l.riser > 1e-4 {
+                    if g.xf_pos.is_multiple_of(32) {
+                        let sr = g.sr as f32;
+                        g.riser_f.set_highpass(l.riser_hz, sr);
+                    }
+                    g.rng ^= g.rng << 13;
+                    g.rng ^= g.rng >> 17;
+                    g.rng ^= g.rng << 5;
+                    let n = (g.rng as f32 / u32::MAX as f32) * 2.0 - 1.0;
+                    g.riser_f.process(n * 0.09 * i16::MAX as f32 * l.riser)
+                } else {
+                    0.0
+                };
+                for i in 0..ch {
+                    let va = g.lp_out[i].process(g.hp_out[i].process(a[i] as f32));
+                    let vb = g.hp_in[i].process(b[i] as f32);
+                    let mut wet = 0.0;
+                    if echo_on {
+                        let line = &mut g.echo[i];
+                        let y = line[ei];
+                        line[ei] = va * l.echo_send + y * ECHO_FEEDBACK;
+                        wet = y * l.echo_gain;
+                    }
+                    let v = (va * l.out_gain + wet + vb * l.in_gain + noise) * trim;
+                    mixed[i] = soft_clip(v).round() as i16;
+                }
+                if echo_on {
+                    let n = g.echo[0].len().max(1);
+                    g.echo_i = (ei + 1) % n;
+                }
+            } else if filter.lowpass_out() || filter.highpass_in() {
                 let sr = g.sr as f32;
                 if g.xf_pos.is_multiple_of(32) {
                     let to = g.shape.out_progress(t);
@@ -909,12 +1034,15 @@ impl MixerSource {
                     }
                 }
             }
-            for i in 0..ch {
-                let va = a[i] as f32 * go;
-                let vb = b[i] as f32 * gi;
-                mixed[i] = (va + vb).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+            if !dj_on {
+                for i in 0..ch {
+                    let va = a[i] as f32 * go;
+                    let vb = b[i] as f32 * gi;
+                    mixed[i] = (va + vb).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                }
             }
-            clock_rate = g.inc_vari.rate;
+            // The new song's clock starts when it does.
+            clock_rate = if held { 0.0 } else { g.inc_vari.rate };
             g.xf_pos = g.xf_pos.saturating_add(1);
             if g.xf_pos >= g.xf_len || !a_alive {
                 let was_ui = g.xf_ui;

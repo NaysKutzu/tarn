@@ -458,5 +458,11 @@
   "AutoMix: mixing…": "AutoMix: mixează…",
   "AutoMix on: songs blend like a DJ set": "AutoMix pornit: melodiile se mixează ca la un DJ",
   "AutoMix off": "AutoMix oprit",
-  "Blends songs like a DJ: picks the moment (outro, bar lines) and length for every song, matches tempo without changing the key, lines up the beats and swaps the bass. Overrides the crossfade settings below while on": "Mixează melodiile ca un DJ: alege momentul (outro, începutul unei măsuri) și lungimea pentru fiecare melodie, potrivește tempo-ul fără să schimbe tonalitatea, aliniază bătăile și face schimbul de bas. Cât e pornit, înlocuiește setările de crossfade de mai jos"
+  "Blends songs like a DJ: picks the moment (outro, bar lines) and length for every song, matches tempo without changing the key, lines up the beats and swaps the bass. Overrides the crossfade settings below while on": "Mixează melodiile ca un DJ: alege momentul (outro, începutul unei măsuri) și lungimea pentru fiecare melodie, potrivește tempo-ul fără să schimbe tonalitatea, aliniază bătăile și face schimbul de bas. Cât e pornit, înlocuiește setările de crossfade de mai jos",
+  "AutoMix style": "Stil AutoMix",
+  "Smooth blends timed to every song": "Tranziții line, potrivite fiecărei melodii",
+  "Normal": "Normal",
+  "DJ": "DJ",
+  "AutoMix DJ on: club-style mixes": "AutoMix DJ pornit: mixuri ca în club",
+  "Like a club DJ: picks a move for every song. Builds up and drops straight into the next song's hook, blends on the beat with a bass swap, or echoes out right on the phrase": "Ca un DJ în club: alege o mișcare pentru fiecare piesă. Face build-up și intră direct pe refrenul/drop-ul piesei următoare, mixează pe beat cu schimb de bas, sau iese cu ecou fix pe final de frază"
 }

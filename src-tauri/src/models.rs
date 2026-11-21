@@ -402,6 +402,10 @@ pub struct Settings {
     /// bar lines), tempo matching with keylock, beat alignment, bass swap.
     #[serde(default)]
     pub automix: bool,
+    /// AutoMix style: "normal" (smooth timed blends) or "dj" (long phrase
+    /// mixes with an EQ bass swap, echo out when tempos are too far apart).
+    #[serde(default = "default_automix_mode")]
+    pub automix_mode: String,
     /// Auto-DJ also weighs musical key (Camelot wheel) when ordering.
     #[serde(default)]
     pub harmonic_mix: bool,
@@ -511,6 +515,7 @@ impl Default for Settings {
             normalize_target: default_normalize_target(),
             auto_dj: false,
             automix: false,
+            automix_mode: default_automix_mode(),
             harmonic_mix: false,
             lyrics_karaoke: true,
             lyrics_lrclib: true,
@@ -564,10 +569,14 @@ impl Settings {
     pub fn transition(&self) -> crate::transition::XfConfig {
         let base = self.manual_transition();
         if self.automix {
-            crate::automix::config(&base)
+            crate::automix::config(&base, self.automix_style())
         } else {
             base
         }
+    }
+
+    pub fn automix_style(&self) -> crate::automix::Style {
+        crate::automix::Style::parse(&self.automix_mode)
     }
 
     fn manual_transition(&self) -> crate::transition::XfConfig {
@@ -580,6 +589,7 @@ impl Settings {
                 out_len: (self.crossfade_out_len.clamp(10.0, 100.0) / 100.0) as f32,
                 in_len: (self.crossfade_in_len.clamp(10.0, 100.0) / 100.0) as f32,
                 filter: FilterSweep::parse(&self.crossfade_filter),
+                dj: crate::transition::DjStyle::Off,
             },
             smart: self.crossfade_smart,
             bpm_match: self.bpm_match,
@@ -591,6 +601,9 @@ impl Settings {
     }
 }
 
+fn default_automix_mode() -> String {
+    "normal".into()
+}
 fn default_cache_mb() -> u64 {
     1024
 }

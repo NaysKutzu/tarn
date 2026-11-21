@@ -1377,7 +1377,9 @@
   function toggleAutoMix() {
     settings.automix = !settings.automix;
     api.setSettings(settings);
-    toast(settings.automix ? tr('AutoMix on: songs blend like a DJ set') : tr('AutoMix off'), 'info', 2200);
+    toast(settings.automix
+      ? (settings.automix_mode === 'dj' ? tr('AutoMix DJ on: club-style mixes') : tr('AutoMix on: songs blend like a DJ set'))
+      : tr('AutoMix off'), 'info', 2200);
   }
   let xfP = $derived(player.xfade ?? 0);
   let xfFromCover = $derived.by(() => {
@@ -3522,6 +3524,19 @@
             </span>
             <Toggle checked={!!settings.automix} label={tr('AutoMix')} onchange={(v) => { settings.automix = v; api.setSettings(settings); }} />
           </div>
+          {#if settings.automix}
+          <div class="set-row">
+            <span class="lb">{tr('AutoMix style')}
+              <span class="set-meta">{settings.automix_mode === 'dj'
+                ? tr("Like a club DJ: picks a move for every song. Builds up and drops straight into the next song's hook, blends on the beat with a bass swap, or echoes out right on the phrase")
+                : tr('Smooth blends timed to every song')}</span>
+            </span>
+            <Dropdown value={settings.automix_mode ?? 'normal'} options={[
+              { value: 'normal', label: tr('Normal') },
+              { value: 'dj', label: tr('DJ') },
+            ]} onchange={(v) => { settings.automix_mode = v as 'normal' | 'dj'; api.setSettings(settings); }} />
+          </div>
+          {/if}
           <div class="set-row">
             <span class="lb"><Hi icon={MusicNote01Icon} size={20} /> {tr('Crossfade')}</span>
             <Toggle bind:checked={settings.crossfade} label={tr('Crossfade')} onchange={() => api.setSettings(settings)} />
