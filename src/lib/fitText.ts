@@ -13,6 +13,10 @@ export interface FitOpts {
   min?: number;
   /** Anything that changes the text's layout (text, font, case, scale...). */
   deps?: unknown;
+  /** Runs before measuring (e.g. to drop transforms that would skew it). */
+  before?: () => void;
+  /** Runs after every fit, with the final size applied. */
+  after?: () => void;
 }
 
 export function fitText(node: HTMLElement, opts: FitOpts) {
@@ -22,6 +26,12 @@ export function fitText(node: HTMLElement, opts: FitOpts) {
 
   function run() {
     raf = 0;
+    o.before?.();
+    fit();
+    o.after?.();
+  }
+
+  function fit() {
     if (!box) return;
     const cs = getComputedStyle(box);
     const aw = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
@@ -36,13 +46,31 @@ export function fitText(node: HTMLElement, opts: FitOpts) {
       return node.scrollWidth <= node.clientWidth + 1 && node.offsetHeight <= ah + 1;
     };
     if (fits(hi)) return;
-    if (!fits(lo)) {
-      node.classList.add('fit-break');
-      // Even broken up it must not be taller than the box.
-      while (lo > 8 && !fits(lo)) lo -= 2;
-      return;
+    // Every probe is a full layout, so start from an estimate (text area
+    // grows with the square of the size, width linearly) and only search
+    // the narrow range around it.
+    const over = Math.max(
+      node.scrollWidth / Math.max(1, node.clientWidth),
+      Math.sqrt(node.offsetHeight / Math.max(1, ah)),
+    );
+    const guess = Math.max(min, hi / Math.max(1, over));
+    if (fits(guess)) {
+      lo = guess;
+      hi = Math.min(hi, guess * 1.25);
+    } else {
+      hi = guess;
+      lo = Math.max(min, guess * 0.7);
+      if (!fits(lo)) {
+        lo = min;
+        if (!fits(lo)) {
+          node.classList.add('fit-break');
+          // Even broken up it must not be taller than the box.
+          while (lo > 8 && !fits(lo)) lo -= 2;
+          return;
+        }
+      }
     }
-    for (let i = 0; i < 9 && hi - lo > 0.5; i++) {
+    for (let i = 0; i < 6 && hi - lo > 1; i++) {
       const mid = (lo + hi) / 2;
       if (fits(mid)) lo = mid;
       else hi = mid;
