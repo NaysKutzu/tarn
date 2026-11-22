@@ -1967,6 +1967,8 @@ html[data-float='1'] .main.with-panel {
   border-radius: 12px;
   padding: 6px;
   box-shadow: var(--shadow);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 .ctx button, .ctx .ci {
   display: flex;
@@ -2252,7 +2254,8 @@ html[data-float='1'] .main.with-panel {
   border-radius: 50%;
 }
 /* Least important first. Sizes assume 44px buttons. */
-@container np-l (max-width: 275px) { .np-dislike { display: none; } }
+@container np-l (max-width: 321px) { .np-dislike { display: none; } }
+@container np-l (max-width: 275px) { .np-save { display: none; } }
 @container np-l (max-width: 229px) { .np-radio { display: none; } }
 @container np-l (max-width: 183px) { .np-sleep { display: none; } }
 @container np-l (max-width: 137px) { .np-look { display: none; } }
@@ -4534,6 +4537,7 @@ img, svg { -webkit-user-drag: none; }
   }
   .np-side .np-like,
   .np-side .np-dislike,
+  .np-side .np-save,
   .np-side .np-radio { display: none; }
   .np-side.end .np-vol,
   .np-side.end .err { display: none; }

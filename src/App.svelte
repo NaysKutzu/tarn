@@ -69,7 +69,7 @@
   import { fail, authPrompt, toast } from './lib/toast';
   import { friendlyError, isAuthError } from './lib/errors';
   import { localLikes, isLocalLiked, setLocalLiked, localRecents, recordRecent, localSearchHistory, recordSearch, removeSearch, loadSidePanel, saveSidePanel, type SidePanelId } from './lib/local';
-  import {Home01Icon, Search01Icon, Compass01Icon, LibraryIcon, Settings02Icon, PlayIcon, PauseIcon, PreviousIcon, NextIcon, ShuffleIcon, RepeatIcon, RepeatOne01Icon, VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, FavouriteFilledIcon, ThumbsDownIcon, Queue02Icon, Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon, Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon, LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon, Download04Icon, ChartColumnIcon, Forward01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon, MagicWand01Icon, PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon, AudioWave01Icon, PaintBoardIcon, MoreHorizontalIcon, AutoMixIcon} from './lib/icons';
+  import {Home01Icon, Search01Icon, Compass01Icon, LibraryIcon, Settings02Icon, PlayIcon, PauseIcon, PreviousIcon, NextIcon, ShuffleIcon, RepeatIcon, RepeatOne01Icon, VolumeHighIcon, VolumeMute01Icon, FavouriteIcon, FavouriteFilledIcon, ThumbsDownIcon, Queue02Icon, Radio02Icon, Cancel01Icon, HistoryIcon, UserCircle02Icon, Logout03Icon, Login03Icon, MicVocalIcon, Bookmark02Icon, Notification01Icon, DiscordIcon, Globe02Icon, LanguageCircleIcon, Album02Icon, Playlist01Icon, MusicNote01Icon, SlidersHorizontalIcon, Download04Icon, ChartColumnIcon, Forward01Icon, WifiOff01Icon, CheckmarkCircle02Icon, Delete02Icon, MagicWand01Icon, PlayListAddIcon, Link01Icon, UserIcon, Add01Icon, ArrowRight01Icon, Share01Icon, MiniPlayerIcon, AudioWave01Icon, PaintBoardIcon, MoreHorizontalIcon, AutoMixIcon, PlayListSavedIcon, Tick02Icon} from './lib/icons';
   import { applyTheme, applyTransparency, applyFloating, ACCENTS, hexRgb, type Theme } from './lib/theme';
 
   const isMac =
@@ -1273,7 +1273,7 @@
           if (!auth.signed_in) break;
           last = await api.library();
         }
-        library = last;
+        library = withPending(last);
         // Keep the now-playing heart lit if this song is in the liked list.
         if (player.track && knownLikedId(player.track.id)) {
           player.liked = true;
@@ -2058,14 +2058,113 @@
   let newPl = $state<{ vid?: string } | null>(null);
   /** Compact Library “+” menu (new / import playlist). */
   let libAddMenu = $state<{ x: number; y: number } | null>(null);
+  /** Player-bar “Save to playlist” picker, opened above its button. */
+  let saveMenu = $state<{ x: number; y: number } | null>(null);
+  const plKey = (id: string) => id.replace(/^VL/, '');
+  /** Playlists we added songs to this session, by video id (YouTube can lag). */
+  const addedHere = new Map<string, Set<string>>();
+  /** Playlist ids holding the current song, for the bar icon and menu checks. */
+  let savedIn = $state<{ vid: string; ids: Set<string> }>({ vid: '', ids: new Set() });
+  let curSaved = $derived(
+    !!player.track && savedIn.vid === player.track.id &&
+    [...savedIn.ids].some((id) => library?.playlists?.some((p) => plKey(p.id) === id)),
+  );
+
+  function markAdded(pid: string, vid: string) {
+    const k = plKey(pid);
+    let set = addedHere.get(vid);
+    if (!set) addedHere.set(vid, (set = new Set()));
+    set.add(k);
+    if (savedIn.vid === vid) savedIn = { vid, ids: new Set([...savedIn.ids, k]) };
+  }
+
+  // Derived so the player's frequent state swaps don't restart the lookup.
+  const curVid = $derived(player.track?.id ?? '');
+  const canLookup = $derived(auth.signed_in && !off.offline);
+  $effect(() => {
+    const vid = curVid;
+    if (!vid || !canLookup) return;
+    const local = addedHere.get(vid) ?? new Set<string>();
+    savedIn = { vid, ids: new Set(local) };
+    // Skip songs that are only passing by (skipping through a queue).
+    const t = setTimeout(() => {
+      api.playlistsContaining(vid).then((ids) => {
+        if (player.track?.id !== vid) return;
+        savedIn = { vid, ids: new Set([...ids.map(plKey), ...(addedHere.get(vid) ?? [])]) };
+      }).catch(() => {});
+    }, 700);
+    return () => clearTimeout(t);
+  });
+
+  function openSaveMenu(e: MouseEvent) {
+    if (!player.track || needAccount('playlist')) return;
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const n = (library?.playlists ?? []).filter((p) => p.id !== 'LM' && p.id !== 'SE').length;
+    // Rough menu height so it opens above the button; ContextMenu clamps the rest.
+    const h = Math.min(window.innerHeight - 16, 12 + 9 + 40 * (n + 1));
+    saveMenu = { x: Math.max(8, r.left + r.width / 2 - 114), y: Math.max(8, r.top - h - 6) };
+  }
+
+  function saveMenuEntries(): MenuEntry[] {
+    const vid = player.track?.id;
+    if (!vid) return [];
+    const pls = (library?.playlists ?? []).filter((p) => p.id !== 'LM' && p.id !== 'SE');
+    return [
+      { label: tr('New playlist…'), icon: PlayListAddIcon, onclick: () => addToPlaylist('', vid) },
+      ...(pls.length ? [{ sep: true } as MenuEntry] : []),
+      ...pls.map((p): MenuEntry => {
+        const has = savedIn.vid === vid && savedIn.ids.has(plKey(p.id));
+        return {
+          label: p.name,
+          icon: has ? Tick02Icon : Playlist01Icon,
+          onclick: () => has ? toast(tr('Already in {name}', { name: p.name }), 'info', 2000) : addToPlaylist(p.id, vid),
+        };
+      }),
+    ];
+  }
   let queueMenu = $state<{ x: number; y: number } | null>(null);
+  /**
+   * Playlists we just made. YouTube's library listing lags behind a create by
+   * a while, so a refresh would drop them; keep them until the server has them.
+   */
+  let pendingPls: { card: PlaylistCard; at: number }[] = [];
+  let pendingSeq = 0;
+
+  function withPending(lib: Library): Library {
+    const now = Date.now();
+    pendingPls = pendingPls.filter((p) => now - p.at < 10 * 60_000 && !lib.playlists?.some((q) => q.id.replace(/^VL/, '') === p.card.id.replace(/^VL/, '')));
+    if (!pendingPls.length) return lib;
+    return { ...lib, playlists: [...pendingPls.map((p) => p.card), ...(lib.playlists ?? [])] };
+  }
+
+  function patchPlaylists(fn: (pls: PlaylistCard[]) => PlaylistCard[]) {
+    if (library) library = { ...library, playlists: fn(library.playlists ?? []) };
+  }
+
+  /** Optimistic: the playlist shows up right away, the account catches up. */
   async function createPlaylist(title: string, vid?: string) {
+    const tmp = `pending:${++pendingSeq}`;
+    const cover = vid && player.track?.id === vid ? (player.track.cover ?? null) : null;
+    const card: PlaylistCard = {
+      id: tmp, name: title, cover, covers: cover ? [cover] : [], track_count: vid ? 1 : 0,
+      subtitle: auth.account?.name ?? null, year: null, album_type: null, author: auth.account?.name ?? null,
+      from_ytm: true, color: null, params: null, browse_id: null,
+    };
+    patchPlaylists((pls) => [card, ...pls]);
+    toast(tr('Created “{name}”', { name: title }), 'info', 2200);
     try {
       const id = await api.playlistCreate(title);
-      if (vid) await api.playlistAdd(id, vid);
-      toast(tr('Created “{name}”', { name: title }), 'info', 2200);
-      loadLibrary();
-    } catch (e) { fail(e, "Couldn't create this playlist", 'playlist'); }
+      const real = { ...card, id };
+      pendingPls.push({ card: real, at: Date.now() });
+      patchPlaylists((pls) => pls.map((p) => (p.id === tmp ? real : p)));
+      if (vid) { markAdded(id, vid); await api.playlistAdd(id, vid); }
+      // Give YouTube a moment before re-reading the library.
+      loadLibrary({ retries: 0, deferMs: 4000 });
+    } catch (e) {
+      patchPlaylists((pls) => pls.filter((p) => p.id !== tmp));
+      pendingPls = pendingPls.filter((p) => p.card.id !== tmp);
+      fail(e, "Couldn't create this playlist", 'playlist');
+    }
   }
 
   // Small always-on-top player window (same page, ?mini=1).
@@ -2131,9 +2230,15 @@
       newPl = { vid };
       return;
     }
+    if (pid.startsWith('pending:')) { toast(tr('Still creating this playlist…'), 'info', 2000); return; }
     const name = library?.playlists?.find((p) => p.id === pid)?.name;
     toast(name ? tr('Added to {name}', { name }) : tr('Added to playlist'), 'info', 2000);
-    try { await api.playlistAdd(pid, vid); } catch (e) { fail(e, "Couldn't add to this playlist", 'playlist'); }
+    markAdded(pid, vid);
+    try { await api.playlistAdd(pid, vid); } catch (e) {
+      addedHere.get(vid)?.delete(plKey(pid));
+      if (savedIn.vid === vid) { const ids = new Set(savedIn.ids); ids.delete(plKey(pid)); savedIn = { vid, ids }; }
+      fail(e, "Couldn't add to this playlist", 'playlist');
+    }
   }
 
   /** Turn the current queue into a new playlist on the account. */
@@ -4508,6 +4613,7 @@
               btnSize="lg"
             />
             <IconBtn class="np-dislike" icon={ThumbsDownIcon} size={22} on={player.disliked} danger onclick={toggleDislike} title={tr('Dislike')} btnSize="lg" />
+            <IconBtn class="np-save" icon={PlayListAddIcon} altIcon={PlayListSavedIcon} showAlt={curSaved} on={curSaved} size={22} disabled={!player.track || off.offline} onclick={openSaveMenu} title={curSaved ? tr('Saved in a playlist') : tr('Save to playlist')} btnSize="lg" />
             <IconBtn
               class="np-radio"
               icon={Radio02Icon}
@@ -4692,6 +4798,7 @@
                 title={tr('Like')}
               />
               <IconBtn icon={ThumbsDownIcon} size={22} on={player.disliked} danger onclick={toggleDislike} title={tr('Dislike')} />
+              <IconBtn icon={PlayListAddIcon} altIcon={PlayListSavedIcon} showAlt={curSaved} on={curSaved} size={22} disabled={off.offline} onclick={openSaveMenu} title={curSaved ? tr('Saved in a playlist') : tr('Save to playlist')} />
               <IconBtn
                 icon={Radio02Icon}
                 size={22}
@@ -4801,7 +4908,7 @@
 
 <Toast />
 {#if newPl}
-  <NewPlaylist onClose={() => (newPl = null)} onCreate={(t) => createPlaylist(t, newPl?.vid)} />
+  <NewPlaylist onClose={() => (newPl = null)} onCreate={(t) => { void createPlaylist(t, newPl?.vid); }} />
 {/if}
 {#if importOpen}
   <ImportPlaylist
@@ -4813,6 +4920,9 @@
 
 {#if ctx}
   <ContextMenu x={ctx.x} y={ctx.y} entries={buildMenu(ctx)} onClose={() => (ctx = null)} />
+{/if}
+{#if saveMenu}
+  <ContextMenu x={saveMenu.x} y={saveMenu.y} entries={saveMenuEntries()} onClose={() => (saveMenu = null)} />
 {/if}
 {#if libAddMenu}
   <ContextMenu

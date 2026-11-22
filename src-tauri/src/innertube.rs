@@ -521,6 +521,39 @@ impl InnerTube {
             .ok_or_else(|| anyhow!("playlist create: no id"))
     }
 
+    /// Ids of the user's playlists that already hold `video_id`
+    /// (what YouTube's own "Save to playlist" dialog checks off).
+    pub async fn playlists_containing(&self, video_id: &str) -> Result<Vec<String>> {
+        if self.cookie.is_none() {
+            return Ok(Vec::new());
+        }
+        let v = self
+            .post(
+                "playlist/get_add_to_playlist",
+                json!({ "videoIds": [video_id], "excludeWatchLater": true }),
+            )
+            .await?;
+        fn walk(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::Object(m) => {
+                    if let Some(r) = m.get("playlistAddToOptionRenderer") {
+                        let has = r["containsSelectedVideos"].as_str() == Some("ALL");
+                        if let (true, Some(id)) = (has, r["playlistId"].as_str()) {
+                            out.push(id.to_string());
+                        }
+                        return;
+                    }
+                    m.values().for_each(|x| walk(x, out));
+                }
+                Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(&v, &mut out);
+        Ok(out)
+    }
+
     pub async fn playlist_add(&self, playlist_id: &str, video_id: &str) -> Result<()> {
         self.post(
             "browse/edit_playlist",

@@ -92,6 +92,7 @@ export const api = {
   playlistCreate: (title: string) => invoke<string>('playlist_create', { title }),
   playlistAdd: (playlistId: string, videoId: string) =>
     invoke<void>('playlist_add', { playlistId, videoId }),
+  playlistsContaining: (videoId: string) => invoke<string[]>('playlists_containing', { videoId }),
   playlistRemove: (playlistId: string, videoId: string) =>
     invoke<void>('playlist_remove', { playlistId, videoId }),
   playlistRename: (playlistId: string, title: string) =>

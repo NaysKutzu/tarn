@@ -1795,6 +1795,17 @@ async fn playlist_create(app: State<'_, Arc<App>>, title: String) -> Result<Stri
 }
 
 #[tauri::command]
+async fn playlists_containing(
+    app: State<'_, Arc<App>>,
+    video_id: String,
+) -> Result<Vec<String>, String> {
+    app.ytm
+        .playlists_containing(&video_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn playlist_add(
     app: State<'_, Arc<App>>,
     playlist_id: String,
@@ -2853,6 +2864,7 @@ pub fn run() {
             subscribe_artist,
             playlist_create,
             playlist_add,
+            playlists_containing,
             playlist_remove,
             playlist_rename,
             library_save,

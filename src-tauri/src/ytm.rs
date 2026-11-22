@@ -1283,6 +1283,10 @@ impl Ytm {
         self.it().playlist_create(title).await
     }
 
+    pub async fn playlists_containing(&self, video_id: &str) -> Result<Vec<String>> {
+        self.it().playlists_containing(video_id).await
+    }
+
     pub async fn playlist_add(&self, playlist_id: &str, video_id: &str) -> Result<()> {
         self.it().playlist_add(playlist_id, video_id).await
     }
