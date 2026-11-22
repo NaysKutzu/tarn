@@ -1169,6 +1169,8 @@
     } catch {}
   }
   async function loadPlaylist(id: string) {
+    // Still being created: createPlaylist reopens it with the real id.
+    if (id.startsWith('pending:')) { collection = null; return; }
     const seq = ++playlistSeq;
     const stale = () => seq !== playlistSeq;
     const token = beginPageLoad();
@@ -2157,11 +2159,13 @@
       const real = { ...card, id };
       pendingPls.push({ card: real, at: Date.now() });
       patchPlaylists((pls) => pls.map((p) => (p.id === tmp ? real : p)));
+      if (view.id === 'playlist' && view.playlistId === tmp) go({ id: 'playlist', playlistId: id });
       if (vid) { markAdded(id, vid); await api.playlistAdd(id, vid); }
       // Give YouTube a moment before re-reading the library.
       loadLibrary({ retries: 0, deferMs: 4000 });
     } catch (e) {
       patchPlaylists((pls) => pls.filter((p) => p.id !== tmp));
+      if (view.id === 'playlist' && view.playlistId === tmp) go({ id: 'library' });
       pendingPls = pendingPls.filter((p) => p.card.id !== tmp);
       fail(e, "Couldn't create this playlist", 'playlist');
     }

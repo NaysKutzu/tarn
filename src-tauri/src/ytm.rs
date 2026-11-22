@@ -959,7 +959,8 @@ impl Ytm {
                 }
             }
         }
-        let mut p = match self.rp.query().music_playlist(id).await {
+        let query = self.rp.query();
+        let mut p = match query.music_playlist(bare).await {
             Ok(p) => p,
             Err(e) => {
                 // Auto mixes (New Release Mix, Replay Mix, ...) are radio
@@ -975,13 +976,26 @@ impl Ytm {
                         }
                     }
                 }
+                // Private playlists (new ones are private by default) 404
+                // anonymously, and rustypipe can't parse owned ones even
+                // signed in ("album playlist containing items from different
+                // albums"). Read the page ourselves with the account cookie.
+                if self.cookie_header().is_some() {
+                    match self.it().playlist_page(bare).await {
+                        Ok(mut c) => {
+                            stamp_missing_track_covers(&mut c);
+                            return Ok(c);
+                        }
+                        Err(e2) => crate::diag::log(format!("playlist {bare}: innertube fallback: {e2}")),
+                    }
+                }
                 return Err(anyhow!("{e}"));
             }
         };
         // music_playlist only returns the first page (~50-100 tracks).
         // Follow the continuations so the whole playlist shows up.
         if all {
-            if let Err(e) = p.tracks.extend_all(self.rp.query()).await {
+            if let Err(e) = p.tracks.extend_all(&query).await {
                 crate::diag::log(format!("playlist {id}: pagination stopped early: {e}"));
             }
         }
@@ -992,8 +1006,13 @@ impl Ytm {
         if all {
             let have = p.tracks.items.len() as u64;
             if p.track_count.is_some_and(|n| n > have) {
-                match self.it().library_browse(&format!("VL{bare}")).await {
-                    Ok((t, _, _)) if t.len() as u64 > have => {
+                let it = self.it();
+                let paged = match it.browse(&format!("VL{bare}"), None).await {
+                    Ok(v) => Ok(it.playlist_shelf_tracks(&v).await),
+                    Err(e) => Err(e),
+                };
+                match paged {
+                    Ok(t) if t.len() as u64 > have => {
                         crate::diag::log(format!(
                             "playlist {id}: fallback paging {} -> {} tracks",
                             have,

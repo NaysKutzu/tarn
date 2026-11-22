@@ -1980,6 +1980,112 @@ pub fn albums_from_browse(v: &Value) -> std::collections::HashMap<String, (Strin
 impl InnerTube {
     /// Browse a library / likes page and collect tracks, playlists, albums, artists.
     /// Follows continuation tokens so Liked Music is not capped at the first page (~100).
+    /// Only the playlist's own songs: the shelf under
+    /// `musicPlaylistShelfRenderer` and its continuations. Owned playlists
+    /// also carry an endless "Suggestions" section, which must be skipped.
+    pub async fn playlist_shelf_tracks(&self, first: &Value) -> Vec<Track> {
+        fn push_tracks(arr: &[Value], out: &mut Vec<Track>) {
+            for c in arr {
+                if let Some(r) = c.get("musicResponsiveListItemRenderer") {
+                    if let Some(t) = parse_responsive(r).and_then(|i| i.as_track()) {
+                        out.push(t);
+                    }
+                }
+            }
+        }
+        let mut shelf: Option<Value> = None;
+        walk(first, &mut |key, val| {
+            if shelf.is_none() && key == "musicPlaylistShelfRenderer" {
+                shelf = Some(val.clone());
+            }
+        });
+        let Some(shelf) = shelf else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let empty = Vec::new();
+        let arr = shelf["contents"].as_array().unwrap_or(&empty);
+        push_tracks(arr, &mut out);
+        let mut tok = continuation_token_from_list(arr)
+            .or_else(|| next_continuation_data(&shelf["continuations"]));
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let Some(t) = tok.take() else { break };
+            if !seen.insert(t.clone()) {
+                break;
+            }
+            let mut page = self.browse_continuation(&t).await;
+            for attempt in 1..=3u64 {
+                if page.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(400 * attempt)).await;
+                page = self.browse_continuation(&t).await;
+            }
+            let Ok(page) = page else {
+                crate::diag::log(format!("playlist shelf: paging stopped at {}", out.len()));
+                break;
+            };
+            if let Some(arr) = page
+                .pointer("/onResponseReceivedActions/0/appendContinuationItemsAction/continuationItems")
+                .and_then(|x| x.as_array())
+            {
+                push_tracks(arr, &mut out);
+                tok = continuation_token_from_list(arr);
+            } else if let Some(c) = page.pointer("/continuationContents/musicPlaylistShelfContinuation") {
+                if let Some(arr) = c["contents"].as_array() {
+                    push_tracks(arr, &mut out);
+                }
+                tok = next_continuation_data(&c["continuations"]);
+            }
+        }
+        out
+    }
+
+    /// A playlist read straight from InnerTube with the account cookie: the
+    /// fallback for private / owned playlists that rustypipe can't open.
+    pub async fn playlist_page(&self, bare: &str) -> Result<crate::models::Collection> {
+        let vl = format!("VL{bare}");
+        let v = self.browse(&vl, None).await?;
+        let mut header: Option<Value> = None;
+        let mut editable = false;
+        walk(&v, &mut |key, val| {
+            if key == "musicEditablePlaylistDetailHeaderRenderer" {
+                editable = true;
+            }
+            if header.is_none()
+                && (key == "musicResponsiveHeaderRenderer" || key == "musicDetailHeaderRenderer")
+            {
+                header = Some(val.clone());
+            }
+        });
+        let h = &header.ok_or_else(|| anyhow!("playlist {bare}: no header in browse"))?;
+        let name = yt_text(&h["title"]).unwrap_or_default();
+        let cover = thumb_of(h);
+        let author = yt_text(&h["straplineTextOne"]);
+        let description = yt_text(&h.pointer("/description/musicDescriptionShelfRenderer/description").cloned().unwrap_or(Value::Null));
+        let track_count = library_header_track_count(&v).map(|n| n as u64);
+        let tracks = self.playlist_shelf_tracks(&v).await;
+        Ok(crate::models::Collection {
+            kind: "playlist".into(),
+            id: bare.to_string(),
+            playlist_id: Some(bare.to_string()),
+            name,
+            cover,
+            artists: Vec::new(),
+            artist_ids: Vec::new(),
+            author,
+            year: None,
+            description,
+            track_count: track_count.or(Some(tracks.len() as u64)),
+            album_type: None,
+            tracks,
+            related: Vec::new(),
+            owned: editable,
+            saved: editable,
+        })
+    }
+
     pub async fn library_browse(&self, browse_id: &str) -> Result<(Vec<Track>, Vec<PlaylistCard>, Vec<ArtistCard>)> {
         let v = self.browse(browse_id, None).await?;
         let header_count = library_header_track_count(&v);
@@ -2120,27 +2226,32 @@ fn library_header_track_count(v: &Value) -> Option<usize> {
             return;
         }
         let text = yt_text(val).unwrap_or_default();
-        if text.is_empty() {
-            return;
-        }
-        let low = text.to_ascii_lowercase();
-        if !(low.contains("song")
-            || low.contains("track")
-            || low.contains("melod")
-            || low.contains("șanson")
-            || low.contains("chanson")
-            || low.contains("lied"))
-        {
-            return;
-        }
-        let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
-        if let Ok(n) = digits.parse::<usize>() {
-            if n > 0 {
-                best = Some(n);
-            }
+        if let Some(n) = track_count_in(&text) {
+            best = Some(n);
         }
     });
     best
+}
+
+/// "1 view • 27 tracks • 1 hour, 25 minutes" -> 27. Only the number in the
+/// part that names songs/tracks counts (views and minutes used to be glued
+/// into one number, e.g. "5 tracks • 18 minutes" read as 518).
+fn track_count_in(text: &str) -> Option<usize> {
+    const WORDS: [&str; 7] = ["song", "track", "melod", "piese", "chanson", "lied", "titel"];
+    text.split(['•', '·', '|']).find_map(|part| {
+        let low = part.to_lowercase();
+        if !WORDS.iter().any(|w| low.contains(w)) {
+            return None;
+        }
+        // Digits plus thousands separators of the first number in this part.
+        let digits: String = part
+            .split_whitespace()
+            .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()))?
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect();
+        digits.parse::<usize>().ok().filter(|n| *n > 0)
+    })
 }
 
 pub fn parse_library_page(v: &Value) -> (Vec<Track>, Vec<PlaylistCard>, Vec<ArtistCard>) {
@@ -2245,6 +2356,15 @@ fn dedup_artists(mut v: Vec<ArtistCard>) -> Vec<ArtistCard> {
 mod continuation_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn header_track_count() {
+        assert_eq!(track_count_in("5 tracks • 18 minutes"), Some(5));
+        assert_eq!(track_count_in("1 view • 27 tracks • 1 hour, 25 minutes"), Some(27));
+        assert_eq!(track_count_in("109 views • 1,460 tracks • 90+ hours"), Some(1460));
+        assert_eq!(track_count_in("1.234 de melodii"), Some(1234));
+        assert_eq!(track_count_in("Playlist • Private • 2026"), None);
+    }
 
     #[test]
     fn counterpart_with_segment_map() {
