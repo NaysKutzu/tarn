@@ -598,7 +598,10 @@
       }
       player = next;
     }).then((u) => unsubs.push(u));
-    listen('auth', () => {
+    listen<{ error?: string }>('auth', (ev) => {
+      if (ev.payload?.error) {
+        toast(tr("Sign-in didn't work: YouTube Music still sees you as signed out. Close the sign-in window and try again; if it keeps failing, send the diagnostics."), 'error', 9000);
+      }
       api.auth().then(async (a) => {
         const was = auth.signed_in;
         const wasName = auth.account?.name ?? null;

@@ -86,7 +86,16 @@ pub fn open_login(
         let href = payload.url().clone();
         let host = href.host_str().unwrap_or("");
         let on_music = host == "music.youtube.com" || host.ends_with(".music.youtube.com");
-        diag::log(format!("login: page load {host}{}", if on_music { " (ytm)" } else { "" }));
+        // Which Google account the page is on (several signed in: authuser=1..).
+        let authuser = href
+            .query_pairs()
+            .find(|(k, _)| k == "authuser")
+            .map(|(_, v)| format!(" authuser={v}"))
+            .unwrap_or_default();
+        diag::log(format!(
+            "login: page load {host}{}{authuser}",
+            if on_music { " (ytm)" } else { "" }
+        ));
         if !on_music {
             return;
         }
@@ -207,6 +216,16 @@ async fn poll_for_session(
         }
     }
     diag::log("login: timed out waiting for a complete session");
+    if !done.load(Ordering::SeqCst) {
+        // Tell the user instead of leaving a window that never closes.
+        let _ = app.emit(
+            "auth",
+            serde_json::json!({
+                "signed_in": false,
+                "error": "YouTube Music did not accept this sign-in",
+            }),
+        );
+    }
 }
 
 async fn page_looks_signed_in(window: &tauri::WebviewWindow) -> bool {

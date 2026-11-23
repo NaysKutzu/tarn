@@ -5,7 +5,6 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use crate::auth::{sapisid_from_header, sapisidhash_now};
 use crate::models::{
     AccountInfo, ArtistCard, Explore, Home, LikeState, LyricLine, Lyrics, MoodChip, PlaylistCard,
     Shelf, ShelfItem, Track,
@@ -113,8 +112,8 @@ impl InnerTube {
             .header("X-Origin", ORIGIN);
         if let Some(c) = &self.cookie {
             req = req.header("Cookie", c);
-            if let Some(sap) = sapisid_from_header(c) {
-                req = req.header("Authorization", sapisidhash_now(&sap));
+            if let Some(auth) = crate::auth::authorization_now(c) {
+                req = req.header("Authorization", auth);
             }
             // WEB_REMIX signed-in calls need AuthUser (default 0) and,
             // for a brand account, X-Goog-PageId (set by the caller on context).
@@ -1138,6 +1137,18 @@ fn is_promo_account_name(name: &str) -> bool {
 }
 
 fn parse_account(v: &Value) -> Option<AccountInfo> {
+    // A signed-out account_menu still has menu items ("Settings", "Sign
+    // in", Premium) - the old "first short text" fallback took "Settings"
+    // for the account name and a failed sign-in looked successful.
+    let mut has_header = false;
+    walk(v, &mut |key, _| {
+        if matches!(key, "activeAccountHeaderRenderer" | "accountName" | "accountNameButtonRenderer") {
+            has_header = true;
+        }
+    });
+    if !has_header {
+        return None;
+    }
     let mut name = None;
     let mut photo = None;
     let mut handle = None;
@@ -2356,6 +2367,21 @@ fn dedup_artists(mut v: Vec<ArtistCard>) -> Vec<ArtistCard> {
 mod continuation_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn signed_out_account_menu_is_no_account() {
+        let v = json!({"actions": [{"openPopupAction": {"popup": {"multiPageMenuRenderer": {"sections": [
+            {"multiPageMenuSectionRenderer": {"items": [
+                {"compactLinkRenderer": {"title": {"runs": [{"text": "Settings"}]}}}
+            ]}}
+        ]}}}}]});
+        assert!(parse_account(&v).is_none());
+        let v = json!({"header": {"activeAccountHeaderRenderer": {
+            "accountName": {"runs": [{"text": "Ana Pop"}]},
+            "channelHandle": {"runs": [{"text": "@ana"}]}
+        }}});
+        assert_eq!(parse_account(&v).unwrap().name, "Ana Pop");
+    }
 
     #[test]
     fn header_track_count() {

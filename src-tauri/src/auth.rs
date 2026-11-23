@@ -305,6 +305,31 @@ pub fn sapisidhash(sapisid: &str, origin: &str, timestamp: u64) -> String {
     format!("SAPISIDHASH {timestamp}_{}", hex::encode(digest))
 }
 
+/// Authorization header the YouTube web client sends: SAPISIDHASH plus the
+/// first- and third-party variants (from `__Secure-1PAPISID` /
+/// `__Secure-3PAPISID`) when those cookies exist. Some accounts are refused
+/// with SAPISIDHASH alone.
+pub fn authorization_for(header: &str, origin: &str, timestamp: u64) -> Option<String> {
+    let sap = sapisid_from_header(header)?;
+    let mut out = sapisidhash(&sap, origin, timestamp);
+    for (cookie, label) in [("__Secure-1PAPISID", "SAPISID1PHASH"), ("__Secure-3PAPISID", "SAPISID3PHASH")] {
+        if let Some(v) = header_value(header, cookie) {
+            let mut hasher = Sha1::new();
+            hasher.update(format!("{timestamp} {v} {origin}").as_bytes());
+            out.push_str(&format!(" {label} {timestamp}_{}", hex::encode(hasher.finalize())));
+        }
+    }
+    Some(out)
+}
+
+pub fn authorization_now(header: &str) -> Option<String> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    authorization_for(header, ORIGIN, ts)
+}
+
 pub fn sapisidhash_now(sapisid: &str) -> String {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -518,6 +543,19 @@ pub fn remove_file_quiet(path: &Path) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn authorization_has_all_variants() {
+        let h = "SAPISID=a; __Secure-1PAPISID=b; __Secure-3PAPISID=c";
+        let out = authorization_for(h, "https://music.youtube.com", 1).unwrap();
+        assert!(out.starts_with("SAPISIDHASH 1_"));
+        assert!(out.contains(" SAPISID1PHASH 1_"));
+        assert!(out.contains(" SAPISID3PHASH 1_"));
+        let only = authorization_for("SAPISID=a", "https://music.youtube.com", 1).unwrap();
+        assert!(!only.contains("1PHASH"));
+        assert!(authorization_for("SID=x", "https://music.youtube.com", 1).is_none());
+    }
+
     use super::*;
 
     fn c(name: &str, value: &str, domain: &str) -> CookieRec {
