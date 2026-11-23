@@ -123,15 +123,13 @@ pub fn decide(
             // after the user picked it (current is the fallback default).
             auto.then(|| Some(w.clone()))
         }
-        None if *auto
-            && current.is_none()
-            && now.default != *last_default
-            && last_default.is_some() =>
-        {
-            // System default changed (headphones / Bluetooth plugged in):
-            // reopen so platforms that pin the old device follow it.
-            Some(None)
-        }
+        // Prefs say system default but the stream is still on a named
+        // device (e.g. user switched the picker back to System default).
+        None if current.is_some() => Some(None),
+        // "System default" means follow Windows/macOS/Linux default. cpal
+        // pins the device at open time, so a new default needs a reopen —
+        // even when auto-switch is off (that toggle is for a *named* pick).
+        None if now.default != *last_default && last_default.is_some() => Some(None),
         _ => None,
     }
 }
@@ -144,19 +142,25 @@ pub fn watch(player: crate::player::Player) {
         .spawn(move || {
             let mut last_default: Option<String> = None;
             loop {
-                std::thread::sleep(Duration::from_secs(3));
+                std::thread::sleep(Duration::from_secs(2));
                 let prefs = prefs();
-                // Default device, no auto-switch: nothing can need a move,
-                // so don't keep enumerating devices.
-                if prefs == (None, false) && CURRENT.lock().is_none() {
-                    last_default = None;
-                    continue;
+                // Named device, auto-switch off, already on that device: idle.
+                // System default (want=None) always polls so a Windows default
+                // change reopens the stream.
+                if let (Some(want), false) = (&prefs.0, prefs.1) {
+                    if CURRENT.lock().as_deref() == Some(want.as_str()) {
+                        continue;
+                    }
                 }
                 let now = list();
-                if let Some(target) = decide(&prefs, &now.current, &now, &last_default) {
+                // Prefer the live CURRENT over list()'s clone so a mid-loop
+                // Output command is not overwritten by a stale snapshot.
+                let current = CURRENT.lock().clone();
+                if let Some(target) = decide(&prefs, &current, &now, &last_default) {
                     crate::diag::log(format!(
-                        "audio output: switching to {}",
-                        target.as_deref().unwrap_or("system default")
+                        "audio output: switching to {} (was default {:?})",
+                        target.as_deref().unwrap_or("system default"),
+                        last_default
                     ));
                     player.set_output_device(target);
                 }
@@ -209,11 +213,22 @@ mod tests {
     }
 
     #[test]
-    fn follows_a_new_system_default_with_auto_switch() {
+    fn follows_a_new_system_default_even_without_auto_switch() {
         let now = devs(&["Speakers", "BT"], "BT");
         let last = Some("Speakers".to_string());
+        // System default mode always reopens when the OS default changes.
         assert_eq!(decide(&(None, true), &None, &now, &last), Some(None));
-        assert_eq!(decide(&(None, false), &None, &now, &last), None);
-        assert_eq!(decide(&(None, true), &None, &now, &Some("BT".into())), None);
+        assert_eq!(decide(&(None, false), &None, &now, &last), Some(None));
+        assert_eq!(decide(&(None, false), &None, &now, &Some("BT".into())), None);
+        // Stuck on a named device while prefs say system default.
+        assert_eq!(
+            decide(&(None, false), &Some("Speakers".into()), &now, &Some("BT".into())),
+            Some(None)
+        );
+        // A pinned named device does not chase the OS default.
+        assert_eq!(
+            decide(&(Some("Speakers".into()), false), &Some("Speakers".into()), &now, &last),
+            None
+        );
     }
 }

@@ -5,7 +5,7 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use crate::auth::{sapisid_from_header, sapisidhash_now};
+use crate::auth::authorization_from_header;
 use crate::models::{
     AccountInfo, ArtistCard, Explore, Home, LikeState, LyricLine, Lyrics, MoodChip, PlaylistCard,
     Shelf, ShelfItem, Track,
@@ -113,8 +113,8 @@ impl InnerTube {
             .header("X-Origin", ORIGIN);
         if let Some(c) = &self.cookie {
             req = req.header("Cookie", c);
-            if let Some(sap) = sapisid_from_header(c) {
-                req = req.header("Authorization", sapisidhash_now(&sap));
+            if let Some(authz) = authorization_from_header(c) {
+                req = req.header("Authorization", authz);
             }
             // WEB_REMIX signed-in calls need AuthUser (default 0) and,
             // for a brand account, X-Goog-PageId (set by the caller on context).
@@ -1127,7 +1127,9 @@ fn parse_chips(v: &Value) -> Vec<MoodChip> {
     out
 }
 
-fn is_promo_account_name(name: &str) -> bool {
+/// Guest / logged-out account_menu walks often pick chrome labels
+/// ("Settings", "Help", …) instead of a real profile name.
+pub fn account_name_is_guest(name: &str) -> bool {
     let n = name.trim().to_ascii_lowercase();
     n.is_empty()
         || n.contains("premium")
@@ -1135,6 +1137,20 @@ fn is_promo_account_name(name: &str) -> bool {
         || n.contains("log in")
         || n.contains("upgrade")
         || n == "guest"
+        || n == "settings"
+        || n == "help"
+        || n == "feedback"
+        || n == "privacy"
+        || n == "terms"
+        || n == "terms of service"
+        || n == "switch account"
+        || n == "add account"
+        || n == "purchases and memberships"
+        || n == "your data in youtube"
+}
+
+fn is_promo_account_name(name: &str) -> bool {
+    account_name_is_guest(name)
 }
 
 fn parse_account(v: &Value) -> Option<AccountInfo> {

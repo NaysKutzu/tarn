@@ -447,9 +447,18 @@ async fn restore_session(app: &App) {
                 if let Err(e) = app.ytm.set_cookie_header(Some(header)).await {
                     eprintln!("restore session: {e}");
                 } else {
-                    let account = app.ytm.account().await.ok().flatten();
+                    let account = app
+                        .ytm
+                        .account()
+                        .await
+                        .ok()
+                        .flatten()
+                        .filter(|a| !crate::innertube::account_name_is_guest(&a.name));
                     if account.is_none() {
                         eprintln!("restore session: account menu looks logged out; clearing");
+                        crate::diag::log(
+                            "restore session: guest/Settings account — clearing bad cookies",
+                        );
                         let _ = app.ytm.set_cookie_header(None).await;
                         let _ = app.store.clear();
                     } else {
@@ -2011,10 +2020,12 @@ async fn apply_session(app: &App, header: String) -> anyhow::Result<()> {
         "apply_session: account={}",
         account.as_ref().map(|a| a.name.as_str()).unwrap_or("(none)")
     ));
-    // account_menu can 200 with only the Premium CTA when SAPISIDHASH used
-    // the wrong-domain cookie. Keep the login window open and retry.
-    let Some(account) = account else {
+    // account_menu can 200 with only the Premium CTA / "Settings" chrome when
+    // SAPISIDHASH used the wrong-domain cookie. Keep the login window open.
+    let Some(account) = account.filter(|a| !crate::innertube::account_name_is_guest(&a.name))
+    else {
         let _ = app.ytm.set_cookie_header(None).await;
+        let _ = app.store.clear();
         anyhow::bail!("account menu looks logged out; retrying with fresher cookies");
     };
     let mut a = app.auth.lock();

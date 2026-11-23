@@ -67,6 +67,14 @@ pub fn is_youtube_related(domain: &str) -> bool {
         || d.ends_with(".ytimg.com")
 }
 
+fn is_youtube_cookie_domain(domain: &str) -> bool {
+    let d = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    d == "youtube.com"
+        || d.ends_with(".youtube.com")
+        || d == "music.youtube.com"
+        || d.ends_with(".music.youtube.com")
+}
+
 pub fn session_ready_from_cookies(cookies: &[CookieRec]) -> bool {
     let has = |n: &str| cookies.iter().any(|c| c.name == n && !c.value.is_empty());
     has("SAPISID")
@@ -76,13 +84,24 @@ pub fn session_ready_from_cookies(cookies: &[CookieRec]) -> bool {
         || has("__Secure-3PSID")
 }
 
-/// A session we trust enough to close the login window: a SAPISID
-/// (for SAPISIDHASH) and a SID-family cookie.
-pub fn session_complete_from_cookies(cookies: &[CookieRec]) -> bool {
-    let has = |n: &str| cookies.iter().any(|c| c.name == n && !c.value.is_empty());
-    let sapi = has("SAPISID") || has("__Secure-3PAPISID") || has("__Secure-1PAPISID");
-    let sid = has("__Secure-1PSID") || has("__Secure-3PSID") || has("SID") || has("LOGIN_INFO");
+/// True when SAPISID + SID-family cookies exist on a *.youtube.com domain.
+/// Google.com twins alone make account_menu return the guest "Settings" menu.
+pub fn session_youtube_bound(cookies: &[CookieRec]) -> bool {
+    let has_yt = |n: &str| {
+        cookies
+            .iter()
+            .any(|c| c.name == n && !c.value.is_empty() && is_youtube_cookie_domain(&c.domain))
+    };
+    let sapi = has_yt("SAPISID") || has_yt("__Secure-3PAPISID") || has_yt("__Secure-1PAPISID");
+    let sid =
+        has_yt("__Secure-1PSID") || has_yt("__Secure-3PSID") || has_yt("SID") || has_yt("LOGIN_INFO");
     sapi && sid
+}
+
+/// A session we trust enough to close the login window: a SAPISID
+/// (for SAPISIDHASH) and a SID-family cookie on *.youtube.com.
+pub fn session_complete_from_cookies(cookies: &[CookieRec]) -> bool {
+    session_youtube_bound(cookies)
 }
 
 pub fn session_ready_from_header(header: &str) -> bool {
@@ -299,10 +318,14 @@ pub fn locale_from_pref(header: &str) -> Option<(String, String)> {
 
 /// `(timestamp, Authorization header value)` e.g. `SAPISIDHASH 123_abc`.
 pub fn sapisidhash(sapisid: &str, origin: &str, timestamp: u64) -> String {
+    sapisid_auth_scheme("SAPISIDHASH", sapisid, origin, timestamp)
+}
+
+fn sapisid_auth_scheme(scheme: &str, sid: &str, origin: &str, timestamp: u64) -> String {
     let mut hasher = Sha1::new();
-    hasher.update(format!("{timestamp} {sapisid} {origin}").as_bytes());
+    hasher.update(format!("{timestamp} {sid} {origin}").as_bytes());
     let digest = hasher.finalize();
-    format!("SAPISIDHASH {timestamp}_{}", hex::encode(digest))
+    format!("{scheme} {timestamp}_{}", hex::encode(digest))
 }
 
 pub fn sapisidhash_now(sapisid: &str) -> String {
@@ -311,6 +334,29 @@ pub fn sapisidhash_now(sapisid: &str) -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     sapisidhash(sapisid, ORIGIN, ts)
+}
+
+/// Modern YouTube auth: `SAPISIDHASH` plus `SAPISID1PHASH` / `SAPISID3PHASH`
+/// when those cookies are present (space-joined, same timestamp).
+pub fn authorization_from_header(header: &str) -> Option<String> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut parts = Vec::new();
+    let sapi = header_value(header, "SAPISID")
+        .or_else(|| header_value(header, "__Secure-3PAPISID"))
+        .or_else(|| header_value(header, "__Secure-1PAPISID"));
+    if let Some(sapi) = sapi {
+        parts.push(sapisid_auth_scheme("SAPISIDHASH", &sapi, ORIGIN, ts));
+    }
+    if let Some(s) = header_value(header, "__Secure-1PAPISID") {
+        parts.push(sapisid_auth_scheme("SAPISID1PHASH", &s, ORIGIN, ts));
+    }
+    if let Some(s) = header_value(header, "__Secure-3PAPISID") {
+        parts.push(sapisid_auth_scheme("SAPISID3PHASH", &s, ORIGIN, ts));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 
@@ -569,6 +615,31 @@ mod tests {
         assert!(!h.contains("google-sapi"), "got {h}");
         assert!(h.contains("SID=yt-sid"), "got {h}");
         assert_eq!(sapisid_from_header(&h).as_deref(), Some("yt-sapi"));
+        assert!(session_youtube_bound(&cookies));
+        assert!(session_complete_from_cookies(&cookies));
+    }
+
+    #[test]
+    fn google_only_cookies_are_not_youtube_bound() {
+        let cookies = vec![
+            c("SAPISID", "google-sapi", ".google.com"),
+            c("SID", "google-sid", ".google.com"),
+            c("__Secure-3PAPISID", "g3", ".google.com"),
+            c("__Secure-3PSID", "gpsid", ".google.com"),
+            c("LOGIN_INFO", "nope", ".google.com"),
+        ];
+        assert!(session_ready_from_cookies(&cookies));
+        assert!(!session_youtube_bound(&cookies));
+        assert!(!session_complete_from_cookies(&cookies));
+    }
+
+    #[test]
+    fn authorization_includes_1p_and_3p_hashes() {
+        let h = "SAPISID=s; __Secure-1PAPISID=one; __Secure-3PAPISID=three";
+        let authz = authorization_from_header(h).expect("auth");
+        assert!(authz.contains("SAPISIDHASH "), "{authz}");
+        assert!(authz.contains("SAPISID1PHASH "), "{authz}");
+        assert!(authz.contains("SAPISID3PHASH "), "{authz}");
     }
 
     #[test]
