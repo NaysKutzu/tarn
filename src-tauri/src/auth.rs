@@ -328,35 +328,37 @@ fn sapisid_auth_scheme(scheme: &str, sid: &str, origin: &str, timestamp: u64) ->
     format!("{scheme} {timestamp}_{}", hex::encode(digest))
 }
 
+/// Authorization header the YouTube web client sends: SAPISIDHASH plus the
+/// first- and third-party variants (from `__Secure-1PAPISID` /
+/// `__Secure-3PAPISID`) when those cookies exist. Some accounts are refused
+/// with SAPISIDHASH alone.
+pub fn authorization_for(header: &str, origin: &str, timestamp: u64) -> Option<String> {
+    let sap = sapisid_from_header(header)?;
+    let mut out = sapisidhash(&sap, origin, timestamp);
+    for (cookie, label) in [("__Secure-1PAPISID", "SAPISID1PHASH"), ("__Secure-3PAPISID", "SAPISID3PHASH")] {
+        if let Some(v) = header_value(header, cookie) {
+            let mut hasher = Sha1::new();
+            hasher.update(format!("{timestamp} {v} {origin}").as_bytes());
+            out.push_str(&format!(" {label} {timestamp}_{}", hex::encode(hasher.finalize())));
+        }
+    }
+    Some(out)
+}
+
+pub fn authorization_now(header: &str) -> Option<String> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    authorization_for(header, ORIGIN, ts)
+}
+
 pub fn sapisidhash_now(sapisid: &str) -> String {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     sapisidhash(sapisid, ORIGIN, ts)
-}
-
-/// Modern YouTube auth: `SAPISIDHASH` plus `SAPISID1PHASH` / `SAPISID3PHASH`
-/// when those cookies are present (space-joined, same timestamp).
-pub fn authorization_from_header(header: &str) -> Option<String> {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let mut parts = Vec::new();
-    let sapi = header_value(header, "SAPISID")
-        .or_else(|| header_value(header, "__Secure-3PAPISID"))
-        .or_else(|| header_value(header, "__Secure-1PAPISID"));
-    if let Some(sapi) = sapi {
-        parts.push(sapisid_auth_scheme("SAPISIDHASH", &sapi, ORIGIN, ts));
-    }
-    if let Some(s) = header_value(header, "__Secure-1PAPISID") {
-        parts.push(sapisid_auth_scheme("SAPISID1PHASH", &s, ORIGIN, ts));
-    }
-    if let Some(s) = header_value(header, "__Secure-3PAPISID") {
-        parts.push(sapisid_auth_scheme("SAPISID3PHASH", &s, ORIGIN, ts));
-    }
-    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 
@@ -566,6 +568,18 @@ pub fn remove_file_quiet(path: &Path) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn authorization_has_all_variants() {
+        let h = "SAPISID=a; __Secure-1PAPISID=b; __Secure-3PAPISID=c";
+        let out = authorization_for(h, "https://music.youtube.com", 1).unwrap();
+        assert!(out.starts_with("SAPISIDHASH 1_"));
+        assert!(out.contains(" SAPISID1PHASH 1_"));
+        assert!(out.contains(" SAPISID3PHASH 1_"));
+        let only = authorization_for("SAPISID=a", "https://music.youtube.com", 1).unwrap();
+        assert!(!only.contains("1PHASH"));
+        assert!(authorization_for("SID=x", "https://music.youtube.com", 1).is_none());
+    }
+
     fn c(name: &str, value: &str, domain: &str) -> CookieRec {
         CookieRec {
             name: name.into(),
@@ -631,15 +645,6 @@ mod tests {
         assert!(session_ready_from_cookies(&cookies));
         assert!(!session_youtube_bound(&cookies));
         assert!(!session_complete_from_cookies(&cookies));
-    }
-
-    #[test]
-    fn authorization_includes_1p_and_3p_hashes() {
-        let h = "SAPISID=s; __Secure-1PAPISID=one; __Secure-3PAPISID=three";
-        let authz = authorization_from_header(h).expect("auth");
-        assert!(authz.contains("SAPISIDHASH "), "{authz}");
-        assert!(authz.contains("SAPISID1PHASH "), "{authz}");
-        assert!(authz.contains("SAPISID3PHASH "), "{authz}");
     }
 
     #[test]
