@@ -87,9 +87,9 @@
 <style>
   .beta { font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 6px; border-radius: 999px; background: var(--accent-dim); color: var(--accent); margin-left: 6px; vertical-align: middle; }
   .jt { display: flex; flex-direction: column; gap: 8px; padding: 0 0 14px; }
-  .jt-row { display: flex; gap: 8px; align-items: center; }
+  .jt-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .jt-code { font-size: 12px; word-break: break-all; user-select: all; flex: 1; }
-  .jt-in { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: transparent; color: inherit; font: inherit; font-size: 13px; }
+  .jt-in { flex: 1 1 160px; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: transparent; color: inherit; font: inherit; font-size: 13px; }
   .jt-err { color: var(--danger); }
   .jt-short { font-size: 22px; font-weight: 700; letter-spacing: 0.12em; user-select: all; }
 </style>

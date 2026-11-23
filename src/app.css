@@ -1425,7 +1425,7 @@ html[data-glass='1'] .sug {
   display: grid;
   /* Sides may shrink to 0 so a narrow window never crushes the transport.
      Equal 1fr columns keep play controls visually centred. */
-  grid-template-columns: minmax(0, 1fr) minmax(264px, 400px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   flex: 1 1 auto;
   min-height: 0;
