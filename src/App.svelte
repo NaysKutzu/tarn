@@ -3837,7 +3837,7 @@
           {#if !isPhone}
             <div class="set-row">
               <span class="lb">Output device
-                <span class="set-meta">{outputs.current ? `Playing through ${outputs.current}` : `System default${outputs.default ? ` (${outputs.default})` : ''}`}</span>
+                <span class="set-meta">{outputs.current ? `Playing through ${outputs.current}` : (outputs.default ? `Following system default · ${outputs.default}` : 'Following system default')}</span>
               </span>
               <Dropdown value={settings.output_device ?? ''} options={[
                 { value: '', label: 'System default' },

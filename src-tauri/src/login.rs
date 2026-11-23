@@ -59,6 +59,9 @@ pub fn open_login(
         .unwrap_or_else(std::env::temp_dir)
         .join("tarn")
         .join("login-webview");
+    // Wipe stale Google cookies from failed attempts so we don't capture an
+    // old *.youtube.com jar while still on accounts.google.com.
+    let _ = std::fs::remove_dir_all(&data_dir);
     let _ = std::fs::create_dir_all(&data_dir);
 
     let url: url::Url = LOGIN_URL.parse().map_err(|e| anyhow!("{e}"))?;
@@ -135,14 +138,26 @@ pub fn open_login(
     Ok(())
 }
 
+fn on_music_host(window: &tauri::WebviewWindow) -> bool {
+    match window.url() {
+        Ok(u) => {
+            let host = u.host_str().unwrap_or("");
+            host == "music.youtube.com" || host.ends_with(".music.youtube.com")
+        }
+        Err(_) => false,
+    }
+}
+
 async fn poll_for_session(
     window: tauri::WebviewWindow,
     done: Arc<AtomicBool>,
     on_session: OnSession,
     app: AppHandle,
 ) {
-    // Up to ~45s of polling after we land on music.youtube.com.
-    for i in 0..90 {
+    // Up to ~90s: Google sign-in often sits on accounts.google.com for a while.
+    // Never capture until the webview is actually on music.youtube.com — the
+    // early 2s fallback poller used to grab .google.com cookies and close.
+    for i in 0..180 {
         if done.load(Ordering::SeqCst) {
             return;
         }
@@ -153,6 +168,17 @@ async fn poll_for_session(
         tokio::time::sleep(Duration::from_millis(500)).await;
         if done.load(Ordering::SeqCst) {
             return;
+        }
+        if !on_music_host(&window) {
+            if i % 10 == 0 {
+                let host = window
+                    .url()
+                    .ok()
+                    .and_then(|u| u.host_str().map(|h| h.to_string()))
+                    .unwrap_or_else(|| "?".into());
+                diag::log(format!("login: waiting for music.youtube.com (on {host})"));
+            }
+            continue;
         }
         let cookies = match collect_cookies(&window) {
             Ok(c) => c,
@@ -170,28 +196,18 @@ async fn poll_for_session(
             }
             continue;
         }
-        // Prefer a complete jar (SAPISID + SID + LOGIN_INFO). Give it a
-        // few extra seconds if only the minimum is present.
-        if !session_complete_from_cookies(&cookies) && i < 16 {
+        // Need *.youtube.com SAPISID/SID — google.com twins alone fail Innertube.
+        if !session_complete_from_cookies(&cookies) {
             if i % 4 == 0 {
                 diag::log(format!(
-                    "login: partial session, waiting for a complete jar ({names:?})"
+                    "login: waiting for youtube-domain cookies ({names:?})"
                 ));
-            }
-            continue;
-        }
-        // Wait until the signed-in account menu is actually in the page,
-        // not just the first redirect onto the host.
-        let signed_ui = page_looks_signed_in(&window).await;
-        if !signed_ui && i < 24 {
-            if i % 4 == 0 {
-                diag::log("login: cookies present, waiting for account menu");
             }
             continue;
         }
         let header = to_header(&cookies);
         diag::log(format!(
-            "login: capturing session ({} cookies: {:?}, ui_signed={signed_ui})",
+            "login: capturing session ({} cookies: {:?}, host=music.youtube.com)",
             names.len(),
             names
         ));
@@ -212,6 +228,7 @@ async fn poll_for_session(
             Err(e) => {
                 diag::log(format!("login: apply failed ({e}), will retry"));
                 // Keep the window open and try again with fresher cookies.
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
@@ -225,36 +242,6 @@ async fn poll_for_session(
                 "error": "YouTube Music did not accept this sign-in",
             }),
         );
-    }
-}
-
-async fn page_looks_signed_in(window: &tauri::WebviewWindow) -> bool {
-    // ytmusic-settings-button is the avatar in the YTM masthead.
-    let js = r#"
-        (() => {
-          const h = location.hostname || '';
-          if (h !== 'music.youtube.com' && !h.endsWith('.music.youtube.com')) return false;
-          const sel = [
-            'ytmusic-settings-button',
-            'ytmusic-avatar-link-renderer',
-            '#right-content img',
-            'button[aria-label*="Account"]',
-            'button[aria-label*="account"]',
-            'a[href*="ChannelSwitcher"]',
-            'ytm-account-settings'
-          ].join(',');
-          return !!document.querySelector(sel);
-        })()
-    "#;
-    match window.eval(js) {
-        // eval does not return the value in Tauri 2 on all platforms.
-        // Fall through to a URL check: if we're on / or /browse and
-        // not on ServiceLogin, treat as "maybe".
-        Ok(()) => true,
-        Err(_) => {
-            // Some webviews reject eval; don't block capture.
-            true
-        }
     }
 }
 

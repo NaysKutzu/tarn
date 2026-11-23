@@ -67,6 +67,14 @@ pub fn is_youtube_related(domain: &str) -> bool {
         || d.ends_with(".ytimg.com")
 }
 
+fn is_youtube_cookie_domain(domain: &str) -> bool {
+    let d = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    d == "youtube.com"
+        || d.ends_with(".youtube.com")
+        || d == "music.youtube.com"
+        || d.ends_with(".music.youtube.com")
+}
+
 pub fn session_ready_from_cookies(cookies: &[CookieRec]) -> bool {
     let has = |n: &str| cookies.iter().any(|c| c.name == n && !c.value.is_empty());
     has("SAPISID")
@@ -76,13 +84,24 @@ pub fn session_ready_from_cookies(cookies: &[CookieRec]) -> bool {
         || has("__Secure-3PSID")
 }
 
-/// A session we trust enough to close the login window: a SAPISID
-/// (for SAPISIDHASH) and a SID-family cookie.
-pub fn session_complete_from_cookies(cookies: &[CookieRec]) -> bool {
-    let has = |n: &str| cookies.iter().any(|c| c.name == n && !c.value.is_empty());
-    let sapi = has("SAPISID") || has("__Secure-3PAPISID") || has("__Secure-1PAPISID");
-    let sid = has("__Secure-1PSID") || has("__Secure-3PSID") || has("SID") || has("LOGIN_INFO");
+/// True when SAPISID + SID-family cookies exist on a *.youtube.com domain.
+/// Google.com twins alone make account_menu return the guest "Settings" menu.
+pub fn session_youtube_bound(cookies: &[CookieRec]) -> bool {
+    let has_yt = |n: &str| {
+        cookies
+            .iter()
+            .any(|c| c.name == n && !c.value.is_empty() && is_youtube_cookie_domain(&c.domain))
+    };
+    let sapi = has_yt("SAPISID") || has_yt("__Secure-3PAPISID") || has_yt("__Secure-1PAPISID");
+    let sid =
+        has_yt("__Secure-1PSID") || has_yt("__Secure-3PSID") || has_yt("SID") || has_yt("LOGIN_INFO");
     sapi && sid
+}
+
+/// A session we trust enough to close the login window: a SAPISID
+/// (for SAPISIDHASH) and a SID-family cookie on *.youtube.com.
+pub fn session_complete_from_cookies(cookies: &[CookieRec]) -> bool {
+    session_youtube_bound(cookies)
 }
 
 pub fn session_ready_from_header(header: &str) -> bool {
@@ -299,10 +318,14 @@ pub fn locale_from_pref(header: &str) -> Option<(String, String)> {
 
 /// `(timestamp, Authorization header value)` e.g. `SAPISIDHASH 123_abc`.
 pub fn sapisidhash(sapisid: &str, origin: &str, timestamp: u64) -> String {
+    sapisid_auth_scheme("SAPISIDHASH", sapisid, origin, timestamp)
+}
+
+fn sapisid_auth_scheme(scheme: &str, sid: &str, origin: &str, timestamp: u64) -> String {
     let mut hasher = Sha1::new();
-    hasher.update(format!("{timestamp} {sapisid} {origin}").as_bytes());
+    hasher.update(format!("{timestamp} {sid} {origin}").as_bytes());
     let digest = hasher.finalize();
-    format!("SAPISIDHASH {timestamp}_{}", hex::encode(digest))
+    format!("{scheme} {timestamp}_{}", hex::encode(digest))
 }
 
 /// Authorization header the YouTube web client sends: SAPISIDHASH plus the
@@ -543,6 +566,7 @@ pub fn remove_file_quiet(path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn authorization_has_all_variants() {
@@ -555,8 +579,6 @@ mod tests {
         assert!(!only.contains("1PHASH"));
         assert!(authorization_for("SID=x", "https://music.youtube.com", 1).is_none());
     }
-
-    use super::*;
 
     fn c(name: &str, value: &str, domain: &str) -> CookieRec {
         CookieRec {
@@ -607,6 +629,22 @@ mod tests {
         assert!(!h.contains("google-sapi"), "got {h}");
         assert!(h.contains("SID=yt-sid"), "got {h}");
         assert_eq!(sapisid_from_header(&h).as_deref(), Some("yt-sapi"));
+        assert!(session_youtube_bound(&cookies));
+        assert!(session_complete_from_cookies(&cookies));
+    }
+
+    #[test]
+    fn google_only_cookies_are_not_youtube_bound() {
+        let cookies = vec![
+            c("SAPISID", "google-sapi", ".google.com"),
+            c("SID", "google-sid", ".google.com"),
+            c("__Secure-3PAPISID", "g3", ".google.com"),
+            c("__Secure-3PSID", "gpsid", ".google.com"),
+            c("LOGIN_INFO", "nope", ".google.com"),
+        ];
+        assert!(session_ready_from_cookies(&cookies));
+        assert!(!session_youtube_bound(&cookies));
+        assert!(!session_complete_from_cookies(&cookies));
     }
 
     #[test]

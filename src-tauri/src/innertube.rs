@@ -1126,7 +1126,9 @@ fn parse_chips(v: &Value) -> Vec<MoodChip> {
     out
 }
 
-fn is_promo_account_name(name: &str) -> bool {
+/// Guest / logged-out account_menu walks often pick chrome labels
+/// ("Settings", "Help", …) instead of a real profile name.
+pub fn account_name_is_guest(name: &str) -> bool {
     let n = name.trim().to_ascii_lowercase();
     n.is_empty()
         || n.contains("premium")
@@ -1134,6 +1136,20 @@ fn is_promo_account_name(name: &str) -> bool {
         || n.contains("log in")
         || n.contains("upgrade")
         || n == "guest"
+        || n == "settings"
+        || n == "help"
+        || n == "feedback"
+        || n == "privacy"
+        || n == "terms"
+        || n == "terms of service"
+        || n == "switch account"
+        || n == "add account"
+        || n == "purchases and memberships"
+        || n == "your data in youtube"
+}
+
+fn is_promo_account_name(name: &str) -> bool {
+    account_name_is_guest(name)
 }
 
 fn parse_account(v: &Value) -> Option<AccountInfo> {
