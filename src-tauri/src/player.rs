@@ -907,10 +907,10 @@ impl Player {
         s.playing = true;
         s.position = 0.0;
         s.error = None;
-        if let Some((liked, disliked)) = rating {
-            s.liked = liked;
-            s.disliked = disliked;
-        }
+        // Never carry the outgoing song's heart / thumbs-down over.
+        let (liked, disliked) = rating.unwrap_or((false, false));
+        s.liked = liked;
+        s.disliked = disliked;
         self.blending.store(false, Ordering::Relaxed);
     }
 
@@ -1236,6 +1236,17 @@ impl Player {
         let mut s = self.state.lock();
         s.liked = liked;
         s.disliked = disliked;
+    }
+
+    /// Rate `id` only if it is still the song on screen. A like/dislike
+    /// answer arrives after the network round trip; by then a dislike has
+    /// usually skipped to the next song, which must not inherit the rating.
+    pub fn set_rating_for(&self, id: &str, liked: bool, disliked: bool) {
+        let mut s = self.state.lock();
+        if s.track.as_ref().is_some_and(|t| t.id == id) {
+            s.liked = liked;
+            s.disliked = disliked;
+        }
     }
 
     pub fn insert_next(&self, tracks: Vec<Track>) {

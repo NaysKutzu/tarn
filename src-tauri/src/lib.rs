@@ -1783,7 +1783,7 @@ async fn like_track(
             },
             _ => LikeState::default(),
         };
-        app.player.set_rating(st.liked, st.disliked);
+        app.player.set_rating_for(&id, st.liked, st.disliked);
         app.set_liked_id(&id, st.liked);
         if st.liked {
             if let Some(t) = track.clone() {
@@ -1803,7 +1803,7 @@ async fn like_track(
         .like(&id, &action)
         .await
         .map_err(|e| e.to_string())?;
-    app.player.set_rating(st.liked, st.disliked);
+    app.player.set_rating_for(&id, st.liked, st.disliked);
     app.set_liked_id(&id, st.liked);
     if st.liked {
         // Show the new like in the Liked Music list right away instead of
