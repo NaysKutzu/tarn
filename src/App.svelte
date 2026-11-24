@@ -857,6 +857,9 @@
         return;
       }
     }
+    // Navigating from the fullscreen player (artist / album links) must leave
+    // it, otherwise the page changes underneath and nothing seems to happen.
+    if (!opts?.replace && (expanded || npLayer)) closeExpanded();
     if (!opts?.replace && !navLock && viewKey(v) !== viewKey(view)) {
       backStack = [...backStack, snapshot()];
       fwdStack = [];
