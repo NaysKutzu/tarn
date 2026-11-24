@@ -1121,7 +1121,7 @@ pub(crate) async fn start_playback_at(
                         app.player.clear_blending();
                     }
                     let msg = short_err(&e.to_string());
-                    playback_failed(app, &track, msg, skip_on_fail).await
+                    playback_failed(app, &track, &queue, index, msg, skip_on_fail).await
                 }
             }
         }
@@ -1133,7 +1133,7 @@ pub(crate) async fn start_playback_at(
                 app.player.clear_blending();
             }
             let msg = short_err(&e.to_string());
-            playback_failed(app, &track, msg, skip_on_fail).await
+            playback_failed(app, &track, &queue, index, msg, skip_on_fail).await
         }
     }
 }
@@ -1145,6 +1145,8 @@ pub(crate) async fn start_playback_at(
 async fn playback_failed(
     app: &App,
     track: &Track,
+    queue: &[Track],
+    index: usize,
     msg: String,
     skip_on_fail: bool,
 ) -> Result<(), String> {
@@ -1166,6 +1168,33 @@ async fn playback_failed(
         return Err(msg);
     }
     *app.pending_toast.lock() = Some(format!("Couldn't play {title}, skipping"));
+    // Go past the song that failed, not "next after the current one": during
+    // a crossfade / cut the failed song never became current, so advancing
+    // from the current track picked the same broken song again and again.
+    // Songs YouTube says are gone are hopped over without another try.
+    let after = queue
+        .iter()
+        .enumerate()
+        .skip(index + 1)
+        .find(|(_, t)| !app.ytm.is_unavailable(&t.id))
+        .map(|(i, t)| (i, t.clone()));
+    if let Some((i, t)) = after {
+        let res = Box::pin(start_playback_at(
+            app,
+            t,
+            queue.to_vec(),
+            i,
+            0.0,
+            false,
+            false,
+            true,
+        ))
+        .await;
+        if res.is_err() {
+            app.player.set_error(msg.clone());
+        }
+        return res;
+    }
     match Box::pin(advance(app, false)).await {
         Ok(()) => {
             let still = app.player.snapshot();
@@ -1689,6 +1718,11 @@ pub(crate) async fn advance(app: &App, user: bool) -> Result<(), String> {
     match app.player.next_choice(user) {
         NextChoice::Play(i) => {
             let (queue, _) = app.player.queue_and_index();
+            // Hop over songs YouTube already told us are gone (removed,
+            // copyright, private) instead of failing on them every time.
+            let i = (i..queue.len())
+                .find(|&k| !app.ytm.is_unavailable(&queue[k].id))
+                .unwrap_or(i);
             if let Some(t) = queue.get(i).cloned() {
                 start_playback_at(app, t, queue, i, 0.0, false, user, true).await
             } else {

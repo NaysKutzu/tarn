@@ -1764,7 +1764,51 @@ impl Ytm {
     /// googlevideo 403s a mismatched UA, and those URLs are also bound to
     /// the requester's IP and an expiry. The sidecar is the last resort
     /// (never on Android/iOS). Fresh URLs are cached until they expire.
+    /// YouTube said this song is gone (removed, copyright claim, private,
+    /// terminated). Remembered for a few hours so the queue can skip it.
+    pub fn is_unavailable(&self, id: &str) -> bool {
+        if self.cache.has_complete(id) {
+            return false;
+        }
+        let mut g = unavailable().lock().unwrap();
+        match g.get(id) {
+            Some(at) if at.elapsed() < Duration::from_secs(6 * 3600) => true,
+            Some(_) => {
+                g.remove(id);
+                false
+            }
+            None => false,
+        }
+    }
+
     pub async fn stream(&self, video_id: &str) -> Result<Stream> {
+        if self.is_unavailable(video_id) {
+            return Err(anyhow!("This song isn't available on YouTube anymore"));
+        }
+        // One resolve per song at a time: spamming Next used to start a
+        // full client race (and a yt-dlp process) for every press.
+        let gate = {
+            let mut g = resolving().lock().unwrap();
+            g.entry(video_id.to_string())
+                .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _held = gate.lock().await;
+        let res = self.stream_inner(video_id).await;
+        drop(_held);
+        {
+            let mut g = resolving().lock().unwrap();
+            if g.get(video_id).is_some_and(|m| std::sync::Arc::strong_count(m) <= 2) {
+                g.remove(video_id);
+            }
+        }
+        res
+    }
+
+    async fn stream_inner(&self, video_id: &str) -> Result<Stream> {
+        if self.is_unavailable(video_id) {
+            return Err(anyhow!("This song isn't available on YouTube anymore"));
+        }
         // A finished download needs no network at all - start instantly.
         if self.cache.has_complete(video_id) {
             let mut s = Stream::from_disk(video_id);
@@ -1934,6 +1978,17 @@ impl Ytm {
                             Err(e) => {
                                 let msg = e.to_string();
                                 crate::diag::log(format!("resolve {video_id}: innertube {msg}"));
+                                if gone_err(&msg) {
+                                    // No other client can play a removed
+                                    // video: don't wait for rustypipe or
+                                    // spawn yt-dlp just to hear it again.
+                                    unavailable()
+                                        .lock()
+                                        .unwrap()
+                                        .insert(video_id.to_string(), Instant::now());
+                                    crate::diag::log(format!("resolve {video_id}: gone, skipping other clients"));
+                                    return Err(anyhow!("This song isn't available on YouTube anymore"));
+                                }
                                 if age_or_login_err(&msg) {
                                     age_kick.notify_one();
                                 }
@@ -3391,6 +3446,32 @@ fn format_fallback(quality: &str) -> &'static str {
     }
 }
 
+/// Songs YouTube has taken down for good (as opposed to age gates, region
+/// or transient errors another client might get around).
+fn gone_err(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("copyright")
+        || m.contains("has been removed")
+        || m.contains("was removed")
+        || m.contains("account associated with this video has been terminated")
+        || m.contains("video is private")
+        || m.contains("no longer available")
+}
+
+fn unavailable() -> &'static std::sync::Mutex<std::collections::HashMap<String, Instant>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Instant>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+type Gate = std::sync::Arc<tokio::sync::Mutex<()>>;
+
+fn resolving() -> &'static std::sync::Mutex<std::collections::HashMap<String, Gate>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Gate>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
 fn age_or_login_err(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
     m.contains("age-restrict")
@@ -3614,3 +3695,16 @@ async fn search_ytdlp(query: &str) -> Result<Vec<Track>> {
 }
 
 // UserItem fields - compile will tell us if name/id/avatar differ.
+
+#[cfg(test)]
+mod gone_tests {
+    use super::*;
+
+    #[test]
+    fn removed_videos_are_gone_age_gates_are_not() {
+        assert!(gone_err("player android: ERROR (It was removed following a copyright removal request by Believe Distribution Service)"));
+        assert!(gone_err("This video is private"));
+        assert!(!gone_err("LOGIN_REQUIRED (Sign in to confirm your age)"));
+        assert!(!gone_err("HTTP 403 Forbidden"));
+    }
+}
