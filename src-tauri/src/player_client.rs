@@ -210,7 +210,7 @@ impl PlayerHub {
     }
 
     /// A video-only stream for the fullscreen background (H.264 preferred,
-    /// at most 720p). Tries VISIONOS, then ANDROID.
+    /// at most 480p: it is dimmed behind the player, and a smaller file shows sooner). Tries VISIONOS, then ANDROID.
     pub async fn video(&self, video_id: &str) -> Result<(VideoSrc, Kind)> {
         let visitor = self.visitor_data().await?;
         let mut last = None;
@@ -454,7 +454,7 @@ fn pick_video(v: &Value) -> Option<VideoSrc> {
             continue;
         };
         let height = f.get("height").and_then(|x| x.as_u64()).unwrap_or(0);
-        if height == 0 || height > 720 {
+        if height == 0 || height > 480 {
             continue;
         }
         let fps = f.get("fps").and_then(|x| x.as_u64()).unwrap_or(30);

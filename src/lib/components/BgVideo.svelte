@@ -44,14 +44,22 @@
     info = null;
     ready = false;
     failed = false;
-    api
-      .bgVideo(id, v)
-      .then((r) => {
-        if (reqFor === id) info = r;
-      })
-      .catch(() => {
-        if (reqFor === id) info = null;
-      });
+    // The lookup can come back empty or fail for a song that does have a
+    // video (flaky answer, slow first download): try once more before giving up.
+    const attempt = (left: number) =>
+      api
+        .bgVideo(id, v)
+        .then((r) => {
+          if (reqFor !== id) return;
+          if (r) info = r;
+          else if (left > 0) setTimeout(() => reqFor === id && attempt(left - 1), 2500);
+        })
+        .catch(() => {
+          if (reqFor !== id) return;
+          if (left > 0) setTimeout(() => reqFor === id && attempt(left - 1), 2500);
+          else info = null;
+        });
+    attempt(1);
   });
 
   const src = $derived(info ? convertFileSrc(info.file, 'tarnvideo') : null);

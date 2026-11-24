@@ -87,7 +87,11 @@ pub async fn resolve(ytm: &Ytm, track_id: &str, is_video: bool) -> Result<Option
             Some(p) => p,
             None => {
                 let p = ytm.counterpart(track_id).await?;
-                memo().lock().unwrap().insert(track_id.to_string(), p.clone());
+                // Only a found pair is remembered: the answer can come back
+                // empty for a song that does have a video, so ask again next time.
+                if p.is_some() {
+                    memo().lock().unwrap().insert(track_id.to_string(), p.clone());
+                }
                 p
             }
         };

@@ -4955,3 +4955,19 @@ html.extreme ::selection { background: var(--accent); color: #000; }
 @media (prefers-reduced-motion: reduce) {
   .automix-btn.mixing svg { animation: none; }
 }
+
+/* Music video showing, no lyrics: the cover shrinks and slides left so the
+   video is not hidden behind it. The lyrics layout stays where it is. */
+.np-main { transition: transform 0.6s var(--ease), max-width 0.6s var(--ease), gap 0.6s var(--ease); }
+@media (min-width: 821px) {
+  .np.has-video:not(.has-lyrics) .np-main { transform: translateX(-27vw); max-width: min(280px, 30vw); }
+  .np.has-video:not(.has-lyrics) .np-art,
+  .np.has-video:not(.has-lyrics).has-queue .np-art,
+  .app.np-idle .np.has-video:not(.has-lyrics) .np-art {
+    width: min(240px, 28vmin);
+    height: min(240px, 28vmin);
+    flex-basis: min(240px, 28vmin);
+    border-radius: 18px;
+  }
+}
+@media (prefers-reduced-motion: reduce) { .np-main { transition: none; } }
