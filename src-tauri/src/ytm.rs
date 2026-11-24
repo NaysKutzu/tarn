@@ -1694,12 +1694,38 @@ impl Ytm {
             }
             return Ok(tiles);
         }
-        let p = self
-            .rp
-            .query()
-            .music_playlist(id)
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
+        let p = match self.rp.query().music_playlist(id).await {
+            Ok(p) => p,
+            Err(e) => {
+                // Private / owned playlists 404 anonymously and rustypipe
+                // can't parse them signed in; read the page with the cookie
+                // (same fallback as opening the playlist).
+                if self.cookie_header().is_some() {
+                    let bare = id.trim_start_matches("VL");
+                    if let Ok(c) = self.it().playlist_page(bare).await {
+                        let mut seen = std::collections::HashSet::new();
+                        let mut tiles = Vec::new();
+                        for t in c.tracks.iter().take(12) {
+                            if let Some(u) = t.cover.clone().filter(|u| usable_cover(u)) {
+                                if seen.insert(thumb_dedupe_key(&u)) {
+                                    tiles.push(u);
+                                    if tiles.len() == 4 {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if tiles.is_empty() {
+                            if let Some(u) = c.cover.filter(|u| usable_cover(u)) {
+                                tiles.push(u);
+                            }
+                        }
+                        return Ok(tiles);
+                    }
+                }
+                return Err(anyhow!("{e}"));
+            }
+        };
         // Prefer distinct track covers for the 2×2 mosaic. YTM header
         // "collage" thumbs are often cropped strips that look broken in-app.
         let mut from_tracks = Vec::new();
